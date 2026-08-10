@@ -14,8 +14,8 @@ import type { GrabbedImage } from '../lib/types'
 
 const BATCH_SIZE = 20
 const REPORT_INTERVAL_MS = 300
-const CONCURRENCY = 8
-const SIZE_TIMEOUT_MS = 15000
+const CONCURRENCY = 4 // 解析并发（尺寸多已 DOM 直读，加载测尺寸仅兜底）
+const SIZE_TIMEOUT_MS = 5000 // 兜底测尺寸超时（原 15s → 5s，避免拖慢）
 const MAX_PER_PARSE = 200
 const SCROLL_STEPS = 3
 const SCROLL_DELAY_MS = 800
@@ -115,15 +115,13 @@ function initScanner(): void {
           id: candidate.url,
           url: candidate.url,
           thumbUrl: candidate.thumbUrl || undefined,
-          sizeStatus: 'loading',
+          width: candidate.width,
+          height: candidate.height,
+          sizeStatus: candidate.width && candidate.height ? 'ok' : 'loading',
         }
         batch.push(item)
-        if (imgbb && candidate.width && candidate.height) {
-          // imgbb 尺寸直读（免加载）
-          item.width = candidate.width
-          item.height = candidate.height
-          item.sizeStatus = 'ok'
-        } else {
+        if (!candidate.width || !candidate.height) {
+          // 尺寸缺失（懒加载/srcset 等）才加载测尺寸
           const size = await measureSize(candidate.url)
           if (size.ok) {
             item.width = size.w
@@ -194,23 +192,32 @@ function collectImgbbCandidates(): Candidate[] {
 function collectCandidates(): Candidate[] {
   const map = new Map<string, Candidate>()
 
-  const add = (url: string, thumbUrl = ''): void => {
+  const add = (url: string, thumbUrl = '', dim: { width?: number; height?: number } = {}): void => {
     if (!url) return
     if (!/^https?:\/\//i.test(url)) return // 排除 data:/blob:/javascript: 等不可下载协议
     const existing = map.get(url)
-    map.set(url, { url, thumbUrl: existing?.thumbUrl || thumbUrl })
+    map.set(url, {
+      url,
+      thumbUrl: existing?.thumbUrl || thumbUrl,
+      width: existing?.width ?? dim.width,
+      height: existing?.height ?? dim.height,
+    })
   }
 
   document.querySelectorAll('img').forEach((img) => {
     const current = img.currentSrc || '' // 页面实际渲染的展示图（通常已是小图）
     const src = img.getAttribute('src') || ''
-    add(current, current || src)
-    add(src, current || src)
-    add(img.getAttribute('data-src') || '', current || src)
-    add(img.getAttribute('data-original') || '', current || src)
-    add(img.getAttribute('data-lazy-src') || '', current || src)
+    // DOM 直读尺寸（免加载）：naturalWidth 优先，其次 width/height 属性
+    const w = img.naturalWidth || parseInt(img.getAttribute('width') || '', 10) || 0
+    const h = img.naturalHeight || parseInt(img.getAttribute('height') || '', 10) || 0
+    const dim = w && h ? { width: w, height: h } : {}
+    add(current, current || src, dim)
+    add(src, current || src, dim)
+    add(img.getAttribute('data-src') || '', current || src, dim)
+    add(img.getAttribute('data-original') || '', current || src, dim)
+    add(img.getAttribute('data-lazy-src') || '', current || src, dim)
     const srcset = img.getAttribute('srcset') || img.getAttribute('data-srcset')
-    if (srcset) add(pickLargestSrcset(srcset), current || src)
+    if (srcset) add(pickLargestSrcset(srcset), current || src, dim)
   })
 
   document.querySelectorAll('picture source').forEach((source) => {

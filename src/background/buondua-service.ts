@@ -6,9 +6,9 @@ import { initLogger } from '../lib/logger'
 import {
   albumBaseUrl,
   extractBuonduaAlbumName,
+  parseAllPostLinks,
   parseBuonduaImages,
   parsePaginationUrls,
-  parsePopularLinks,
   parseRecommendedLinks,
 } from '../lib/buondua-parse'
 import type { BuonduaImage, BuonduaLinkItem } from '../lib/types'
@@ -69,11 +69,18 @@ export class BuonduaService {
     return { images, pages: all }
   }
 
-  /** 解析推荐/其他相册链接 */
+  /** 解析推荐/其他相册链接（其他 = 全页帖子链接 - 推荐区） */
   async scanLinks(url: string, kind: 'recommended' | 'popular'): Promise<BuonduaLinkItem[]> {
     const html = await this.fetchHtml(url)
     const base = url
-    const items = kind === 'recommended' ? parseRecommendedLinks(html, base) : parsePopularLinks(html, base)
+    let items: BuonduaLinkItem[]
+    if (kind === 'recommended') {
+      items = parseRecommendedLinks(html, base)
+    } else {
+      // 其他链接：全页扫描帖子链接，排除推荐区已收录
+      const recUrls = new Set(parseRecommendedLinks(html, base).map((i) => i.url))
+      items = parseAllPostLinks(html, base, recUrls)
+    }
     logger.info('buondua', '链接扫描完成', { kind, count: items.length })
     return items
   }

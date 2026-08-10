@@ -88,8 +88,8 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
 
       <div id="sub-bd-popular" class="adapter-panel">
         <div class="row">
-          <input id="bd-pop-url" class="text-input" placeholder="相册 URL（自动识别其他相册）">
-          <button id="bd-pop-scan" class="btn primary">识别其他链接</button>
+          <input id="bd-pop-url" class="text-input" placeholder="相册 URL（扫描全页其他帖子链接）">
+          <button id="bd-pop-scan" class="btn primary">扫描全部链接</button>
         </div>
         <div class="row">
           <button class="btn bd-select-all">全选本批/取消</button>

@@ -55,7 +55,6 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
   let zipState: { current: number; total: number } | null = null
   let dedupeOn = true
   let filterSmallOn = true // 默认剔除 <100x100 小图
-  const thumbCache = new Map<string, string>() // 原图 URL → canvas 降采样 Blob URL
 
   // ---------- DOM 构建 ----------
   root.innerHTML = `
@@ -189,40 +188,9 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     return applySmallFilter(applyFilter(kept))
   }
 
-  // ---------- 缩略图显示：thumbUrl 优先，无则原图占位 + canvas 降采样 ----------
-  const THUMB_TARGET = 256 // 降采样宽度上限
-
+  // ---------- 缩略图显示：服务器 thumbUrl 优先，无则直接原图（浏览器小容器自动降采样） ----------
   function displayUrlOf(img: GrabbedImage): string {
-    if (img.thumbUrl) return img.thumbUrl
-    const cached = thumbCache.get(downloadUrlOf(img))
-    return cached ?? img.url
-  }
-
-  /** 原图加载后 canvas 降采样生成缩略图，替换同 URL 的全部网格 img */
-  function generateThumb(originalUrl: string, imgEl: HTMLImageElement): void {
-    try {
-      const iw = imgEl.naturalWidth
-      const ih = imgEl.naturalHeight
-      if (!iw || !ih) return
-      const scale = Math.min(1, THUMB_TARGET / iw)
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.max(1, Math.round(iw * scale))
-      canvas.height = Math.max(1, Math.round(ih * scale))
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return
-      ctx.drawImage(imgEl, 0, 0, canvas.width, canvas.height)
-      canvas.toBlob((blob) => {
-        if (!blob) return
-        const blobUrl = URL.createObjectURL(blob)
-        thumbCache.set(originalUrl, blobUrl)
-        // 替换当前正在显示的同源缩略图
-        for (const el of Array.from(document.querySelectorAll<HTMLImageElement>(`.img-card .thumb[data-src="${CSS.escape(originalUrl)}"]`))) {
-          el.src = blobUrl
-        }
-      }, 'image/jpeg', 0.8)
-    } catch {
-      // CORS 污染/画布失败：保持原图显示
-    }
+    return img.thumbUrl || img.url
   }
 
   // ---------- 尺寸筛选 ----------
@@ -338,12 +306,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       thumb.loading = 'lazy'
       thumb.decoding = 'async'
       thumb.draggable = false
-      thumb.dataset.src = downloadUrlOf(img) // 记录原始下载地址（canvas 替换用）
       thumb.src = displayUrlOf(img)
-      // 无服务器缩略图：原图加载后 canvas 降采样替换为小图
-      if (!img.thumbUrl && !thumbCache.has(downloadUrlOf(img))) {
-        thumb.onload = () => generateThumb(downloadUrlOf(img), thumb)
-      }
 
       const sizeTag = document.createElement('div')
       sizeTag.className = 'size-tag' + (img.sizeStatus === 'ok' ? '' : ' unknown')
@@ -690,8 +653,6 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       images = []
       selected.clear()
       filterSize = null
-      for (const url of thumbCache.values()) URL.revokeObjectURL(url)
-      thumbCache.clear()
       renderSizeFilter()
       renderGrid()
     },

@@ -9,6 +9,37 @@ const logger = initLogger('background')
 
 const MAX_CONCURRENT = 3
 const MAX_RETRY = 1
+const FETCH_TIMEOUT_MS = 40000
+
+/** background fetch 抓取图片字节（imgbb 防 180x180 降级用） */
+async function fetchImageBytes(url: string): Promise<ArrayBuffer> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  try {
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+      },
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    return await resp.arrayBuffer()
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** ArrayBuffer → base64（data URL 下载用，避免大文件栈溢出分块拼接） */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(binary)
+}
 
 interface ActiveDownload {
   jobId: number
@@ -150,7 +181,20 @@ export class DownloadManager {
   private async startOne(job: DownloadJob, item: DownloadItem): Promise<void> {
     const filename = `${job.folderName}/${item.filename}`
     try {
-      const downloadId = await chrome.downloads.download({ url: item.url, filename })
+      let url = item.url
+      // imgbb 防 180x180：chrome.downloads 直连 i.ibb.co 会被 imgbb 降级为 180 缩略图
+      // （扩展上下文 TLS 指纹差异），background fetch 能拿原图 → 转 data URL 下载
+      // （data URL 无服务器文件名，filename 参数必定生效）
+      if (/(i\.ibb\.co|ibb\.co)/.test(url)) {
+        try {
+          const buf = await fetchImageBytes(url)
+          url = `data:image/jpeg;base64,${arrayBufferToBase64(buf)}`
+          logger.info('download', 'imgbb 原图经 background 抓取', { size: buf.byteLength })
+        } catch (err) {
+          logger.warn('download', 'imgbb background 抓取失败，降级直连', { url: item.url, error: String(err) })
+        }
+      }
+      const downloadId = await chrome.downloads.download({ url, filename })
       this.active.set(downloadId, { jobId: job.id, downloadId, item, attempts: 0 })
     } catch (err) {
       // 启动即失败（参数问题/URL 非法）

@@ -152,6 +152,58 @@ function dedupeLinks(items: BuonduaLinkItem[]): BuonduaLinkItem[] {
   })
 }
 
+/** 全页扫描 buondua 帖子链接（参考项目 collectLinksFromPage 方案）：
+ *  遍历所有 a[href]，按 URL 规则过滤——hostname=buondua.com、路径 /xxx-数字 结尾、
+ *  排除 tag/search/category/author/分页/推荐区（excludeUrls） */
+export function parseAllPostLinks(html: string, baseUrl: string, excludeUrls?: Set<string>): BuonduaLinkItem[] {
+  const items: BuonduaLinkItem[] = []
+  const seen = new Set<string>()
+  const re = /<a[^>]*href="([^"]*)"[^>]*>/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(html)) !== null) {
+    try {
+      const u = new URL(m[1], baseUrl)
+      if (u.hostname !== 'buondua.com') continue
+      const path = u.pathname
+      if (path === '/' || /^\/?(tag|search|category|author)\//i.test(path)) continue
+      if (/page=\d+/.test(u.search)) continue // 分页链接
+      if (!/\/[^\/]+-\d+$/.test(path)) continue // 帖子路径格式：/xxx-数字
+      const url = u.origin + path
+      if (seen.has(url)) continue
+      seen.add(url)
+      if (excludeUrls?.has(url)) continue // 排除推荐区已收录
+      // 标题：优先该 a 的 title 属性（popular-item 封面 a 带 title），其次 a 内文本，
+      // 最后从后 800 字符内找首个非空白文本（封面 a 后通常是标题 a）
+      let title = (extractAttr(m[0], 'title') || '').trim()
+      if (!title) {
+        title = m[0].replace(/<[^>]*>/g, '').trim()
+      }
+      if (!title) {
+        const block = html.slice(m.index, m.index + 800)
+        const tr = />([^<>]*)</g
+        let tm: RegExpExecArray | null
+        while ((tm = tr.exec(block)) !== null) {
+          const t = tm[1].trim()
+          if (t.length >= 2 && !/^\d+$/.test(t)) {
+            title = t
+            break
+          }
+        }
+      }
+      const countMatch = title.match(/\((\d+)\s*photos?\)/i)
+      items.push({
+        url,
+        title: title || url,
+        coverUrl: '',
+        imageCount: countMatch ? Number(countMatch[1]) : undefined,
+      })
+    } catch {
+      // 忽略非法链接
+    }
+  }
+  return dedupeLinks(items)
+}
+
 // ---------- 相册名 / 文件夹名 ----------
 
 /** 从标题或 URL 提取干净相册名（文件夹命名用） */
