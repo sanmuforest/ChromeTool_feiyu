@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>图片下载器</title>
+  <link rel="stylesheet" href="grabber.css">
+</head>
+<body>
+  <div class="app">
+    <header class="grab-header">
+      <div class="header-top">
+        <div class="tab-bar">
+          <button class="grab-tab active" data-panel="images">抓取</button>
+          <button class="grab-tab" data-panel="logs">日志</button>
+          <button class="grab-tab" data-panel="imgbb">imgbb</button>
+          <button class="grab-tab" data-panel="template">站点适配模板</button>
+        </div>
+        <div id="version-badge" class="version-badge"></div>
+      </div>
+      <div class="page-info" id="page-info">加载中…</div>
+    </header>
+
+    <main class="main">
+      <section id="panel-images" class="panel active"></section>
+      <section id="panel-logs" class="panel"></section>
+      <section id="panel-imgbb" class="panel"></section>
+      <section id="panel-template" class="panel"></section>
+    </main>
+  </div>
+
+  <!-- 大图预览浮层 -->
+  <div id="preview-layer" class="preview-layer hidden">
+    <div class="preview-card">
+      <img id="preview-img" alt="">
+      <div id="preview-size" class="preview-size"></div>
+    </div>
+  </div>
+
+  <script src="js/grabber.js"></script>
+</body>
+</html>
