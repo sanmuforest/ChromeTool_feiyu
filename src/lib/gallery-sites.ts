@@ -38,6 +38,7 @@ export const GALLERY_SITES: GallerySiteConfig[] = [
       try {
         const u = new URL(url)
         u.search = ''
+        u.hash = ''
         return u.href
       } catch {
         return url
@@ -55,6 +56,7 @@ export const GALLERY_SITES: GallerySiteConfig[] = [
       try {
         const u = new URL(url)
         u.search = ''
+        u.hash = ''
         // 去尾部 "/N"（路径式分页）
         const path = u.pathname.replace(/\/\d+$/, '')
         return `${u.origin}${path}`
@@ -72,18 +74,23 @@ export const GALLERY_SITES: GallerySiteConfig[] = [
     id: 'hitxhot',
     hosts: ['hitxhot.org'],
     containerOpen: /<div[^>]*class="[^"]*contentme[^"]*"[^>]*>/,
-    pagePattern: /\|\s*Page\s+\d+\s*\/\s*(\d+)/i,
+    // 兼容英文 "| Page 2/3" 与中文 "| 第1/6页"（组2 = 总页数）
+    pagePattern: /\|\s*(?:Page\s+\d+\s*\/\s*(\d+)|第\s*\d+\s*\/\s*(\d+)\s*页)/i,
     pageUrl: (base, page) => `${base}?page=${page}`,
     baseUrlOf: (url) => {
       try {
         const u = new URL(url)
         u.search = ''
+        u.hash = ''
         return u.href
       } catch {
         return url
       }
     },
-    cleanTitle: (title) => title.replace(/\s*\|\s*Page\s+\d+\s*\/\s*\d+\s*$/i, '').trim(),
+    cleanTitle: (title) =>
+      title
+        .replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, '')
+        .trim(),
   },
 ]
 
@@ -157,7 +164,7 @@ export function parseGalleryImages(html: string, _baseUrl: string, site: Gallery
 export function parseGalleryMaxPage(html: string, site: GallerySiteConfig): number {
   const m = html.match(site.pagePattern)
   if (m) {
-    const n = Number(m[1])
+    const n = Number(m[1] ?? m[2])
     if (n > 0) return n
   }
   let max = 1
