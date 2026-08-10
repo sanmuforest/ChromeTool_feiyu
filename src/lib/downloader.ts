@@ -13,6 +13,7 @@ const FETCH_TIMEOUT_MS = 40000
 
 /** background fetch 抓取图片字节（imgbb 防 180x180 降级用；signal 支持取消） */
 async function fetchImageBytes(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
+  const t0 = Date.now()
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   // 外部取消（用户点取消按钮）时同时中断
@@ -27,7 +28,9 @@ async function fetchImageBytes(url: string, signal?: AbortSignal): Promise<Array
       },
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    return await resp.arrayBuffer()
+    const buf = await resp.arrayBuffer()
+    logger.debug('download', 'imgbb 字节抓取完成', { ms: Date.now() - t0, bytes: buf.byteLength })
+    return buf
   } finally {
     clearTimeout(timer)
   }
@@ -49,6 +52,8 @@ interface ActiveDownload {
   downloadId: number
   item: DownloadItem
   attempts: number
+  /** 派发时刻（用于统计单项总耗时） */
+  startedAt: number
 }
 
 export interface DownloadManagerCallbacks {
@@ -90,9 +95,10 @@ export function extractFilename(url: string, index: number, albumName?: string):
 export class DownloadManager {
   private jobs = new Map<number, DownloadJob>()
   private active = new Map<number, ActiveDownload>() // downloadId → active（下载中）
-  private queue: { jobId: number; item: DownloadItem }[] = []
+  private queue: { jobId: number; item: DownloadItem; enqueuedAt: number }[] = []
   private pendingFetches = new Set<number>() // jobId → 正在 background fetch（占并发槽）
   private fetchControllers = new Map<number, AbortController>() // jobId → imgbb 字节抓取 controller
+  private jobStartedAt = new Map<number, number>() // jobId → 任务启动时刻（汇总统计用）
   private nextJobId = 1
   private maxConcurrent = DEFAULT_CONCURRENCY
 
@@ -121,8 +127,9 @@ export class DownloadManager {
       failedItems: [],
     }
     this.jobs.set(job.id, job)
+    this.jobStartedAt.set(job.id, Date.now())
     for (const item of items) {
-      this.queue.push({ jobId: job.id, item })
+      this.queue.push({ jobId: job.id, item, enqueuedAt: Date.now() })
     }
     this.pump()
     return job
@@ -160,7 +167,7 @@ export class DownloadManager {
     job.failed = 0
     job.status = 'running'
     for (const item of items) {
-      this.queue.push({ jobId, item })
+      this.queue.push({ jobId, item, enqueuedAt: Date.now() })
     }
     this.emit(job, false)
     this.pump()
@@ -179,9 +186,15 @@ export class DownloadManager {
 
     if (state === 'complete') {
       job.done++
+      logger.debug('download', '单项下载完成', {
+        jobId: active.jobId,
+        downloadId: delta.id,
+        ms: Date.now() - active.startedAt,
+        fileSize: delta.fileSize?.current,
+      })
     } else if (active.attempts < MAX_RETRY) {
       logger.warn('download', '下载中断，自动重试', { url: active.item.url, attempt: active.attempts + 1 })
-      this.queue.push({ jobId: active.jobId, item: active.item })
+      this.queue.push({ jobId: active.jobId, item: active.item, enqueuedAt: Date.now() })
     } else {
       job.failed++
       job.failedItems.push({ url: active.item.url, filename: active.item.filename, error: '下载中断' })
@@ -199,7 +212,7 @@ export class DownloadManager {
       const job = this.jobs.get(next.jobId)
       if (!job || job.status !== 'running') continue
       this.pendingFetches.add(next.jobId)
-      void this.startOne(job, next.item).finally(() => {
+      void this.startOne(job, next.item, next.enqueuedAt).finally(() => {
         this.pendingFetches.delete(next.jobId)
         this.pump()
       })
@@ -212,36 +225,56 @@ export class DownloadManager {
       const hasFetch = this.pendingFetches.has(job.id)
       if (!hasQueued && !hasActive && !hasFetch) {
         job.status = 'done'
-        logger.info('download', '下载任务完成', { jobId: job.id, done: job.done, failed: job.failed })
+        const totalMs = Date.now() - (this.jobStartedAt.get(job.id) ?? Date.now())
+        const avgMs = job.done > 0 ? Math.round(totalMs / job.done) : 0
+        logger.info('download', '下载任务完成', {
+          jobId: job.id,
+          done: job.done,
+          failed: job.failed,
+          totalMs,
+          avgMsPerItem: avgMs,
+          concurrency: this.maxConcurrent,
+        })
+        this.jobStartedAt.delete(job.id)
         this.emit(job, true)
       }
     }
   }
 
-  private async startOne(job: DownloadJob, item: DownloadItem): Promise<void> {
+  private async startOne(job: DownloadJob, item: DownloadItem, enqueuedAt: number): Promise<void> {
     const filename = `${job.folderName}/${item.filename}`
+    logger.debug('download', '派发下载项', { jobId: job.id, filename: item.filename, queueWaitMs: Date.now() - enqueuedAt })
     try {
       let url = item.url
       // imgbb 防 180x180：chrome.downloads 直连 i.ibb.co 会被 imgbb 降级为 180 缩略图
       // （扩展上下文 TLS 指纹差异），background fetch 能拿原图 → 转 data URL 下载
       // （data URL 无服务器文件名，filename 参数必定生效）
       if (/(i\.ibb\.co|ibb\.co)/.test(url)) {
+        const tFetch = Date.now()
         const controller = new AbortController()
         this.fetchControllers.set(job.id, controller)
         try {
           const buf = await fetchImageBytes(item.url, controller.signal)
           this.fetchControllers.delete(job.id)
           if (job.status !== 'running') return // 抓取期间已取消
+          const tB64 = Date.now()
           url = `data:image/jpeg;base64,${arrayBufferToBase64(buf)}`
-          logger.info('download', 'imgbb 原图经 background 抓取', { size: buf.byteLength })
+          logger.debug('download', 'imgbb 原图转 data URL', {
+            jobId: job.id,
+            fetchMs: tB64 - tFetch,
+            b64Ms: Date.now() - tB64,
+            bytes: buf.byteLength,
+          })
         } catch (err) {
           this.fetchControllers.delete(job.id)
           if (job.status !== 'running') return
           logger.warn('download', 'imgbb background 抓取失败，降级直连', { url: item.url, error: String(err) })
         }
       }
+      const tDl = Date.now()
       const downloadId = await chrome.downloads.download({ url, filename })
-      this.active.set(downloadId, { jobId: job.id, downloadId, item, attempts: 0 })
+      this.active.set(downloadId, { jobId: job.id, downloadId, item, attempts: 0, startedAt: Date.now() })
+      logger.debug('download', 'downloads.download 已发起', { jobId: job.id, downloadId, setupMs: Date.now() - tDl })
     } catch (err) {
       // 启动即失败（参数问题/URL 非法）
       job.failed++
