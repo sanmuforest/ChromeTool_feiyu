@@ -507,7 +507,7 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
         if (error) {
           albumGrabView.setParseText(`抓取失败：${error}`)
         } else {
-          albumGrabView.setParseText(`相册共 ${images.length} 张`)
+          albumGrabView.setParseText(`相册「${albumFolder}」共 ${images.length} 张`)
         }
       } else if (kind === 'albums') {
         const items = data as ImgbbAlbum[]

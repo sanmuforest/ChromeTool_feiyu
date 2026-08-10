@@ -7,7 +7,7 @@ import type { DownloadItem, DownloadJob } from './types'
 
 const logger = initLogger('background')
 
-const MAX_CONCURRENT = 4
+const MAX_CONCURRENT = 10
 const MAX_RETRY = 1
 const FETCH_TIMEOUT_MS = 40000
 

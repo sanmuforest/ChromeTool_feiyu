@@ -167,11 +167,13 @@ export function parseUsernameFromHtml(html: string): string | null {
   return null
 }
 
-/** 从任意 imgbb 页面 HTML 提取页面标题（文件夹命名用）
- * 优先级：h1 > <title>，去掉 " — ImgBB — Page N"/" — ImgBB" 等站点后缀 */
+/** 从任意 imgbb 页面 HTML 提取页面标题（文件夹命名用，参考项目决策链：h1 → og:title → title）
+ * 去掉 " — ImgBB — Page N"/" — ImgBB" 等站点后缀 */
 export function parseAlbumPageTitle(html: string): string | null {
   const h1 = html.match(/<h1[^>]*>([^<]+)<\/h1>/)
   if (h1 && h1[1].trim()) return h1[1].trim()
+  const og = html.match(/<meta property="og:title" content="([^"]*)"/)
+  if (og && og[1].trim()) return og[1].trim()
   const title = html.match(/<title>([^<]+)<\/title>/)
   if (!title) return null
   return (
