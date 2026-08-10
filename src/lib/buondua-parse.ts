@@ -65,7 +65,8 @@ export function parseBuonduaImages(html: string, baseUrl: string): BuonduaImage[
 
 // ---------- 分页 ----------
 
-/** 解析分页链接（?page=N），返回绝对 URL 列表（含基址自身） */
+/** 解析分页链接（?page=N），返回绝对 URL 列表（含基址自身）
+ * 注意：大相册分页导航只显示部分页码，仅用于小相册；全量抓取用 parseBuonduaMaxPage */
 export function parsePaginationUrls(html: string, baseUrl: string): string[] {
   const urls = new Set<string>()
   const re = /<a class="pagination-link[^"]*"[^>]*href="([^"]*)"[^>]*>/g
@@ -78,6 +79,22 @@ export function parsePaginationUrls(html: string, baseUrl: string): string[] {
     }
   }
   return [...urls].sort()
+}
+
+/** 解析 buondua 相册最大页数：标题 "( Page X / N )" 优先，分页链接最大 page 兜底 */
+export function parseBuonduaMaxPage(html: string): number {
+  const m = html.match(/\(\s*Page\s+\d+\s*\/\s*(\d+)\s*\)/i)
+  if (m) {
+    const n = Number(m[1])
+    if (n > 0) return n
+  }
+  let max = 1
+  const re = /<a class="pagination-link[^"]*"[^>]*href="[^"]*page=(\d+)/g
+  let mm: RegExpExecArray | null
+  while ((mm = re.exec(html)) !== null) {
+    max = Math.max(max, Number(mm[1]) || 1)
+  }
+  return max
 }
 
 /** 从相册 URL 去除 ?page= 参数，得到基址 */

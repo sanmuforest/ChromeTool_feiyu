@@ -8,8 +8,8 @@ import {
   extractBuonduaAlbumName,
   parseAllPostLinks,
   parseBuonduaImages,
+  parseBuonduaMaxPage,
   parseBuonduaPageTitle,
-  parsePaginationUrls,
   parseRecommendedLinks,
 } from '../lib/buondua-parse'
 import type { BuonduaImage, BuonduaLinkItem } from '../lib/types'
@@ -47,27 +47,35 @@ export class BuonduaService {
     }
   }
 
-  /** 单相册全子页抓取：解析分页 → 逐页抓图 → 合并去重；返回页面标题（文件夹命名用） */
+  /** 单相册全子页抓取：按最大页数遍历全部子页 → 合并去重；返回页面标题（文件夹命名用） */
   async fetchAlbumAllPages(url: string): Promise<{ images: BuonduaImage[]; pages: string[]; title: string }> {
     const base = albumBaseUrl(url)
     const firstHtml = await this.fetchHtml(base)
     const title = parseBuonduaPageTitle(firstHtml)
-    const pageUrls = parsePaginationUrls(firstHtml, base)
-    const all = pageUrls.length > 0 ? pageUrls : [base]
+    // 大相册分页导航只显示部分页码：按标题 ( Page X / N ) 的最大页数完整遍历
+    const maxPage = parseBuonduaMaxPage(firstHtml)
+    const all: string[] = []
+    for (let p = 1; p <= maxPage; p++) {
+      all.push(`${base}?page=${p}`)
+    }
     const imagesMap = new Map<string, BuonduaImage>()
     let scanned = 0
+    let emptyStreak = 0
     for (const pageUrl of all) {
       const html = await this.fetchHtml(pageUrl)
       const imgs = parseBuonduaImages(html, pageUrl)
       scanned += imgs.length
+      emptyStreak = imgs.length === 0 ? emptyStreak + 1 : 0
       for (const img of imgs) {
         // 去重键：路径 + 文件名（去掉签名 query）
         const key = `${img.url.split('?')[0]}`
         if (!imagesMap.has(key)) imagesMap.set(key, img)
       }
+      // 连续 3 页无图（视频页/末尾）提前停止，避免超限浪费
+      if (emptyStreak >= 3) break
     }
     const images = [...imagesMap.values()]
-    logger.info('buondua', '相册全子页抓取完成', { url, pages: all.length, scanned, unique: images.length, title })
+    logger.info('buondua', '相册全子页抓取完成', { url, pages: all.length, scanned, unique: images.length, title, maxPage })
     return { images, pages: all, title }
   }
 

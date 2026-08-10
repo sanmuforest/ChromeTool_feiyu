@@ -21,8 +21,16 @@ const logger = initLogger('background')
 const sessions = new Map<number, GrabSession>() // key: srcTabId
 
 function buildFolderName(title: string): string {
-  const cleanTitle = title.replace(/[\\/:*?"<>|\n\r]/g, '_').trim().slice(0, 120) || '页面'
+  const cleanTitle = cleanPageTitle(title).replace(/[\\/:*?"<>|\n\r]/g, '_').trim().slice(0, 120) || '页面'
   return cleanTitle
+}
+
+/** 清理页面标题中的常见站点后缀（主抓取页签文件夹/相册名用） */
+function cleanPageTitle(title: string): string {
+  return title
+    .replace(/\s*[-—–]\s*ImgBB\s*$/i, '')
+    .replace(/\s*[-–—]\s*Buondua\s*$/i, '')
+    .trim()
 }
 
 // ---------- 下载 ----------
@@ -160,7 +168,7 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       const session: GrabSession = existing ?? {
         srcTabId: message.srcTabId,
         grabTabId: message.grabTabId,
-        title: srcTab.title || url.host,
+        title: cleanPageTitle(srcTab.title || url.host),
         host: url.host,
         url: srcTab.url,
         folderName: '',
