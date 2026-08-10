@@ -871,3 +871,100 @@ body {
 .following-cover:hover {
   border-color: var(--accent);
 }
+
+/* ---------- buondua 适配页（FP-004） ---------- */
+.bd-link-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.bd-link-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  background: var(--bg-3);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.bd-link-card:hover {
+  border-color: var(--accent);
+}
+
+.bd-link-card.selected {
+  border-color: var(--accent);
+  background: rgba(90, 120, 255, 0.08);
+}
+
+.bd-link-cover {
+  width: 64px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #111;
+  flex-shrink: 0;
+}
+
+.bd-link-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.bd-link-title {
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bd-link-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.bd-batch-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.bd-batch-card {
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg-3);
+}
+
+.bd-batch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 4px 8px;
+}
+
+.bd-batch-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.bd-batch-status {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.bd-batch-info {
+  margin-left: 8px;
+}

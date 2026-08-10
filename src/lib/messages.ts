@@ -18,6 +18,9 @@ import type {
   LogContext,
   LogEntry,
   LogLevel,
+  BuonduaImage,
+  BuonduaLinkItem,
+  BuonduaTarget,
 } from './types'
 
 export type Message =
@@ -60,8 +63,24 @@ export type Message =
   | { type: 'IMG_ANALYZE_FOLLOWING'; srcTabId: number; username: string; side: 'following' | 'followers' | 'both'; batchStart: number; batchSize: number }
   // ---- imgbb 适配器：bg → grabber 推送 ----
   | { type: 'IMG_RESULT'; kind: ImgResultKind; data: ImgbbImage[] | ImgbbAlbum[] | ImgbbFollowingUser[]; done: boolean; error?: string }
+  // ---- buondua 适配器（FP-004）：grabber → bg ----
+  | { type: 'BD_FETCH_ALBUM'; srcTabId: number; url: string }
+  | { type: 'BD_SCAN_LINKS'; srcTabId: number; url: string; kind: 'recommended' | 'popular' }
+  | { type: 'BD_FETCH_ALBUMS'; srcTabId: number; targets: BuonduaTarget[] }
+  // ---- buondua 适配器：bg → grabber 推送 ----
+  | { type: 'BD_RESULT'; kind: BuonduaResultKind; data: BuonduaImage[] | BuonduaLinkItem[] | BuonduaBatchItem; done: boolean; error?: string }
 
 export type ImgResultKind = 'album-images' | 'gallery' | 'gallery-range' | 'albums' | 'following'
+
+export type BuonduaResultKind = 'album' | 'scan' | 'batch-item'
+
+/** 批量抓取单个相册完成推送 */
+export interface BuonduaBatchItem {
+  index: number
+  target: BuonduaTarget
+  images: BuonduaImage[]
+  pages: string[]
+}
 
 export type MessageResponse =
   | { ok: true; entries?: LogEntry[]; level?: LogLevel; session?: GrabSession; job?: DownloadJob; username?: string | null }

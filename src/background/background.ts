@@ -11,6 +11,7 @@ import { appendLog, clearEntries, getEntries, getLevel, initLogger, setLevel } f
 import { sendToTab, type ImgResultKind, type Message, type MessageResponse } from '../lib/messages'
 import type { GrabSession, ImgbbAlbum, ImgbbFollowingUser, ImgbbImage } from '../lib/types'
 import { ImgbbService } from './imgbb-service'
+import { BuonduaService } from './buondua-service'
 
 const logger = initLogger('background')
 
@@ -48,6 +49,10 @@ const imgbb = new ImgbbService()
 /** 关注墙用户列表缓存（按 用户名|方向 缓存，避免每批重复抓取） */
 const followingUsersCache = new Map<string, import('../lib/types').ImgbbUser[]>()
 
+// ---------- buondua 适配器服务（FP-004） ----------
+
+const buondua = new BuonduaService()
+
 /** 向指定抓取页推送 imgbb 分析结果 */
 async function pushImgbbResult(
   srcTabId: number,
@@ -59,6 +64,11 @@ async function pushImgbbResult(
   const session = sessions.get(srcTabId)
   if (!session) return
   await sendToTab(session.grabTabId, { type: 'IMG_RESULT', kind, data, done, error })
+}
+
+/** 获取 srcTabId 对应抓取页 tabId（无会话返回 0，sendToTab 静默失败） */
+function sessionOf(srcTabId: number): number {
+  return sessions.get(srcTabId)?.grabTabId ?? 0
 }
 
 // ---------- action 点击：创建抓取页 ----------
@@ -358,6 +368,61 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       } catch (err) {
         logger.error('imgbb', '关注墙分析失败', String(err))
         await pushImgbbResult(message.srcTabId, 'following', [], true, String(err))
+      }
+      return { ok: true }
+    }
+
+    // ---- buondua 适配器（FP-004） ----
+    case 'BD_FETCH_ALBUM': {
+      try {
+        const { images, pages } = await buondua.fetchAlbumAllPages(message.url)
+        await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'album', data: images, done: true })
+        logger.info('buondua', '全子页抓取完成', { url: message.url, pages: pages.length, count: images.length })
+      } catch (err) {
+        logger.error('buondua', '全子页抓取失败', String(err))
+        await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'album', data: [], done: true, error: String(err) })
+      }
+      return { ok: true }
+    }
+
+    case 'BD_SCAN_LINKS': {
+      try {
+        const items = await buondua.scanLinks(message.url, message.kind)
+        await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'scan', data: items, done: true })
+        logger.info('buondua', '链接扫描完成', { kind: message.kind, count: items.length })
+      } catch (err) {
+        logger.error('buondua', '链接扫描失败', String(err))
+        await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'scan', data: [], done: true, error: String(err) })
+      }
+      return { ok: true }
+    }
+
+    case 'BD_FETCH_ALBUMS': {
+      try {
+        const targets = message.targets
+        let completed = 0
+        await buondua.fetchAlbumsBatch(
+          targets.map((t) => ({ url: t.url, title: t.folderName })),
+          (index, _target, images) => {
+            completed++
+            void sendToTab(sessionOf(message.srcTabId), {
+              type: 'BD_RESULT',
+              kind: 'batch-item',
+              data: { index, target: targets[index], images, pages: [] },
+              done: completed >= targets.length,
+            })
+          },
+        )
+        logger.info('buondua', '批量抓取完成', { total: targets.length })
+      } catch (err) {
+        logger.error('buondua', '批量抓取失败', String(err))
+        await sendToTab(sessionOf(message.srcTabId), {
+          type: 'BD_RESULT',
+          kind: 'batch-item',
+          data: { index: -1, target: { url: '', folderName: '' }, images: [], pages: [] },
+          done: true,
+          error: String(err),
+        })
       }
       return { ok: true }
     }

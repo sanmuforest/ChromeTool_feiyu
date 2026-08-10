@@ -6,6 +6,7 @@ import { initLogger } from '../lib/logger'
 import { sendMessage } from '../lib/messages'
 import type { GrabSession } from '../lib/types'
 import { initAdaptersView, type AdaptersViewHandle } from './view-adapters'
+import { initBuonduaView, type BuonduaViewHandle } from './view-buondua'
 import { initImagesView, type ImagesViewHandle } from './view-images'
 import { initTemplateView } from './view-template'
 
@@ -20,6 +21,7 @@ const srcTabId = Number(params.get('srcTabId'))
 
 let imagesView: ImagesViewHandle | null = null
 let adaptersView: AdaptersViewHandle | null = null
+let buonduaView: BuonduaViewHandle | null = null
 
 function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c)
@@ -55,16 +57,21 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'GRAB_DOWNLOAD_PROGRESS':
       imagesView.onDownloadProgress(msg.job)
       adaptersView?.onDownloadProgress(msg.job)
+      buonduaView?.onDownloadProgress(msg.job)
       break
     case 'GRAB_DOWNLOAD_DONE':
       imagesView.onDownloadDone(msg.job)
       adaptersView?.onDownloadDone(msg.job)
+      buonduaView?.onDownloadDone(msg.job)
       break
     case 'GRAB_SESSION_END_FWD':
       imagesView.onSessionEnd()
       break
     case 'IMG_RESULT':
       adaptersView?.onImgbbResult(msg.kind, msg.data, msg.done, msg.error)
+      break
+    case 'BD_RESULT':
+      buonduaView?.onResult(msg.kind, msg.data, msg.done, msg.error)
       break
   }
 })
@@ -131,6 +138,7 @@ void (async () => {
     imagesView = initImagesView(document.getElementById('panel-images') as HTMLElement, session)
     initLogPanel(document.getElementById('panel-logs') as HTMLElement)
     adaptersView = initAdaptersView(document.getElementById('panel-imgbb') as HTMLElement, srcTabId, session.url)
+    buonduaView = initBuonduaView(document.getElementById('panel-buondua') as HTMLElement, srcTabId, session.url)
     initTemplateView(document.getElementById('panel-template') as HTMLElement)
 
     // 自动开始解析（不阻塞：超时仅警告）

@@ -114,3 +114,27 @@ export interface ImgbbFollowingUser {
   user: ImgbbUser
   albums: ImgbbAlbum[]
 }
+
+// ========== buondua 适配器（FP-004） ==========
+
+/** buondua 图片（article-fulltext 内解析，宽高直接取自 img 属性） */
+export interface BuonduaImage {
+  url: string
+  filename: string
+  width?: number
+  height?: number
+}
+
+/** buondua 相册链接（推荐/其他区块解析） */
+export interface BuonduaLinkItem {
+  url: string
+  title: string
+  coverUrl: string
+  imageCount?: number
+}
+
+/** 批量抓取目标（url + 文件夹名） */
+export interface BuonduaTarget {
+  url: string
+  folderName: string
+}
