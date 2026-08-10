@@ -6,7 +6,7 @@
 // 4. 下载队列管理（DownloadManager）
 // 注意：SW 生命周期短、无 DOM，状态持久化到 chrome.storage（内存 Map 可重建）
 
-import { DownloadManager } from '../lib/downloader'
+import { DownloadManager, arrayBufferToBase64, fetchImageBytes } from '../lib/downloader'
 import { appendLog, clearEntries, getEntries, getLevel, initLogger, setLevel } from '../lib/logger'
 import { sendToTab, type ImgResultKind, type Message, type MessageResponse } from '../lib/messages'
 import { storageGet, storageSet } from '../lib/storage'
@@ -293,6 +293,18 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
     case 'GRAB_OPEN_FOLDER':
       chrome.downloads.showDefaultFolder()
       return { ok: true }
+
+    // ---- 打包下载：background 抓取图片字节（imgbb 防降级） ----
+    case 'GRAB_FETCH_IMAGE': {
+      try {
+        const buf = await fetchImageBytes(message.url)
+        logger.debug('download', 'GRAB_FETCH_IMAGE 抓取完成', { bytes: buf.byteLength, url: message.url })
+        return { ok: true, data: arrayBufferToBase64(buf) }
+      } catch (err) {
+        logger.warn('download', 'GRAB_FETCH_IMAGE 抓取失败', { url: message.url, error: String(err) })
+        return { ok: false, error: String(err) }
+      }
+    }
 
     // ---- 下载并发设置 ----
     case 'GRAB_SET_CONCURRENCY': {

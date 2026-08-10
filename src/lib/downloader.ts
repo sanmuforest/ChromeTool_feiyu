@@ -11,8 +11,9 @@ const DEFAULT_CONCURRENCY = 12
 const MAX_RETRY = 1
 const FETCH_TIMEOUT_MS = 40000
 
-/** background fetch 抓取图片字节（imgbb 防 180x180 降级用；signal 支持取消） */
-async function fetchImageBytes(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
+/** background fetch 抓取图片字节（imgbb 防 180x180 降级用；signal 支持取消）
+ * 导出供 GRAB_FETCH_IMAGE（打包下载）复用 */
+export async function fetchImageBytes(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
   const t0 = Date.now()
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
@@ -36,8 +37,8 @@ async function fetchImageBytes(url: string, signal?: AbortSignal): Promise<Array
   }
 }
 
-/** ArrayBuffer → base64（data URL 下载用，避免大文件栈溢出分块拼接） */
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
+/** ArrayBuffer → base64（data URL 下载 / 消息回传用，避免大文件栈溢出分块拼接） */
+export function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer)
   let binary = ''
   const CHUNK = 0x8000

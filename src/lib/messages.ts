@@ -51,6 +51,8 @@ export type Message =
   | { type: 'GRAB_DOWNLOAD_RETRY'; jobId: number }
   | { type: 'GRAB_DOWNLOAD_GET'; jobId: number }
   | { type: 'GRAB_OPEN_FOLDER' }
+  // ---- 打包下载：grabber → bg 抓取图片字节（imgbb 扩展页 fetch 会降级 180，需 background 上下文） ----
+  | { type: 'GRAB_FETCH_IMAGE'; srcTabId: number; url: string }
   // ---- 下载并发设置 ----
   | { type: 'GRAB_SET_CONCURRENCY'; concurrency: number }
   | { type: 'GRAB_GET_CONCURRENCY' }
@@ -86,7 +88,7 @@ export interface BuonduaBatchItem {
 }
 
 export type MessageResponse =
-  | { ok: true; entries?: LogEntry[]; level?: LogLevel; session?: GrabSession; job?: DownloadJob; username?: string | null; name?: string; concurrency?: number }
+  | { ok: true; entries?: LogEntry[]; level?: LogLevel; session?: GrabSession; job?: DownloadJob; username?: string | null; name?: string; concurrency?: number; data?: string }
   | { ok: false; error: string }
 
 /** 通用发送：扩展页面 → background */

@@ -527,21 +527,46 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     renderZip()
     const zip = new JSZip()
     let okCount = 0
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i]
-      try {
-        const resp = await fetch(item.url)
-        if (resp.ok) {
-          const blob = await resp.blob()
-          zip.file(item.filename, blob)
-          okCount++
+    const CONCURRENCY = 6 // 打包并发（参考项目 asyncPool）
+    let cursor = 0
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const idx = cursor++
+        if (idx >= items.length) return
+        const item = items[idx]
+        const t0 = Date.now()
+        try {
+          let blob: Blob | null = null
+          if (/(i\.ibb\.co|ibb\.co)/.test(item.url)) {
+            // imgbb：background 上下文 fetch（扩展页面 fetch 会被降级为 180 缩略图）
+            const res = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
+              type: 'GRAB_FETCH_IMAGE',
+              srcTabId: options.srcTabId,
+              url: item.url,
+            })
+            if (res.ok && res.data) {
+              const bin = atob(res.data)
+              const bytes = new Uint8Array(bin.length)
+              for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+              blob = new Blob([bytes])
+            }
+          } else {
+            const resp = await fetch(item.url)
+            if (resp.ok) blob = await resp.blob()
+          }
+          if (blob) {
+            zip.file(item.filename, blob)
+            okCount++
+          }
+          logger.debug('grab-view', '打包单图完成', { url: item.url, ms: Date.now() - t0, bytes: blob?.size })
+        } catch (err) {
+          logger.warn('grab-view', '打包抓取图片失败', { url: item.url, error: String(err) })
         }
-      } catch (err) {
-        logger.warn('grab-view', '打包抓取图片失败', { url: item.url, error: String(err) })
+        zipState!.current = Math.min(items.length, zipState!.current + 1)
+        renderZip()
       }
-      zipState.current = i + 1
-      renderZip()
     }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, () => worker()))
     const blob = await zip.generateAsync({ type: 'blob' })
     const objectUrl = URL.createObjectURL(blob)
     try {
