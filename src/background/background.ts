@@ -372,14 +372,15 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
     // ---- buondua 适配器（FP-004） ----
     case 'BD_FETCH_ALBUM': {
       try {
-        const { images, pages } = await buondua.fetchAlbumAllPages(message.url)
+        const { images, pages, title } = await buondua.fetchAlbumAllPages(message.url)
         await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'album', data: images, done: true })
-        logger.info('buondua', '全子页抓取完成', { url: message.url, pages: pages.length, count: images.length })
+        logger.info('buondua', '全子页抓取完成', { url: message.url, pages: pages.length, count: images.length, title })
+        return { ok: true, name: title || undefined }
       } catch (err) {
         logger.error('buondua', '全子页抓取失败', String(err))
         await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'album', data: [], done: true, error: String(err) })
+        return { ok: false, error: String(err) }
       }
-      return { ok: true }
     }
 
     case 'BD_SCAN_LINKS': {

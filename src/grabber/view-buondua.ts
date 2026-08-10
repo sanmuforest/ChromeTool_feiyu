@@ -153,12 +153,18 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       albumGrabView.setParseText('需要授权访问 buondua（<all_urls>）后才能抓取')
       return
     }
-    lastAlbumFolder = buildBuonduaFolderName(url, url)
     albumGrabView.clear()
     albumGrabView.setBusyParsing(true)
     albumGrabView.setParseText('抓取全部子页中…')
-    const res = await sendMessage({ type: 'BD_FETCH_ALBUM', srcTabId, url })
-    if (!res.ok) {
+    const res = await sendMessage<{ ok: true; name?: string } | { ok: false; error: string }>({
+      type: 'BD_FETCH_ALBUM',
+      srcTabId,
+      url,
+    })
+    if (res.ok) {
+      // 文件夹名 = 页面标题（后台解析 h1），失败兜底 URL
+      lastAlbumFolder = buildBuonduaFolderName(res.name ?? url, url)
+    } else {
       albumGrabView.setBusyParsing(false)
       albumGrabView.setParseText(`请求失败：${res.error}`)
     }

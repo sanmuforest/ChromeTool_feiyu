@@ -8,6 +8,7 @@ import {
   extractBuonduaAlbumName,
   parseAllPostLinks,
   parseBuonduaImages,
+  parseBuonduaPageTitle,
   parsePaginationUrls,
   parseRecommendedLinks,
 } from '../lib/buondua-parse'
@@ -46,10 +47,11 @@ export class BuonduaService {
     }
   }
 
-  /** 单相册全子页抓取：解析分页 → 逐页抓图 → 合并去重 */
-  async fetchAlbumAllPages(url: string): Promise<{ images: BuonduaImage[]; pages: string[] }> {
+  /** 单相册全子页抓取：解析分页 → 逐页抓图 → 合并去重；返回页面标题（文件夹命名用） */
+  async fetchAlbumAllPages(url: string): Promise<{ images: BuonduaImage[]; pages: string[]; title: string }> {
     const base = albumBaseUrl(url)
     const firstHtml = await this.fetchHtml(base)
+    const title = parseBuonduaPageTitle(firstHtml)
     const pageUrls = parsePaginationUrls(firstHtml, base)
     const all = pageUrls.length > 0 ? pageUrls : [base]
     const imagesMap = new Map<string, BuonduaImage>()
@@ -65,8 +67,8 @@ export class BuonduaService {
       }
     }
     const images = [...imagesMap.values()]
-    logger.info('buondua', '相册全子页抓取完成', { url, pages: all.length, scanned, unique: images.length })
-    return { images, pages: all }
+    logger.info('buondua', '相册全子页抓取完成', { url, pages: all.length, scanned, unique: images.length, title })
+    return { images, pages: all, title }
   }
 
   /** 解析推荐/其他相册链接（其他 = 全页帖子链接 - 推荐区） */

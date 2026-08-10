@@ -227,3 +227,13 @@ export function extractBuonduaAlbumName(title: string, url: string): string {
 export function isBuonduaAlbumPage(html: string): boolean {
   return html.includes('article-fulltext') && /\( *Page \d+ *\/ *\d+ *\)/.test(html)
 }
+
+/** 从 buondua 页面 HTML 提取页面标题（文件夹命名用）：h1 优先，og:title/title 兜底 */
+export function parseBuonduaPageTitle(html: string): string {
+  const h1 = html.match(/<h1[^>]*>([^<]+)<\/h1>/)
+  if (h1 && h1[1].trim()) return h1[1].trim()
+  const og = html.match(/<meta property="og:title" content="([^"]*)"/)
+  if (og && og[1].trim()) return og[1].trim()
+  const title = html.match(/<title>([^<]+)<\/title>/)
+  return title ? title[1].trim() : ''
+}

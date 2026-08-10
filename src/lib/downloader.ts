@@ -74,8 +74,9 @@ export function extractFilename(url: string, index: number): string {
 
 export class DownloadManager {
   private jobs = new Map<number, DownloadJob>()
-  private active = new Map<number, ActiveDownload>() // downloadId → active
+  private active = new Map<number, ActiveDownload>() // downloadId → active（下载中）
   private queue: { jobId: number; item: DownloadItem }[] = []
+  private pendingFetches = new Set<number>() // jobId → 正在 background fetch（占并发槽）
   private fetchControllers = new Map<number, AbortController>() // jobId → imgbb 字节抓取 controller
   private nextJobId = 1
 
@@ -164,20 +165,25 @@ export class DownloadManager {
   }
 
   private pump(): void {
-    // 派发排队项
-    while (this.active.size < MAX_CONCURRENT && this.queue.length > 0) {
+    // 派发排队项：fetch 阶段与下载中合并计入并发槽（避免一次性全派发导致排队）
+    while (this.active.size + this.pendingFetches.size < MAX_CONCURRENT && this.queue.length > 0) {
       const next = this.queue.shift()
       if (!next) break
       const job = this.jobs.get(next.jobId)
       if (!job || job.status !== 'running') continue
-      void this.startOne(job, next.item)
+      this.pendingFetches.add(next.jobId)
+      void this.startOne(job, next.item).finally(() => {
+        this.pendingFetches.delete(next.jobId)
+        this.pump()
+      })
     }
     // 检查完成态
     for (const job of this.jobs.values()) {
       if (job.status !== 'running') continue
       const hasQueued = this.queue.some((q) => q.jobId === job.id)
       const hasActive = [...this.active.values()].some((a) => a.jobId === job.id)
-      if (!hasQueued && !hasActive) {
+      const hasFetch = this.pendingFetches.has(job.id)
+      if (!hasQueued && !hasActive && !hasFetch) {
         job.status = 'done'
         logger.info('download', '下载任务完成', { jobId: job.id, done: job.done, failed: job.failed })
         this.emit(job, true)
