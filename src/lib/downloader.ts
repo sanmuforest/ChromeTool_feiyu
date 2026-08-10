@@ -56,7 +56,7 @@ export interface DownloadManagerCallbacks {
   onUpdate: (job: DownloadJob, done: boolean) => void
 }
 
-/** 从 URL 提取合法文件名（序号-原名），扩展名缺失时留空（Chrome 按 content-type 补） */
+/** 从 URL 提取合法文件名（序号-原名，过长截断；扩展名缺失时留空 Chrome 按 content-type 补） */
 export function extractFilename(url: string, index: number): string {
   let name = ''
   try {
@@ -68,6 +68,11 @@ export function extractFilename(url: string, index: number): string {
   name = name.replace(/[\\/:*?"<>|]/g, '_').trim()
   if (!name || name === '.') {
     name = 'image'
+  }
+  // 简化：过长文件名截断（保留开头 + 结尾，含扩展名与尾部序号）
+  const MAX_LEN = 40
+  if (name.length > MAX_LEN) {
+    name = `${name.slice(0, 22)}_${name.slice(-14)}`
   }
   return `${String(index).padStart(3, '0')}-${name}`
 }
