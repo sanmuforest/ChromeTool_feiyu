@@ -26,12 +26,13 @@ export interface AdaptersViewHandle {
   onDownloadDone(job: DownloadJob): void
 }
 
-/** ImgbbImage → GrabbedImage（显示用展示图，下载用原图） */
+/** ImgbbImage → GrabbedImage（显示用展示图，下载用原图，缩略图用服务器 thumb） */
 function toGrabbed(img: ImgbbImage): GrabbedImage {
   return {
     id: img.id,
     url: img.mediumUrl || img.originalUrl,
     downloadUrl: img.originalUrl,
+    thumbUrl: img.thumbUrl,
     width: img.width,
     height: img.height,
     sizeStatus: img.width && img.height ? 'ok' : 'unknown',

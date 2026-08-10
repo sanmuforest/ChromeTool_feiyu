@@ -23,6 +23,8 @@ const MIN_IMAGE_SIZE = 100 // 过滤 <100px UI 小图
 
 interface Candidate {
   url: string
+  /** 展示用缩略图（页面实际渲染的小图 / imgbb thumb） */
+  thumbUrl?: string
   width?: number
   height?: number
 }
@@ -109,7 +111,12 @@ function initScanner(): void {
         const candidate = candidates[cursor]
         cursor++
         seenUrls.add(candidate.url)
-        const item: GrabbedImage = { id: candidate.url, url: candidate.url, sizeStatus: 'loading' }
+        const item: GrabbedImage = {
+          id: candidate.url,
+          url: candidate.url,
+          thumbUrl: candidate.thumbUrl || undefined,
+          sizeStatus: 'loading',
+        }
         batch.push(item)
         if (imgbb && candidate.width && candidate.height) {
           // imgbb 尺寸直读（免加载）
@@ -176,7 +183,8 @@ function collectImgbbCandidates(): Candidate[] {
     if (width && height && (width < MIN_IMAGE_SIZE || height < MIN_IMAGE_SIZE)) {
       continue // 过滤 <100px UI 小图
     }
-    results.push({ url, width, height })
+    const thumbObj = obj.thumb as { url?: string } | undefined
+    results.push({ url, thumbUrl: thumbObj?.url || '', width, height })
   }
   return results
 }
@@ -186,20 +194,23 @@ function collectImgbbCandidates(): Candidate[] {
 function collectCandidates(): Candidate[] {
   const map = new Map<string, Candidate>()
 
-  const add = (url: string): void => {
+  const add = (url: string, thumbUrl = ''): void => {
     if (!url) return
     if (!/^https?:\/\//i.test(url)) return // 排除 data:/blob:/javascript: 等不可下载协议
-    map.set(url, { url })
+    const existing = map.get(url)
+    map.set(url, { url, thumbUrl: existing?.thumbUrl || thumbUrl })
   }
 
   document.querySelectorAll('img').forEach((img) => {
-    add(img.currentSrc || '')
-    add(img.getAttribute('src') || '')
-    add(img.getAttribute('data-src') || '')
-    add(img.getAttribute('data-original') || '')
-    add(img.getAttribute('data-lazy-src') || '')
+    const current = img.currentSrc || '' // 页面实际渲染的展示图（通常已是小图）
+    const src = img.getAttribute('src') || ''
+    add(current, current || src)
+    add(src, current || src)
+    add(img.getAttribute('data-src') || '', current || src)
+    add(img.getAttribute('data-original') || '', current || src)
+    add(img.getAttribute('data-lazy-src') || '', current || src)
     const srcset = img.getAttribute('srcset') || img.getAttribute('data-srcset')
-    if (srcset) add(pickLargestSrcset(srcset))
+    if (srcset) add(pickLargestSrcset(srcset), current || src)
   })
 
   document.querySelectorAll('picture source').forEach((source) => {

@@ -33,6 +33,8 @@ export interface GrabbedImage {
   url: string
   /** 下载地址（默认 = url；imgbb 等站点显示图与下载图不同） */
   downloadUrl?: string
+  /** 展示用缩略图（服务器提供；无则网格原图占位 + canvas 降采样） */
+  thumbUrl?: string
   width?: number
   height?: number
   sizeStatus: 'ok' | 'loading' | 'unknown'

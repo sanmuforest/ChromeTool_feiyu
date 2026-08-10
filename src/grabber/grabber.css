@@ -309,6 +309,9 @@ body {
   cursor: pointer;
   user-select: none;
   height: 160px;
+  /* 性能：屏外卡片跳过渲染/布局，滚动进入视口才渲染 */
+  content-visibility: auto;
+  contain-intrinsic-size: 150px 160px;
 }
 
 .img-card:hover {

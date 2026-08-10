@@ -54,6 +54,8 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
   let job: DownloadJob | null = null
   let zipState: { current: number; total: number } | null = null
   let dedupeOn = true
+  let filterSmallOn = true // 默认剔除 <100x100 小图
+  const thumbCache = new Map<string, string>() // 原图 URL → canvas 降采样 Blob URL
 
   // ---------- DOM 构建 ----------
   root.innerHTML = `
@@ -63,6 +65,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
           ${showReparse ? '<button id="gv-reparse" class="btn">重新解析</button>' : ''}
           ${showLoadMore ? '<button id="gv-load-more" class="btn" disabled>加载下一批</button>' : ''}
           <button id="gv-dedupe" class="btn">去重</button>
+          <button id="gv-small-filter" class="btn">小图过滤</button>
         </div>
         <div class="group">
           <button id="gv-select-all" class="btn">全选</button>
@@ -105,6 +108,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
   const btnParseCancel = root.querySelector('#gv-parse-cancel') as HTMLButtonElement | null
   const btnLoadMore = root.querySelector('#gv-load-more') as HTMLButtonElement | null
   const btnDedupe = root.querySelector('#gv-dedupe') as HTMLButtonElement
+  const btnSmallFilter = root.querySelector('#gv-small-filter') as HTMLButtonElement
   const dlRow = root.querySelector('#gv-dl-row') as HTMLElement
   const dlLabel = root.querySelector('#gv-dl-label') as HTMLElement
   const dlFill = root.querySelector('#gv-dl-fill') as HTMLElement
@@ -168,6 +172,59 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     return { kept, removed }
   }
 
+  // ---------- 小图过滤（默认剔除 <100x100；仅作用于渲染/选择，images 全量保留） ----------
+  function isSmallImage(img: GrabbedImage): boolean {
+    if (img.sizeStatus !== 'ok' || !img.width || !img.height) return false
+    return img.width < 100 || img.height < 100
+  }
+
+  function applySmallFilter(list: GrabbedImage[]): GrabbedImage[] {
+    if (!filterSmallOn) return list
+    return list.filter((img) => !isSmallImage(img))
+  }
+
+  /** 最终可见列表：去重 → 尺寸筛选 → 小图过滤 */
+  function visibleImages(): GrabbedImage[] {
+    const { kept } = applyDedupe(images)
+    return applySmallFilter(applyFilter(kept))
+  }
+
+  // ---------- 缩略图显示：thumbUrl 优先，无则原图占位 + canvas 降采样 ----------
+  const THUMB_TARGET = 256 // 降采样宽度上限
+
+  function displayUrlOf(img: GrabbedImage): string {
+    if (img.thumbUrl) return img.thumbUrl
+    const cached = thumbCache.get(downloadUrlOf(img))
+    return cached ?? img.url
+  }
+
+  /** 原图加载后 canvas 降采样生成缩略图，替换同 URL 的全部网格 img */
+  function generateThumb(originalUrl: string, imgEl: HTMLImageElement): void {
+    try {
+      const iw = imgEl.naturalWidth
+      const ih = imgEl.naturalHeight
+      if (!iw || !ih) return
+      const scale = Math.min(1, THUMB_TARGET / iw)
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(iw * scale))
+      canvas.height = Math.max(1, Math.round(ih * scale))
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.drawImage(imgEl, 0, 0, canvas.width, canvas.height)
+      canvas.toBlob((blob) => {
+        if (!blob) return
+        const blobUrl = URL.createObjectURL(blob)
+        thumbCache.set(originalUrl, blobUrl)
+        // 替换当前正在显示的同源缩略图
+        for (const el of Array.from(document.querySelectorAll<HTMLImageElement>(`.img-card .thumb[data-src="${CSS.escape(originalUrl)}"]`))) {
+          el.src = blobUrl
+        }
+      }, 'image/jpeg', 0.8)
+    } catch {
+      // CORS 污染/画布失败：保持原图显示
+    }
+  }
+
   // ---------- 尺寸筛选 ----------
   function applyFilter(list: GrabbedImage[]): GrabbedImage[] {
     const fs = filterSize
@@ -179,7 +236,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
   }
 
   function buildSizeGroups(): SizeGroup[] {
-    const okImages = applyDedupe(images).kept.filter((img) => img.sizeStatus === 'ok' && img.width && img.height)
+    const okImages = applySmallFilter(applyDedupe(images).kept).filter((img) => img.sizeStatus === 'ok' && img.width && img.height)
     const unique = new Map<string, { w: number; h: number }>()
     for (const img of okImages) {
       unique.set(`${img.width}x${img.height}`, { w: img.width as number, h: img.height as number })
@@ -248,22 +305,27 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
   // ---------- 渲染 ----------
   function updateStats(): void {
     const { kept, removed } = applyDedupe(images)
-    const shown = applyFilter(kept).length
+    const filtered = applyFilter(kept)
+    const shown = applySmallFilter(filtered)
+    const smallRemoved = filtered.length - shown.length
     const dedupeText = removed.size > 0 ? `（去重 ${removed.size}）` : ''
-    statEl.textContent = `共 ${images.length} 张${dedupeText}，显示 ${shown} 张，选中 ${selected.size} 张`
+    const smallText = smallRemoved > 0 ? `（小图剔除 ${smallRemoved}）` : ''
+    statEl.textContent = `共 ${images.length} 张${dedupeText}${smallText}，显示 ${shown.length} 张，选中 ${selected.size} 张`
   }
 
   function renderGrid(): void {
-    const { kept } = applyDedupe(images)
-    const filtered = applyFilter(kept)
+    const filtered = visibleImages()
     grid.innerHTML = ''
     if (filtered.length === 0) {
-      grid.innerHTML =
-        kept.length === 0
-          ? images.length > 0
-            ? '<div class="empty-tip">去重后无剩余图片。可关闭去重查看。</div>'
-            : '<div class="empty-tip">暂无图片。请先抓取/解析。</div>'
-          : '<div class="empty-tip">当前筛选条件下没有图片。再点一次尺寸按钮可清除筛选。</div>'
+      const { kept } = applyDedupe(images)
+      if (images.length === 0) {
+        grid.innerHTML = '<div class="empty-tip">暂无图片。请先抓取/解析。</div>'
+      } else if (kept.length === 0) {
+        grid.innerHTML = '<div class="empty-tip">去重后无剩余图片。可关闭去重查看。</div>'
+      } else {
+        grid.innerHTML = '<div class="empty-tip">当前筛选/小图过滤条件下没有图片。可调整筛选查看。</div>'
+      }
+      updateStats()
       return
     }
     for (const img of filtered) {
@@ -274,8 +336,14 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       const thumb = document.createElement('img')
       thumb.className = 'thumb'
       thumb.loading = 'lazy'
-      thumb.src = img.url
+      thumb.decoding = 'async'
       thumb.draggable = false
+      thumb.dataset.src = downloadUrlOf(img) // 记录原始下载地址（canvas 替换用）
+      thumb.src = displayUrlOf(img)
+      // 无服务器缩略图：原图加载后 canvas 降采样替换为小图
+      if (!img.thumbUrl && !thumbCache.has(downloadUrlOf(img))) {
+        thumb.onload = () => generateThumb(downloadUrlOf(img), thumb)
+      }
 
       const sizeTag = document.createElement('div')
       sizeTag.className = 'size-tag' + (img.sizeStatus === 'ok' ? '' : ' unknown')
@@ -534,8 +602,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     options.onCancelParse?.()
   })
   root.querySelector('#gv-select-all')?.addEventListener('click', () => {
-    const { kept } = applyDedupe(images)
-    selected = new Set(applyFilter(kept).map((img) => img.url))
+    selected = new Set(visibleImages().map((img) => img.url))
     renderGrid()
   })
   root.querySelector('#gv-select-none')?.addEventListener('click', () => {
@@ -560,14 +627,31 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     renderGrid()
   })
 
+  btnSmallFilter.addEventListener('click', () => {
+    filterSmallOn = !filterSmallOn
+    // 移除选中中被过滤的小图
+    const visible = visibleImages()
+    selected = new Set([...selected].filter((url) => visible.some((img) => img.url === url)))
+    btnSmallFilter.classList.toggle('active', filterSmallOn)
+    btnSmallFilter.textContent = filterSmallOn ? '小图过滤：开' : '小图过滤：关'
+    renderSizeFilter()
+    renderGrid()
+  })
+
   // ---------- 初始 ----------
   renderDedupeBtn()
+  renderSmallFilterBtn()
   renderSizeFilter()
   renderGrid()
 
   function renderDedupeBtn(): void {
     btnDedupe.classList.toggle('active', dedupeOn)
     btnDedupe.textContent = dedupeOn ? '去重：开' : '去重：关'
+  }
+
+  function renderSmallFilterBtn(): void {
+    btnSmallFilter.classList.toggle('active', filterSmallOn)
+    btnSmallFilter.textContent = filterSmallOn ? '小图过滤：开' : '小图过滤：关'
   }
 
   // ---------- 对外句柄 ----------
@@ -599,14 +683,15 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       renderDownload()
     },
     selectAll: () => {
-      const { kept } = applyDedupe(images)
-      selected = new Set(applyFilter(kept).map((img) => img.url))
+      selected = new Set(visibleImages().map((img) => img.url))
       renderGrid()
     },
     clear: () => {
       images = []
       selected.clear()
       filterSize = null
+      for (const url of thumbCache.values()) URL.revokeObjectURL(url)
+      thumbCache.clear()
       renderSizeFilter()
       renderGrid()
     },
