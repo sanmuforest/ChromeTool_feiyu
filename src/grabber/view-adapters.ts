@@ -123,6 +123,7 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
   const homeGrabView: GrabViewHandle = createGrabView(root.querySelector('#home-grab-view') as HTMLElement, {
     srcTabId,
     getFolderName: () => homeFolder,
+    getAlbumName: () => homeFolder,
     showReparse: false,
     showLoadMore: false,
   })
@@ -130,6 +131,7 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
   const albumGrabView: GrabViewHandle = createGrabView(root.querySelector('#album-grab-view') as HTMLElement, {
     srcTabId,
     getFolderName: () => albumFolder,
+    getAlbumName: () => albumFolder,
     showReparse: false,
     showLoadMore: false,
   })

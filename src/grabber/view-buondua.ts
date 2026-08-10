@@ -7,7 +7,7 @@
 
 import { initLogger } from '../lib/logger'
 import { sendMessage, type BuonduaBatchItem, type BuonduaResultKind } from '../lib/messages'
-import { extractBuonduaAlbumName } from '../lib/buondua-parse'
+import { extractBuonduaAlbumName, extractBuonduaAlbumShortName } from '../lib/buondua-parse'
 import type { BuonduaImage, BuonduaLinkItem, DownloadJob, GrabbedImage } from '../lib/types'
 import { createGrabView, type GrabViewHandle } from './image-grab-view'
 
@@ -103,8 +103,10 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
 
   // ---------- 状态 ----------
   let lastAlbumFolder = `ID-buondua-相册-${Date.now()}`
+  let lastAlbumShort = 'album' // 图片名前缀（纯相册名）
   const batchViews = new Map<number, GrabViewHandle>() // index → grab view
   const batchFolders = new Map<number, string>() // index → folderName
+  const batchAlbumNames = new Map<number, string>() // index → 图片名前缀
   const linkLists: LinkListHandle[] = []
 
   // ---------- 子标签切换 ----------
@@ -138,6 +140,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
   const albumGrabView = createGrabView(root.querySelector('#bd-album-grab-view') as HTMLElement, {
     srcTabId,
     getFolderName: () => lastAlbumFolder,
+    getAlbumName: () => lastAlbumShort,
     showReparse: false,
     showLoadMore: false,
   })
@@ -162,8 +165,9 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       url,
     })
     if (res.ok) {
-      // 文件夹名 = 页面标题（后台解析 h1），失败兜底 URL
+      // 文件夹名 = 页面标题（后台解析 h1），失败兜底 URL；图片名前缀 = 纯相册名
       lastAlbumFolder = buildBuonduaFolderName(res.name ?? url, url)
+      lastAlbumShort = extractBuonduaAlbumShortName(res.name ?? url)
     } else {
       albumGrabView.setBusyParsing(false)
       albumGrabView.setParseText(`请求失败：${res.error}`)
@@ -291,6 +295,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       batchFolders.clear()
       targets.forEach((target, idx) => {
         batchFolders.set(idx, target.folderName)
+        batchAlbumNames.set(idx, extractBuonduaAlbumShortName(target.folderName))
         const card = document.createElement('div')
         card.className = 'bd-batch-card'
         const head = document.createElement('div')
@@ -309,6 +314,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         const grabView = createGrabView(host, {
           srcTabId,
           getFolderName: () => batchFolders.get(idx) ?? `ID-buondua-相册-${Date.now()}`,
+          getAlbumName: () => batchAlbumNames.get(idx) ?? 'album',
           showReparse: false,
           showLoadMore: false,
         })

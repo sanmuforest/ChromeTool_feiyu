@@ -56,8 +56,9 @@ export interface DownloadManagerCallbacks {
   onUpdate: (job: DownloadJob, done: boolean) => void
 }
 
-/** 从 URL 提取合法文件名（序号-原名，过长截断；扩展名缺失时留空 Chrome 按 content-type 补） */
-export function extractFilename(url: string, index: number): string {
+/** 从 URL 提取合法文件名（序号-原名，过长截断；albumName 提供时用「序号-相册名.扩展名」）
+ * 扩展名缺失时留空（Chrome 按 content-type 补） */
+export function extractFilename(url: string, index: number, albumName?: string): string {
   let name = ''
   try {
     const path = new URL(url).pathname
@@ -65,9 +66,18 @@ export function extractFilename(url: string, index: number): string {
   } catch {
     name = ''
   }
+  // 提取扩展名（供相册名模式使用）
+  let ext = ''
+  const extMatch = name.match(/\.([a-z0-9]+)$/i)
+  if (extMatch) ext = `.${extMatch[1].toLowerCase()}`
   name = name.replace(/[\\/:*?"<>|]/g, '_').trim()
   if (!name || name === '.') {
     name = 'image'
+  }
+  // 相册名模式：序号-相册名.扩展名（完全替换原文件名）
+  const album = albumName?.replace(/[\\/:*?"<>|\n\r]/g, '_').trim()
+  if (album) {
+    return `${String(index).padStart(3, '0')}-${album.slice(0, 60) || 'image'}${ext || '.jpg'}`
   }
   // 简化：过长文件名截断（保留开头 + 结尾，含扩展名与尾部序号）
   const MAX_LEN = 40

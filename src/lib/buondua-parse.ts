@@ -223,6 +223,20 @@ export function extractBuonduaAlbumName(title: string, url: string): string {
   return name || 'album'
 }
 
+/** 从标题提取纯相册名（图片名前缀用）：去 Page 标记/张数/[标签]/coser 前缀（冒号后部分）
+ * 如 "Coser@年年Nnian: 晨 (80 photos)" → "晨" */
+export function extractBuonduaAlbumShortName(title: string): string {
+  let name = title.trim()
+  name = name.replace(/\s*[-–—]\s*\(\s*Page \d+\s*\/\s*\d+\s*\)\s*$/i, '')
+  name = name.replace(/\s*\(\s*\d+\s*(photos?|张|images?)\s*\)\s*$/i, '')
+  name = name.replace(/^\[[^\]]*\]\s*/, '')
+  const colonIdx = name.indexOf(':')
+  if (colonIdx > 0 && colonIdx < name.length - 1) {
+    name = name.slice(colonIdx + 1).trim()
+  }
+  return name.replace(/[\\/:*?"<>|\n\r]/g, '_').trim() || 'album'
+}
+
 /** 当前相册页判定：HTML 含 article-fulltext 且标题含 ( Page X / Y ) */
 export function isBuonduaAlbumPage(html: string): boolean {
   return html.includes('article-fulltext') && /\( *Page \d+ *\/ *\d+ *\)/.test(html)

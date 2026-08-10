@@ -16,6 +16,8 @@ export interface GrabViewOptions {
   srcTabId: number
   /** 下载文件夹名（每次下载时调用） */
   getFolderName: () => string
+  /** 图片名前缀 = 相册名（默认 = 文件夹名；buondua 等可提供纯相册名） */
+  getAlbumName?: () => string
   onReparse?: () => void
   onLoadMore?: () => void
   onCancelParse?: () => void
@@ -129,7 +131,8 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     }
     // 按 images 顺序输出（selected 是 Set，需要还原顺序）
     urls.sort((a, b) => a.sort.localeCompare(b.sort))
-    return urls.map((u, i) => ({ url: u.url, filename: extractFilename(u.url, i + 1) }))
+    const albumName = options.getAlbumName ? options.getAlbumName() : ''
+    return urls.map((u, i) => ({ url: u.url, filename: extractFilename(u.url, i + 1, albumName || undefined) }))
   }
 
   // ---------- 去重 ----------

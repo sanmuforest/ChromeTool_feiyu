@@ -29,6 +29,7 @@ export function initImagesView(root: HTMLElement, session: GrabSession): ImagesV
   const grabView: GrabViewHandle = createGrabView(root, {
     srcTabId: session.srcTabId,
     getFolderName: () => session.folderName,
+    getAlbumName: () => session.title,
     onReparse: () => {
       grabView.clear()
       void sendMessage({ type: 'GRAB_PARSE_START', srcTabId: session.srcTabId })
