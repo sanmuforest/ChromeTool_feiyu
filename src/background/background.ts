@@ -19,13 +19,9 @@ const logger = initLogger('background')
 
 const sessions = new Map<number, GrabSession>() // key: srcTabId
 
-function buildFolderName(title: string, host: string): string {
-  const cleanTitle = title.replace(/[\\/:*?"<>|\n\r]/g, '_').trim().slice(0, 60) || '页面'
-  const cleanHost = host.replace(/[\\/:*?"<>|]/g, '_')
-  const d = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-  return `${cleanTitle}-${cleanHost}-${ts}`
+function buildFolderName(title: string): string {
+  const cleanTitle = title.replace(/[\\/:*?"<>|\n\r]/g, '_').trim().slice(0, 120) || '页面'
+  return cleanTitle
 }
 
 // ---------- 下载 ----------
@@ -167,7 +163,7 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       session.grabTabId = message.grabTabId
       session.url = srcTab.url
       if (!session.folderName) {
-        session.folderName = buildFolderName(session.title, session.host)
+        session.folderName = buildFolderName(session.title)
       }
       sessions.set(message.srcTabId, session)
       logger.info('session', '会话已注册', { srcTabId: session.srcTabId, grabTabId: session.grabTabId, folderName: session.folderName })
@@ -298,13 +294,14 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
 
     case 'IMG_GET_ALBUM_IMAGES': {
       try {
-        const images = await imgbb.fetchAlbumImages(message.albumUrl)
+        const { images, name } = await imgbb.fetchAlbumImages(message.albumUrl)
         await pushImgbbResult(message.srcTabId, 'album-images', images, true)
+        return { ok: true, name: name || undefined }
       } catch (err) {
         logger.error('imgbb', '相册抓取失败', String(err))
         await pushImgbbResult(message.srcTabId, 'album-images', [], true, String(err))
+        return { ok: false, error: String(err) }
       }
-      return { ok: true }
     }
 
     case 'IMG_FETCH_GALLERY': {

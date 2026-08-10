@@ -83,7 +83,7 @@ export interface BuonduaBatchItem {
 }
 
 export type MessageResponse =
-  | { ok: true; entries?: LogEntry[]; level?: LogLevel; session?: GrabSession; job?: DownloadJob; username?: string | null }
+  | { ok: true; entries?: LogEntry[]; level?: LogLevel; session?: GrabSession; job?: DownloadJob; username?: string | null; name?: string }
   | { ok: false; error: string }
 
 /** 通用发送：扩展页面 → background */

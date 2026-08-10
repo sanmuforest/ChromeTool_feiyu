@@ -33,13 +33,9 @@ function toGrabbed(img: BuonduaImage): GrabbedImage {
   }
 }
 
-/** 生成独立文件夹名：ID-buondua-{相册名}-{时间戳} */
+/** 文件夹名 = 页面名（清洗非法字符后直接使用，无前缀无时间戳） */
 export function buildBuonduaFolderName(title: string, url: string): string {
-  const name = extractBuonduaAlbumName(title, url)
-  const d = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-  return `ID-buondua-${name}-${ts}`
+  return extractBuonduaAlbumName(title, url)
 }
 
 interface LinkListHandle {

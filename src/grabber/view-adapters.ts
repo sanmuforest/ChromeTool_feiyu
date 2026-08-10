@@ -47,6 +47,8 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
   let following: ImgbbFollowingUser[] = []
   let followingBatchStart = 0
   let followingDone = false
+  let homeFolder = '用户主页' // 用户主页抓取文件夹名（识别用户名后更新）
+  let albumFolder = '相册' // 相册抓取文件夹名（解析标题后更新）
 
   // ---------- DOM 构建 ----------
   root.innerHTML = `
@@ -120,14 +122,14 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
   // ---------- 共享抓取视图组件（用户主页 / 相册） ----------
   const homeGrabView: GrabViewHandle = createGrabView(root.querySelector('#home-grab-view') as HTMLElement, {
     srcTabId,
-    getFolderName: () => buildFolderName('用户主页'),
+    getFolderName: () => homeFolder,
     showReparse: false,
     showLoadMore: false,
   })
 
   const albumGrabView: GrabViewHandle = createGrabView(root.querySelector('#album-grab-view') as HTMLElement, {
     srcTabId,
-    getFolderName: () => buildFolderName('相册'),
+    getFolderName: () => albumFolder,
     showReparse: false,
     showLoadMore: false,
   })
@@ -147,16 +149,15 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
     }
   }
 
+  /** 文件夹名 = 页面名（清洗非法字符直接使用，无前缀无时间戳） */
+  function cleanFolderName(name: string): string {
+    return name.replace(/[\\/:*?"<>|\n\r]/g, '_').trim().slice(0, 120) || '未命名'
+  }
+
   function setStatus(el: Element | null, text: string, isError = false): void {
     if (!el) return
     el.textContent = text
     el.classList.toggle('error', isError)
-  }
-
-  function buildFolderName(label: string): string {
-    const d = new Date()
-    const pad = (n: number) => String(n).padStart(2, '0')
-    return `imgbb-${label}-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
   }
 
   /** 新开页签：紧贴当前页签右侧（统一新开页逻辑） */
@@ -271,6 +272,9 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
       homeGrabView.setParseText('需要授权访问 imgbb（<all_urls>）后才能抓取')
       return
     }
+    // 文件夹名 = 用户名（页面名）
+    const username = extractUsername(url)
+    if (username) homeFolder = cleanFolderName(username)
     homeGrabView.setBusyParsing(true)
     homeGrabView.setParseText(`抓取中（page ${pageFrom}~${pageTo}）…`)
     const res = await sendMessage({ type: 'IMG_FETCH_GALLERY', srcTabId, url, pageFrom, pageTo })
@@ -327,9 +331,14 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
       albumGrabView.setParseText('需要授权访问 imgbb（<all_urls>）后才能抓取')
       return
     }
-    albumGrabView.setBusyParsing(true)
-    albumGrabView.setParseText('抓取中…')
-    const res = await sendMessage({ type: 'IMG_GET_ALBUM_IMAGES', srcTabId, albumUrl: url })
+    homeGrabView.setBusyParsing(true)
+    homeGrabView.setParseText('抓取中…')
+    const res = await sendMessage<{ ok: true; name?: string } | { ok: false; error: string }>({
+      type: 'IMG_GET_ALBUM_IMAGES',
+      srcTabId,
+      albumUrl: url,
+    })
+    if (res.ok && res.name) albumFolder = cleanFolderName(res.name) // 文件夹名 = 相册页标题
     if (!res.ok) {
       albumGrabView.setBusyParsing(false)
       albumGrabView.setParseText(`请求失败：${res.error}`)

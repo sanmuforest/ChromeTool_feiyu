@@ -206,11 +206,10 @@ export function parseAllPostLinks(html: string, baseUrl: string, excludeUrls?: S
 
 // ---------- 相册名 / 文件夹名 ----------
 
-/** 从标题或 URL 提取干净相册名（文件夹命名用） */
+/** 从标题或 URL 提取文件夹名（直接使用页面名：保留 (N photos)，去掉分页标记，清洗非法字符） */
 export function extractBuonduaAlbumName(title: string, url: string): string {
   let name = title.trim()
-  name = name.replace(/\s*-\s*\(\s*Page \d+\s*\/\s*\d+\s*\)\s*$/i, '')
-  name = name.replace(/\s*\(\s*\d+\s*photos?\s*\)\s*$/i, '')
+  name = name.replace(/\s*[-–—]\s*\(\s*Page \d+\s*\/\s*\d+\s*\)\s*$/i, '')
   if (!name) {
     try {
       const slug = new URL(url).pathname.split('/').filter(Boolean).pop() || ''
@@ -220,7 +219,7 @@ export function extractBuonduaAlbumName(title: string, url: string): string {
       name = 'album'
     }
   }
-  name = name.replace(/[\\/:*?"<>|\n\r]/g, '_').trim().slice(0, 60)
+  name = name.replace(/[\\/:*?"<>|\n\r]/g, '_').trim().slice(0, 120)
   return name || 'album'
 }
 

@@ -8,6 +8,7 @@ import {
   extractUsername,
   isLoginWall,
   parseAlbumItems,
+  parseAlbumPageTitle,
   parseImageItems,
   parseUsernameFromHtml,
   parseUserItems,
@@ -59,12 +60,13 @@ export class ImgbbService {
     }
   }
 
-  /** 相册详情：抓取相册内全部图片（含分页） */
-  async fetchAlbumImages(albumUrl: string): Promise<ImgbbImage[]> {
+  /** 相册详情：抓取相册内全部图片（含分页）+ 相册名（文件夹命名用） */
+  async fetchAlbumImages(albumUrl: string): Promise<{ images: ImgbbImage[]; name: string }> {
     const html = await this.fetchHtml(albumUrl)
     const images = parseImageItems(html)
-    logger.info('imgbb', '相册图片抓取完成', { url: albumUrl, count: images.length })
-    return images
+    const name = parseAlbumPageTitle(html) ?? ''
+    logger.info('imgbb', '相册图片抓取完成', { url: albumUrl, count: images.length, name })
+    return { images, name }
   }
 
   /** 用户主页/相册页：按页抓取图片 */
