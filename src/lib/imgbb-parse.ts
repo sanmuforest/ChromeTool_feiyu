@@ -168,11 +168,40 @@ export function parseUsernameFromHtml(html: string): string | null {
 }
 
 /** 从任意 imgbb 页面 HTML 提取页面标题（文件夹命名用）
- * 优先级：h1 > <title>，去掉 " — ImgBB"/" - ImgBB" 等站点后缀 */
+ * 优先级：h1 > <title>，去掉 " — ImgBB — Page N"/" — ImgBB" 等站点后缀 */
 export function parseAlbumPageTitle(html: string): string | null {
   const h1 = html.match(/<h1[^>]*>([^<]+)<\/h1>/)
   if (h1 && h1[1].trim()) return h1[1].trim()
   const title = html.match(/<title>([^<]+)<\/title>/)
   if (!title) return null
-  return title[1].replace(/\s*[-—–]\s*ImgBB\s*$/i, '').trim() || null
+  return (
+    title[1]
+      .replace(/\s*[-—–]\s*ImgBB\s*[-—–]\s*Page\s*\d+\s*$/i, '')
+      .replace(/\s*[-—–]\s*ImgBB\s*$/i, '')
+      .trim() || null
+  )
+}
+
+/** 从 imgbb 相册页 HTML 提取下一个分页链接（仅 seek 游标，跳过 peek/排序等）
+ * imgbb 为无尽滚动：裸 ?page=N 不可靠，必须跟随 ?page=N&seek=游标；每页返回累计内容 */
+export function parseAlbumNextPage(html: string, baseUrl: string): string | null {
+  const re = /href="([^"]*\?[^"]*page=\d+[^"]*seek=[^"]*)"/g
+  let best: string | null = null
+  let bestPage = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(html)) !== null) {
+    const href = m[1]
+    const pageMatch = href.match(/page=(\d+)/)
+    const page = pageMatch ? Number(pageMatch[1]) : 0
+    if (page > bestPage) {
+      bestPage = page
+      best = href
+    }
+  }
+  if (!best) return null
+  try {
+    return new URL(best, baseUrl).href
+  } catch {
+    return null
+  }
 }

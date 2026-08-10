@@ -7,20 +7,23 @@ import type { DownloadItem, DownloadJob } from './types'
 
 const logger = initLogger('background')
 
-const MAX_CONCURRENT = 3
+const MAX_CONCURRENT = 4
 const MAX_RETRY = 1
 const FETCH_TIMEOUT_MS = 40000
 
-/** background fetch 抓取图片字节（imgbb 防 180x180 降级用） */
-async function fetchImageBytes(url: string): Promise<ArrayBuffer> {
+/** background fetch 抓取图片字节（imgbb 防 180x180 降级用；signal 支持取消） */
+async function fetchImageBytes(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  // 外部取消（用户点取消按钮）时同时中断
+  signal?.addEventListener('abort', () => controller.abort(), { once: true })
   try {
     const resp = await fetch(url, {
       signal: controller.signal,
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+        Referer: 'https://imgbb.com/',
       },
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
@@ -73,6 +76,7 @@ export class DownloadManager {
   private jobs = new Map<number, DownloadJob>()
   private active = new Map<number, ActiveDownload>() // downloadId → active
   private queue: { jobId: number; item: DownloadItem }[] = []
+  private fetchControllers = new Map<number, AbortController>() // jobId → imgbb 字节抓取 controller
   private nextJobId = 1
 
   constructor(private callbacks: DownloadManagerCallbacks) {}
@@ -105,6 +109,9 @@ export class DownloadManager {
     if (!job || job.status !== 'running') return
     job.status = 'cancelled'
     this.queue = this.queue.filter((q) => q.jobId !== jobId)
+    // 中断正在进行的 imgbb 字节抓取（fetch 阶段无 downloadId，需 abort controller）
+    this.fetchControllers.get(jobId)?.abort()
+    this.fetchControllers.delete(jobId)
     for (const [downloadId, a] of this.active) {
       if (a.jobId === jobId) {
         this.active.delete(downloadId)
@@ -186,11 +193,17 @@ export class DownloadManager {
       // （扩展上下文 TLS 指纹差异），background fetch 能拿原图 → 转 data URL 下载
       // （data URL 无服务器文件名，filename 参数必定生效）
       if (/(i\.ibb\.co|ibb\.co)/.test(url)) {
+        const controller = new AbortController()
+        this.fetchControllers.set(job.id, controller)
         try {
-          const buf = await fetchImageBytes(url)
+          const buf = await fetchImageBytes(item.url, controller.signal)
+          this.fetchControllers.delete(job.id)
+          if (job.status !== 'running') return // 抓取期间已取消
           url = `data:image/jpeg;base64,${arrayBufferToBase64(buf)}`
           logger.info('download', 'imgbb 原图经 background 抓取', { size: buf.byteLength })
         } catch (err) {
+          this.fetchControllers.delete(job.id)
+          if (job.status !== 'running') return
           logger.warn('download', 'imgbb background 抓取失败，降级直连', { url: item.url, error: String(err) })
         }
       }

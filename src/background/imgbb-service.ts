@@ -8,6 +8,7 @@ import {
   extractUsername,
   isLoginWall,
   parseAlbumItems,
+  parseAlbumNextPage,
   parseAlbumPageTitle,
   parseImageItems,
   parseUsernameFromHtml,
@@ -60,12 +61,37 @@ export class ImgbbService {
     }
   }
 
-  /** 相册详情：抓取相册内全部图片（含分页）+ 相册名（文件夹命名用） */
+  /** 相册详情：跟随 seek 游标翻页抓取相册内全部图片（imgbb 无尽滚动，每页返回累计内容）+ 相册名 */
   async fetchAlbumImages(albumUrl: string): Promise<{ images: ImgbbImage[]; name: string }> {
-    const html = await this.fetchHtml(albumUrl)
-    const images = parseImageItems(html)
-    const name = parseAlbumPageTitle(html) ?? ''
-    logger.info('imgbb', '相册图片抓取完成', { url: albumUrl, count: images.length, name })
+    const base = albumUrl.split('?')[0]
+    let currentUrl = base
+    const seen = new Map<string, ImgbbImage>() // 去重键：原图 URL
+    let name = ''
+    let page = 0
+    const MAX_PAGES = 20 // 反爬限量（参考项目同款）
+
+    while (currentUrl && page < MAX_PAGES) {
+      const html = await this.fetchHtml(currentUrl)
+      if (!name) name = parseAlbumPageTitle(html) ?? ''
+      const images = parseImageItems(html)
+      let added = 0
+      for (const img of images) {
+        if (!seen.has(img.originalUrl)) {
+          seen.set(img.originalUrl, img)
+          added++
+        }
+      }
+      logger.info('imgbb', '相册分页抓取', { page: page + 1, url: currentUrl, pageImages: images.length, unique: seen.size, added })
+      const next = parseAlbumNextPage(html, base)
+      if (!next || next === currentUrl) break
+      // 页数超限或已无新增（累计页内容重复）则停止
+      if (page + 1 >= MAX_PAGES || (images.length > 0 && added === 0 && seen.size >= images.length)) break
+      currentUrl = next
+      page++
+    }
+
+    const images = [...seen.values()]
+    logger.info('imgbb', '相册全量抓取完成', { url: albumUrl, pages: page + 1, count: images.length, name })
     return { images, name }
   }
 
