@@ -9,6 +9,7 @@
 import { DownloadManager } from '../lib/downloader'
 import { appendLog, clearEntries, getEntries, getLevel, initLogger, setLevel } from '../lib/logger'
 import { sendToTab, type ImgResultKind, type Message, type MessageResponse } from '../lib/messages'
+import { storageGet, storageSet } from '../lib/storage'
 import type { GrabSession, ImgbbAlbum, ImgbbFollowingUser, ImgbbImage } from '../lib/types'
 import { ImgbbService } from './imgbb-service'
 import { BuonduaService } from './buondua-service'
@@ -33,6 +34,11 @@ const downloadManager = new DownloadManager({
     if (!grabTabId) return
     void sendToTab(grabTabId, done ? { type: 'GRAB_DOWNLOAD_DONE', job } : { type: 'GRAB_DOWNLOAD_PROGRESS', job })
   },
+})
+
+// 启动时恢复用户设置的下载并发（SW 重启后保持）
+void storageGet<number>('dl_concurrency').then((n) => {
+  if (typeof n === 'number' && n > 0) downloadManager.setConcurrency(n)
 })
 
 chrome.downloads.onChanged.addListener((delta) => {
@@ -279,6 +285,15 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
     case 'GRAB_OPEN_FOLDER':
       chrome.downloads.showDefaultFolder()
       return { ok: true }
+
+    // ---- 下载并发设置 ----
+    case 'GRAB_SET_CONCURRENCY': {
+      downloadManager.setConcurrency(message.concurrency)
+      await storageSet('dl_concurrency', downloadManager.getConcurrency())
+      return { ok: true, concurrency: downloadManager.getConcurrency() }
+    }
+    case 'GRAB_GET_CONCURRENCY':
+      return { ok: true, concurrency: downloadManager.getConcurrency() }
 
     // ---- imgbb 适配器（FP-003） ----
     case 'IMG_RESOLVE_USER': {

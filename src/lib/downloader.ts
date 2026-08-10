@@ -7,7 +7,7 @@ import type { DownloadItem, DownloadJob } from './types'
 
 const logger = initLogger('background')
 
-const MAX_CONCURRENT = 10
+const DEFAULT_CONCURRENCY = 12
 const MAX_RETRY = 1
 const FETCH_TIMEOUT_MS = 40000
 
@@ -79,6 +79,18 @@ export class DownloadManager {
   private pendingFetches = new Set<number>() // jobId → 正在 background fetch（占并发槽）
   private fetchControllers = new Map<number, AbortController>() // jobId → imgbb 字节抓取 controller
   private nextJobId = 1
+  private maxConcurrent = DEFAULT_CONCURRENCY
+
+  /** 设置下载并发（1~24），由 background 经 GRAB_SET_CONCURRENCY 调用 */
+  setConcurrency(n: number): void {
+    this.maxConcurrent = Math.max(1, Math.min(24, Math.round(n) || DEFAULT_CONCURRENCY))
+    logger.info('download', '下载并发已设置', { concurrency: this.maxConcurrent })
+    this.pump()
+  }
+
+  getConcurrency(): number {
+    return this.maxConcurrent
+  }
 
   constructor(private callbacks: DownloadManagerCallbacks) {}
 
@@ -166,7 +178,7 @@ export class DownloadManager {
 
   private pump(): void {
     // 派发排队项：fetch 阶段与下载中合并计入并发槽（避免一次性全派发导致排队）
-    while (this.active.size + this.pendingFetches.size < MAX_CONCURRENT && this.queue.length > 0) {
+    while (this.active.size + this.pendingFetches.size < this.maxConcurrent && this.queue.length > 0) {
       const next = this.queue.shift()
       if (!next) break
       const job = this.jobs.get(next.jobId)

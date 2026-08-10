@@ -95,6 +95,28 @@ void (async () => {
     if (pageInfo) pageInfo.textContent = '错误：缺少源网页参数（请从插件图标打开本页）'
     return
   }
+
+  // ---------- 下载并发设置（header，全局生效） ----------
+  const concurrencyInput = document.getElementById('dl-concurrency') as HTMLInputElement | null
+  const concurrencyBtn = document.getElementById('dl-concurrency-set') as HTMLButtonElement | null
+  void sendMessage({ type: 'GRAB_GET_CONCURRENCY' }).then((res) => {
+    if (res.ok && res.concurrency && concurrencyInput) {
+      concurrencyInput.value = String(res.concurrency)
+    }
+  })
+  concurrencyBtn?.addEventListener('click', () => {
+    const n = Math.max(1, Math.min(24, Number(concurrencyInput?.value) || 12))
+    if (concurrencyInput) concurrencyInput.value = String(n)
+    void sendMessage({ type: 'GRAB_SET_CONCURRENCY', concurrency: n }).then((res) => {
+      if (res.ok) {
+        logger.info('grabber', '下载并发已设置', { concurrency: res.concurrency })
+        if (pageInfo) {
+          const old = pageInfo.innerHTML
+          pageInfo.innerHTML = old + `<br><span class="folder">下载并发：${res.concurrency}</span>`
+        }
+      }
+    })
+  })
   try {
     const currentTab = await chrome.tabs.getCurrent()
     const grabTabId = currentTab?.id ?? 0

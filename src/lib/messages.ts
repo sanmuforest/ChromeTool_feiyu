@@ -51,6 +51,9 @@ export type Message =
   | { type: 'GRAB_DOWNLOAD_RETRY'; jobId: number }
   | { type: 'GRAB_DOWNLOAD_GET'; jobId: number }
   | { type: 'GRAB_OPEN_FOLDER' }
+  // ---- 下载并发设置 ----
+  | { type: 'GRAB_SET_CONCURRENCY'; concurrency: number }
+  | { type: 'GRAB_GET_CONCURRENCY' }
   // ---- 下载推送：bg → grabber ----
   | { type: 'GRAB_DOWNLOAD_PROGRESS'; job: DownloadJob }
   | { type: 'GRAB_DOWNLOAD_DONE'; job: DownloadJob }
@@ -83,7 +86,7 @@ export interface BuonduaBatchItem {
 }
 
 export type MessageResponse =
-  | { ok: true; entries?: LogEntry[]; level?: LogLevel; session?: GrabSession; job?: DownloadJob; username?: string | null; name?: string }
+  | { ok: true; entries?: LogEntry[]; level?: LogLevel; session?: GrabSession; job?: DownloadJob; username?: string | null; name?: string; concurrency?: number }
   | { ok: false; error: string }
 
 /** 通用发送：扩展页面 → background */

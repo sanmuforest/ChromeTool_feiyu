@@ -17,7 +17,12 @@
           <button class="grab-tab" data-panel="buondua">buondua</button>
           <button class="grab-tab" data-panel="template">站点适配模板</button>
         </div>
-        <div id="version-badge" class="version-badge"></div>
+        <div class="header-controls">
+          <span class="ctrl-label">下载并发</span>
+          <input id="dl-concurrency" class="num-input" type="number" min="1" max="24" value="12" title="同时下载的图片数（1~24），imgbb 大相册可调高">
+          <button id="dl-concurrency-set" class="btn">设置</button>
+          <div id="version-badge" class="version-badge"></div>
+        </div>
       </div>
       <div class="page-info" id="page-info">加载中…</div>
     </header>

@@ -971,3 +971,19 @@ body {
 .bd-batch-info {
   margin-left: 8px;
 }
+
+/* header 并发设置 */
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ctrl-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.header-controls .num-input {
+  width: 56px;
+}
