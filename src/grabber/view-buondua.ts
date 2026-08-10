@@ -48,8 +48,8 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
   root.innerHTML = `
     <div class="adapters-view">
       <div class="adapter-head">
-        <h3>buondua 图站</h3>
-        <span class="adapter-hint">多页相册：全子页抓取 / 推荐 / 其他链接批量抓取</span>
+        <h3>多页图站</h3>
+        <span class="adapter-hint">buondua / rrwsh / hitxhot：全子页抓取 / 推荐 / 其他链接批量抓取</span>
       </div>
       <div class="adapter-tabs">
         <button data-sub="bd-album" class="adapter-tab active">抓取</button>
@@ -59,7 +59,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
 
       <div id="sub-bd-album" class="adapter-panel active">
         <div class="row">
-          <input id="bd-album-url" class="text-input" placeholder="相册 URL，如 https://buondua.com/coser-...-55926">
+          <input id="bd-album-url" class="text-input" placeholder="相册 URL：buondua / rrwsh.uuss.uk / hitxhot.org">
           <button id="bd-album-fetch" class="btn primary">抓取全部子页</button>
         </div>
         <div id="bd-album-grab-view" class="grab-view-host"></div>
@@ -365,12 +365,12 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
   const popList = setupBatchPanel('bd-popular', 'popular')
   linkLists.push(recList, popList)
 
-  // ---------- 自动填充：从源网页 URL 识别 buondua 场景 ----------
-  if (sourceUrl && /buondua\.com\//.test(sourceUrl)) {
+  // ---------- 自动填充：从源网页 URL 识别多页站点 ----------
+  if (sourceUrl && /(buondua\.com|rrwsh\.uuss\.uk|hitxhot\.org)\/.*/.test(sourceUrl)) {
     albumUrlInput.value = sourceUrl
     ;(root.querySelector('#bd-rec-url') as HTMLInputElement).value = sourceUrl
     ;(root.querySelector('#bd-pop-url') as HTMLInputElement).value = sourceUrl
-    logger.info('view', '已自动填充 buondua 网址', { sourceUrl })
+    logger.info('view', '已自动填充多页图站网址', { sourceUrl })
   }
 
   // ---------- 对外句柄 ----------

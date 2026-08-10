@@ -4,14 +4,16 @@
 
 import { initLogger } from '../lib/logger'
 import {
-  albumBaseUrl,
   extractBuonduaAlbumName,
   parseAllPostLinks,
-  parseBuonduaImages,
-  parseBuonduaMaxPage,
-  parseBuonduaPageTitle,
   parseRecommendedLinks,
 } from '../lib/buondua-parse'
+import {
+  matchGallerySite,
+  parseGalleryImages,
+  parseGalleryMaxPage,
+  parseGalleryPageTitle,
+} from '../lib/gallery-sites'
 import type { BuonduaImage, BuonduaLinkItem } from '../lib/types'
 
 const logger = initLogger('background')
@@ -47,27 +49,31 @@ export class BuonduaService {
     }
   }
 
-  /** 单相册全子页抓取：按最大页数遍历全部子页 → 合并去重；返回页面标题（文件夹命名用） */
+  /** 单相册全子页抓取（buondua / rrwsh / hitxhot 通用）：按最大页数遍历全部子页 → 合并去重 */
   async fetchAlbumAllPages(url: string): Promise<{ images: BuonduaImage[]; pages: string[]; title: string }> {
-    const base = albumBaseUrl(url)
+    const site = matchGallerySite(url)
+    if (!site) {
+      throw new Error(`暂不支持该站点（${url}）`)
+    }
+    const base = site.baseUrlOf(url)
     const firstHtml = await this.fetchHtml(base)
-    const title = parseBuonduaPageTitle(firstHtml)
-    // 大相册分页导航只显示部分页码：按标题 ( Page X / N ) 的最大页数完整遍历
-    const maxPage = parseBuonduaMaxPage(firstHtml)
+    const title = parseGalleryPageTitle(firstHtml, site)
+    // 大相册分页导航只显示部分页码：按标题 Page 标记的最大页数完整遍历
+    const maxPage = parseGalleryMaxPage(firstHtml, site)
     const all: string[] = []
     for (let p = 1; p <= maxPage; p++) {
-      all.push(`${base}?page=${p}`)
+      all.push(site.pageUrl(base, p))
     }
     const imagesMap = new Map<string, BuonduaImage>()
     let scanned = 0
     let emptyStreak = 0
     for (const pageUrl of all) {
       const html = await this.fetchHtml(pageUrl)
-      const imgs = parseBuonduaImages(html, pageUrl)
+      const imgs = parseGalleryImages(html, pageUrl, site)
       scanned += imgs.length
       emptyStreak = imgs.length === 0 ? emptyStreak + 1 : 0
       for (const img of imgs) {
-        // 去重键：路径 + 文件名（去掉签名 query）
+        // 去重键：路径 + 文件名（去掉签名/尺寸 query）
         const key = `${img.url.split('?')[0]}`
         if (!imagesMap.has(key)) imagesMap.set(key, img)
       }
@@ -75,7 +81,15 @@ export class BuonduaService {
       if (emptyStreak >= 3) break
     }
     const images = [...imagesMap.values()]
-    logger.info('buondua', '相册全子页抓取完成', { url, pages: all.length, scanned, unique: images.length, title, maxPage })
+    logger.info('buondua', '相册全子页抓取完成', {
+      site: site.id,
+      url,
+      pages: all.length,
+      scanned,
+      unique: images.length,
+      title,
+      maxPage,
+    })
     return { images, pages: all, title }
   }
 
