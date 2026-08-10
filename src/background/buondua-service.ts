@@ -18,12 +18,26 @@ import type { BuonduaImage, BuonduaLinkItem } from '../lib/types'
 
 const logger = initLogger('background')
 
-const FETCH_TIMEOUT_MS = 20000
+const FETCH_TIMEOUT_MS = 40000 // 部分站点对无 Cookie 请求响应慢（hitxhot 实测 >20s）
+const FETCH_ATTEMPTS = 2
 const CONCURRENCY = 3 // 批量抓取并发（用户确认）
 
 export class BuonduaService {
-  /** fetch 单个页面 HTML（带 UA + 超时） */
+  /** fetch 单个页面 HTML（带 UA + 超时 + 重试 1 次） */
   async fetchHtml(url: string): Promise<string> {
+    let lastErr: unknown
+    for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt++) {
+      try {
+        return await this.fetchOnce(url)
+      } catch (err) {
+        lastErr = err
+        logger.warn('buondua', `页面抓取第 ${attempt} 次失败`, { url, error: String(err) })
+      }
+    }
+    throw lastErr
+  }
+
+  private async fetchOnce(url: string): Promise<string> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
     try {
@@ -32,6 +46,8 @@ export class BuonduaService {
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+          Referer: new URL(url).origin + '/',
         },
         signal: controller.signal,
       })
@@ -49,14 +65,19 @@ export class BuonduaService {
     }
   }
 
-  /** 单相册全子页抓取（buondua / rrwsh / hitxhot 通用）：按最大页数遍历全部子页 → 合并去重 */
-  async fetchAlbumAllPages(url: string): Promise<{ images: BuonduaImage[]; pages: string[]; title: string }> {
+  /** 单相册全子页抓取（buondua / rrwsh / hitxhot 通用）：按最大页数遍历全部子页 → 合并去重
+   *  fetchHtmlFn：可选，降级用（content 页面内 fetch 带 Cookie 穿透反爬） */
+  async fetchAlbumAllPages(
+    url: string,
+    fetchHtmlFn?: (u: string) => Promise<string>,
+  ): Promise<{ images: BuonduaImage[]; pages: string[]; title: string }> {
+    const getHtml = fetchHtmlFn ?? ((u: string) => this.fetchHtml(u))
     const site = matchGallerySite(url)
     if (!site) {
       throw new Error(`暂不支持该站点（${url}）`)
     }
     const base = site.baseUrlOf(url)
-    const firstHtml = await this.fetchHtml(base)
+    const firstHtml = await getHtml(base)
     const title = parseGalleryPageTitle(firstHtml, site)
     // 大相册分页导航只显示部分页码：按标题 Page 标记的最大页数完整遍历
     const maxPage = parseGalleryMaxPage(firstHtml, site)
@@ -68,7 +89,7 @@ export class BuonduaService {
     let scanned = 0
     let emptyStreak = 0
     for (const pageUrl of all) {
-      const html = await this.fetchHtml(pageUrl)
+      const html = await getHtml(pageUrl)
       const imgs = parseGalleryImages(html, pageUrl, site)
       scanned += imgs.length
       emptyStreak = imgs.length === 0 ? emptyStreak + 1 : 0

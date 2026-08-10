@@ -81,6 +81,15 @@ function sessionOf(srcTabId: number): number {
   return sessions.get(srcTabId)?.grabTabId ?? 0
 }
 
+/** 发送消息到指定 tab 并等待响应（content 页面内 fetch 用），失败返回 undefined */
+async function sendToTabAndGet<T>(tabId: number, message: Message): Promise<T | undefined> {
+  try {
+    return (await chrome.tabs.sendMessage(tabId, message)) as T
+  } catch {
+    return undefined
+  }
+}
+
 // ---------- action 点击：创建抓取页 ----------
 
 chrome.action.onClicked.addListener(async (tab) => {
@@ -412,9 +421,26 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
         logger.info('buondua', '全子页抓取完成', { url: message.url, pages: pages.length, count: images.length, title })
         return { ok: true, name: title || undefined }
       } catch (err) {
-        logger.error('buondua', '全子页抓取失败', String(err))
-        await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'album', data: [], done: true, error: String(err) })
-        return { ok: false, error: String(err) }
+        // 降级：content 页面内 fetch（带 Cookie/Referer 穿透反爬，hitxhot 等站点）
+        logger.warn('buondua', '后台抓取失败，尝试页面内 fetch 降级', String(err))
+        try {
+          const contentFetch = async (u: string): Promise<string> => {
+            const res = await sendToTabAndGet<{ ok: true; data?: string } | { ok: false; error: string }>(
+              message.srcTabId,
+              { type: 'BD_FETCH_HTML', url: u },
+            )
+            if (!res || !res.ok || !res.data) throw new Error(res && !res.ok ? res.error : '页面内 fetch 无响应')
+            return res.data
+          }
+          const { images, pages, title } = await buondua.fetchAlbumAllPages(message.url, contentFetch)
+          await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'album', data: images, done: true })
+          logger.info('buondua', '全子页抓取完成（页面内 fetch 降级）', { url: message.url, pages: pages.length, count: images.length, title })
+          return { ok: true, name: title || undefined }
+        } catch (err2) {
+          logger.error('buondua', '全子页抓取失败（含降级）', String(err2))
+          await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'album', data: [], done: true, error: String(err2) })
+          return { ok: false, error: String(err2) }
+        }
       }
     }
 

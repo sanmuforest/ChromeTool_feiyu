@@ -74,6 +74,8 @@ export type Message =
   | { type: 'BD_FETCH_ALBUMS'; srcTabId: number; targets: BuonduaTarget[] }
   // ---- buondua 适配器：bg → grabber 推送 ----
   | { type: 'BD_RESULT'; kind: BuonduaResultKind; data: BuonduaImage[] | BuonduaLinkItem[] | BuonduaBatchItem; done: boolean; error?: string }
+  // ---- 多页站点：bg → content 页面内 fetch（带 Cookie 穿透反爬，hitxhot 等） ----
+  | { type: 'BD_FETCH_HTML'; url: string }
 
 export type ImgResultKind = 'album-images' | 'gallery' | 'gallery-range' | 'albums' | 'following'
 

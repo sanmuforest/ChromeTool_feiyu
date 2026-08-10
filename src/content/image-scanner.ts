@@ -63,6 +63,18 @@ function initScanner(): void {
         void loadMore()
       }
       sendResponse({ ok: true })
+    } else if (msg?.type === 'BD_FETCH_HTML') {
+      // 页面内 fetch（带 Cookie/Referer，穿透反爬；background fetch 超时时降级用）
+      void (async () => {
+        try {
+          const resp = await fetch(msg.url, { credentials: 'include', headers: { Referer: location.href } })
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+          sendResponse({ ok: true, data: await resp.text() })
+        } catch (err) {
+          sendResponse({ ok: false, error: String(err) })
+        }
+      })()
+      return true // 异步响应
     }
   })
 
