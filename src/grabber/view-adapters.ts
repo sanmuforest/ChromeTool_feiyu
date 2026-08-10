@@ -226,7 +226,8 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
 
       const covers = document.createElement('div')
       covers.className = 'following-covers'
-      for (const album of entry.albums) {
+      // 单用户封面展示上限 50 张
+      for (const album of entry.albums.slice(0, 50)) {
         const cover = document.createElement('img')
         cover.className = 'following-cover'
         cover.loading = 'lazy'

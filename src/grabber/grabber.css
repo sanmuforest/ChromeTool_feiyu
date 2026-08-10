@@ -852,9 +852,8 @@ body {
 
 .following-covers {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 2px;
 }
 
 .following-cover {

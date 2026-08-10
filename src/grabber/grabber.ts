@@ -54,21 +54,17 @@ chrome.runtime.onMessage.addListener((msg) => {
       break
     case 'GRAB_DOWNLOAD_PROGRESS':
       imagesView.onDownloadProgress(msg.job)
+      adaptersView?.onDownloadProgress(msg.job)
       break
     case 'GRAB_DOWNLOAD_DONE':
       imagesView.onDownloadDone(msg.job)
+      adaptersView?.onDownloadDone(msg.job)
       break
     case 'GRAB_SESSION_END_FWD':
       imagesView.onSessionEnd()
       break
     case 'IMG_RESULT':
       adaptersView?.onImgbbResult(msg.kind, msg.data, msg.done, msg.error)
-      break
-    case 'GRAB_DOWNLOAD_PROGRESS':
-      adaptersView?.onDownloadProgress(msg.job)
-      break
-    case 'GRAB_DOWNLOAD_DONE':
-      adaptersView?.onDownloadDone(msg.job)
       break
   }
 })
