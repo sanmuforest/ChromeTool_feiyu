@@ -30,6 +30,7 @@ function cleanPageTitle(title: string): string {
   return title
     .replace(/\s*[-—–]\s*ImgBB\s*$/i, '')
     .replace(/\s*[-–—]\s*Buondua\s*$/i, '')
+    .replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, '')
     .trim()
 }
 
