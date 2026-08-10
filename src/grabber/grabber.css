@@ -987,3 +987,15 @@ body {
 .header-controls .num-input {
   width: 56px;
 }
+
+/* 多页站点引导提示（主抓取页签顶部） */
+.bd-site-tip {
+  margin: 8px 12px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: rgba(90, 120, 255, 0.1);
+  color: var(--text);
+  font-size: 12px;
+  flex-shrink: 0;
+}

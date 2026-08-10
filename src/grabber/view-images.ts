@@ -3,6 +3,7 @@
 
 import { initLogger } from '../lib/logger'
 import { sendMessage } from '../lib/messages'
+import { matchGallerySite } from '../lib/gallery-sites'
 import type { DownloadJob, GrabSession, GrabbedImage } from '../lib/types'
 import { createGrabView, type GrabViewHandle } from './image-grab-view'
 
@@ -25,6 +26,15 @@ export interface ImagesViewHandle {
 
 export function initImagesView(root: HTMLElement, session: GrabSession): ImagesViewHandle {
   let totalImages = 0
+
+  // 多页站点提示：主抓取页签只扫单页，引导用户用「多页图站」页签抓全
+  if (matchGallerySite(session.url)) {
+    const tip = document.createElement('div')
+    tip.className = 'bd-site-tip'
+    tip.textContent = '此站点为多页相册：请切换到「多页图站」页签，使用「抓取全部子页」获取完整内容'
+    root.prepend(tip)
+    logger.info('view', '多页站点提示已显示', { url: session.url })
+  }
 
   const grabView: GrabViewHandle = createGrabView(root, {
     srcTabId: session.srcTabId,
