@@ -8,10 +8,10 @@
 
 import { DownloadManager, arrayBufferToBase64, fetchImageBytes } from '../lib/downloader'
 import { DiffuseEngine } from './imgbb-diffuse'
-import { emptyDb, loadDb, mergeInDegree, mergeDb, dbSummary, inDegreeDist, topList, unconfirmedCandidates, unconfirmedCount, confirmedScored, matchAlbums, PRODUCER_DB_KEY } from '../lib/producer-db'
+import { emptyDb, loadDb, mergeInDegree, mergeDb, dbSummary, inDegreeDist, unconfirmedCandidates, unconfirmedCount, confirmedScored, matchAlbums, scoreTop, degreeTop, albumTop, resetConfirmations, PRODUCER_DB_KEY } from '../lib/producer-db'
 import { normalizeConfig, pullDb, pushDb, GITHUB_CONFIG_KEY } from '../lib/github-sync'
 import type { GithubConfig } from '../lib/github-sync'
-import { parseAlbumItems } from '../lib/imgbb-parse'
+import { parseAlbumItems, parseAlbumNextPage } from '../lib/imgbb-parse'
 import type { ProducerDb } from '../lib/producer-db'
 import { appendLog, clearEntries, getEntries, getLevel, initLogger, setLevel } from '../lib/logger'
 import { sendToTab, type ImgResultKind, type Message, type MessageResponse } from '../lib/messages'
@@ -57,10 +57,8 @@ void storageGet<number>('dl_concurrency').then((n) => {
 })
 
 // 启动时恢复生产者库（SW 重启后保持，FP-005）
-void storageGet<unknown>(PRODUCER_DB_KEY).then((raw) => {
-  producerDb = loadDb(raw)
-  logger.info('diffuse', '生产者库已恢复', { total: Object.keys(producerDb.entries).length })
-})
+// 注意：恢复是异步的，所有使用 producerDb 的消息分支必须先 await producerDbReady（防导出/检索读到空库）
+// （producerDbReady 定义在 producerDb 声明之后，见扩散引擎区块）
 
 chrome.downloads.onChanged.addListener((delta) => {
   downloadManager.handleChanged(delta)
@@ -72,10 +70,47 @@ const imgbb = new ImgbbService()
 /** 关注墙用户列表缓存（按 用户名|方向 缓存，避免每批重复抓取） */
 const followingUsersCache = new Map<string, import('../lib/types').ImgbbUser[]>()
 
+/** 遍历用户全部相册分页（返回相册列表 + 是否因页数上限截断） */
+async function fetchUserAlbums(
+  username: string,
+  maxPages: number,
+): Promise<{ albums: import('../lib/types').ImgbbAlbum[]; truncated: boolean }> {
+  const all: import('../lib/types').ImgbbAlbum[] = []
+  const seen = new Set<string>()
+  let url: string | null = `https://${username}.imgbb.com/albums`
+  let page = 0
+  while (url && page < maxPages) {
+    const html = await imgbb.fetchHtml(url)
+    const items = parseAlbumItems(html)
+    for (const a of items) {
+      if (!seen.has(a.id)) {
+        seen.add(a.id)
+        all.push(a)
+      }
+    }
+    const next = parseAlbumNextPage(html, `https://${username}.imgbb.com/albums`)
+    if (!next || next === url || items.length === 0) break
+    url = next
+    page++
+  }
+  return { albums: all, truncated: url !== null && page >= maxPages }
+}
+
+const SCORE_MAX_PAGES = 20 // 常规确认页数上限（截断后点相册数可彻底遍历）
+const SCORE_FULL_MAX_PAGES = 300 // 单用户彻底遍历上限
+/** 确认批内停止标志（IMG_SCORE_STOP 设置，worker 检测后中断） */
+let scoreBatchCancelled = false
+
 // ---------- 扩散引擎 + 生产者库（FP-005） ----------
 
 const diffuse = new DiffuseEngine()
 let producerDb: ProducerDb = emptyDb()
+/** 生产者库就绪（SW 启动时从 storage 异步恢复；各分支先 await 防读空库） */
+const producerDbReady = (async (): Promise<void> => {
+  const raw = await storageGet<unknown>(PRODUCER_DB_KEY)
+  producerDb = loadDb(raw)
+  logger.info('diffuse', '生产者库已恢复', { total: Object.keys(producerDb.entries).length })
+})()
 /** 检索候选（IMG_SEARCH_START 生成，SW 重启后需重新 start） */
 let searchCandidates: import('../lib/types').ProducerEntry[] = []
 let searchCursor = 0
@@ -469,6 +504,7 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
     }
     case 'IMG_DIFFUSE_BATCH': {
       await ensureDiffuseRestored()
+      await producerDbReady
       if (diffuse.is429Throttled) {
         logger.warn('diffuse', '连续 429，已阻止继续扩散，请稍后再试')
         return { ok: false, error: '连续 429 限流，请等待 30 秒后再继续' }
@@ -488,27 +524,54 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       return { ok: true, snapshot: diffuse.snapshot() }
     }
     case 'IMG_DB_GET': {
+      await producerDbReady
       const sum = dbSummary(producerDb)
       const dist = inDegreeDist(producerDb)
-      const topUsers = topList(producerDb, 200)
-      return { ok: true, db: producerDb, total: sum.total, confirmed: sum.confirmed, producers: sum.producers, maxInDegree: sum.maxInDegree, dist, topUsers }
+      const w1 = message.w1 ?? 0.6
+      const topN = message.topN ?? 100
+      const rankScore = scoreTop(producerDb, topN, w1, 1 - w1)
+      const rankDegree = degreeTop(producerDb, topN)
+      const rankAlbum = albumTop(producerDb, topN)
+      return {
+        ok: true,
+        db: producerDb,
+        total: sum.total,
+        confirmed: sum.confirmed,
+        producers: sum.producers,
+        maxInDegree: sum.maxInDegree,
+        dist,
+        rankScore,
+        rankDegree,
+        rankAlbum,
+      }
     }
     case 'IMG_DB_SAVE': {
+      await producerDbReady
       await storageSet(PRODUCER_DB_KEY, producerDb)
       const sum = dbSummary(producerDb)
       logger.info('diffuse', '生产者库已保存', { total: sum.total, source: message.source })
       return { ok: true, total: sum.total, confirmed: sum.confirmed, producers: sum.producers, maxInDegree: sum.maxInDegree }
     }
     case 'IMG_DB_CLEAR': {
+      await producerDbReady
       producerDb = emptyDb()
       await storageSet(PRODUCER_DB_KEY, producerDb)
       logger.info('diffuse', '生产者库已清空')
       return { ok: true, total: 0 }
     }
     case 'IMG_DB_EXPORT': {
+      await producerDbReady
       return { ok: true, json: JSON.stringify(producerDb, null, 1) }
     }
+    case 'IMG_DB_RESET_CONFIRM': {
+      await producerDbReady
+      producerDb = resetConfirmations(producerDb)
+      await storageSet(PRODUCER_DB_KEY, producerDb)
+      logger.info('diffuse', '确认状态已重置（保留入度），需重新确认评分')
+      return { ok: true, total: Object.keys(producerDb.entries).length }
+    }
     case 'IMG_DB_IMPORT': {
+      await producerDbReady
       const imported = loadDb(message.db)
       const before = Object.keys(producerDb.entries).length
       producerDb = mergeDb(producerDb, imported)
@@ -528,6 +591,8 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
 
     // ---- 确认+评分（FP-005 模块 2）：抓 albums 补相册名 → 回写库 ----
     case 'IMG_SCORE_BATCH': {
+      await producerDbReady
+      scoreBatchCancelled = false
       const candidates = unconfirmedCandidates(producerDb, message.batchSize, message.order ?? 'inDegree', message.w1, message.w2)
       if (candidates.length === 0) {
         return { ok: true, score: { processed: 0, withAlbums: 0, zeroAlbums: 0, failed: 0, done: true } }
@@ -545,20 +610,35 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
           const c = candidates[idx]
           await sleep(message.intervalMs)
           try {
-            const html = await imgbb.fetchHtml(`https://${c.username}.imgbb.com/albums`)
-            const albums = parseAlbumItems(html)
+            const { albums: userAlbums, truncated } = await fetchUserAlbums(c.username, SCORE_MAX_PAGES)
             updated[c.username] = {
               ...c,
-              albumCount: albums.length,
+              albumCount: userAlbums.length,
               albumsChecked: true,
-              albums: albums.map((a) => ({ name: a.name, url: a.url })),
+              albumsTruncated: truncated || undefined,
+              albums: userAlbums.map((a) => ({ name: a.name, url: a.url })),
             }
-            if (albums.length > 0) withAlbums++
+            if (userAlbums.length > 0) withAlbums++
             else zeroAlbums++
+            // 逐个推送进度（确认一个更新一个）
+            const session = sessions.get(message.srcTabId)
+            if (session) {
+              await sendToTab(session.grabTabId, {
+                type: 'IMG_SCORE_PROGRESS_FWD',
+                done: withAlbums + zeroAlbums + failed,
+                total: candidates.length,
+                username: c.username,
+                albumCount: userAlbums.length,
+                truncated: truncated || undefined,
+                failed,
+                cancelled: scoreBatchCancelled || undefined,
+              })
+            }
           } catch (err) {
             failed++
             logger.warn('score', 'albums 确认失败（跳过）', { user: c.username, error: String(err) })
           }
+          if (scoreBatchCancelled) return // 用户点停止 → 中断整批
         }
       }
       await Promise.all(Array.from({ length: Math.min(message.concurrency, candidates.length) }, () => worker()))
@@ -568,16 +648,58 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       // 持久化：防 SW 重启丢失确认数据（此前仅存内存导致检索 0 候选）
       await storageSet(PRODUCER_DB_KEY, producerDb)
       const unconfirmed = unconfirmedCount(producerDb)
-      logger.info('score', '确认批次完成', { processed: candidates.length, withAlbums, zeroAlbums, failed, unconfirmed })
+      const truncatedCount = Object.values(updated).filter((u) => u.albumsTruncated).length
+      logger.info('score', '确认批次完成', { processed: Object.keys(updated).length, withAlbums, zeroAlbums, failed, unconfirmed, truncated: truncatedCount, cancelled: scoreBatchCancelled })
       return {
         ok: true,
-        score: { processed: candidates.length, withAlbums, zeroAlbums, failed, done: unconfirmed === 0 },
+        score: {
+          processed: Object.keys(updated).length,
+          withAlbums,
+          zeroAlbums,
+          failed,
+          done: !scoreBatchCancelled && unconfirmed === 0,
+        },
         unconfirmed,
+        cancelled: scoreBatchCancelled || undefined,
+      }
+    }
+    case 'IMG_SCORE_STOP': {
+      scoreBatchCancelled = true
+      logger.info('score', '确认已请求停止')
+      return { ok: true }
+    }
+
+    // ---- 单用户彻底遍历（点击截断相册数触发，上限 300 页） ----
+    case 'IMG_SCORE_FULL': {
+      await producerDbReady
+      const username = (message.username || '').toLowerCase()
+      const entry = producerDb.entries[username]
+      if (!entry) return { ok: false, error: '库中无此用户' }
+      logger.info('score', '彻底遍历开始', { user: username, maxPages: SCORE_FULL_MAX_PAGES })
+      try {
+        const { albums: userAlbums, truncated } = await fetchUserAlbums(username, SCORE_FULL_MAX_PAGES)
+        producerDb.entries[username] = {
+          ...entry,
+          albumCount: userAlbums.length,
+          albumsChecked: true,
+          albumsTruncated: truncated || undefined,
+          albums: userAlbums.map((a) => ({ name: a.name, url: a.url })),
+        }
+        await storageSet(PRODUCER_DB_KEY, producerDb)
+        logger.info('score', '彻底遍历完成', { user: username, albums: userAlbums.length, truncated })
+        return {
+          ok: true,
+          full: { username, albumCount: userAlbums.length, truncated },
+        }
+      } catch (err) {
+        logger.error('score', '彻底遍历失败', { user: username, error: String(err) })
+        return { ok: false, error: String(err) }
       }
     }
 
     // ---- 区间检索（FP-005 模块 2）：纯本地评分区间 + 关键词匹配（零请求） ----
     case 'IMG_SEARCH_START': {
+      await producerDbReady
       const scored = confirmedScored(producerDb, message.w1, message.w2)
       const from = Math.min(scored.length, Math.floor((scored.length * message.fromPct) / 100))
       const to = Math.min(scored.length, Math.floor((scored.length * message.toPct) / 100))
@@ -625,6 +747,7 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
     }
     case 'IMG_GITHUB_PUSH': {
       try {
+        await producerDbReady
         const cfg = normalizeConfig(await storageGet<GithubConfig>(GITHUB_CONFIG_KEY))
         if (!cfg) return { ok: false, error: '未配置 GitHub，请先保存仓库与 token' }
         // 先拉取拿远程 sha（远程不存在则创建），再推送覆盖
@@ -639,6 +762,7 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
     }
     case 'IMG_GITHUB_PULL': {
       try {
+        await producerDbReady
         const cfg = normalizeConfig(await storageGet<GithubConfig>(GITHUB_CONFIG_KEY))
         if (!cfg) return { ok: false, error: '未配置 GitHub，请先保存仓库与 token' }
         const remote = await pullDb(cfg)

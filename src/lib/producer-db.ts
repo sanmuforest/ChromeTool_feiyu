@@ -162,12 +162,74 @@ export function inDegreeDist(db: ProducerDb): { label: string; count: number }[]
   return buckets.map((b, i) => ({ label: b.label, count: counts[i] }))
 }
 
-/** Top 列表（带主页 URL，点击打开用） */
-export function topList(db: ProducerDb, n: number): { username: string; inDegree: number; url: string }[] {
+/** 库用户明细列表（三栏展示：得分/入度/相册数，按得分降序）
+ * checked=false 的未确认用户相册数未知（albumCount undefined），得分仅入度项 */
+export function dbUsersDetailed(db: ProducerDb, n: number, w1?: number, w2?: number): {
+  username: string
+  url: string
+  inDegree: number
+  albumCount?: number
+  score: number
+  checked: boolean
+}[] {
+  const { maxInDegree, maxAlbumCount } = collectStats(db)
+  return Object.values(db.entries)
+    .map((e) => ({
+      username: e.username,
+      url: `https://${e.username}.imgbb.com`,
+      inDegree: e.inDegree,
+      albumCount: e.albumsChecked ? e.albumCount : undefined,
+      score: computeScore(e, maxInDegree, maxAlbumCount, w1, w2),
+      checked: !!e.albumsChecked,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(0, n))
+}
+
+/** 得分 Top N（含未确认，得分仅入度项） */
+export function scoreTop(db: ProducerDb, n: number, w1?: number, w2?: number): {
+  username: string
+  url: string
+  inDegree: number
+  albumCount?: number
+  score: number
+  truncated?: boolean
+}[] {
+  const { maxInDegree, maxAlbumCount } = collectStats(db)
+  return Object.values(db.entries)
+    .map((e) => ({
+      username: e.username,
+      url: `https://${e.username}.imgbb.com`,
+      inDegree: e.inDegree,
+      albumCount: e.albumsChecked ? e.albumCount : undefined,
+      score: computeScore(e, maxInDegree, maxAlbumCount, w1, w2),
+      truncated: e.albumsTruncated,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(0, n))
+}
+
+/** 入度 Top N（全库） */
+export function degreeTop(db: ProducerDb, n: number): { username: string; url: string; inDegree: number }[] {
   return Object.values(db.entries)
     .sort((a, b) => b.inDegree - a.inDegree)
     .slice(0, Math.max(0, n))
-    .map((e) => ({ username: e.username, inDegree: e.inDegree, url: `https://${e.username}.imgbb.com` }))
+    .map((e) => ({ username: e.username, url: `https://${e.username}.imgbb.com`, inDegree: e.inDegree }))
+}
+
+/** 相册数 Top N（仅已确认用户，按相册数降序） */
+export function albumTop(db: ProducerDb, n: number): {
+  username: string
+  url: string
+  albumCount: number
+  inDegree: number
+  truncated?: boolean
+}[] {
+  return Object.values(db.entries)
+    .filter((e) => e.albumsChecked && (e.albumCount ?? 0) > 0)
+    .sort((a, b) => (b.albumCount ?? 0) - (a.albumCount ?? 0))
+    .slice(0, Math.max(0, n))
+    .map((e) => ({ username: e.username, url: `https://${e.username}.imgbb.com`, albumCount: e.albumCount ?? 0, inDegree: e.inDegree, truncated: e.albumsTruncated }))
 }
 
 /** 未确认候选（排序：inDegree 入度 / newest 最新 / score 评分近似，取前 n）——确认阶段调度用
@@ -208,6 +270,20 @@ export function confirmedScored(db: ProducerDb, w1?: number, w2?: number): (Prod
     .filter((e) => e.albumsChecked && (e.albumCount ?? 0) > 0)
     .map((e) => ({ ...e, score: computeScore(e, maxInDegree, maxAlbumCount, w1, w2) }))
     .sort((a, b) => b.score - a.score)
+}
+
+/** 重置确认状态（清 albumsChecked/albumCount/albums，保留入度与来源）——分页修复后重新确认用 */
+export function resetConfirmations(db: ProducerDb): ProducerDb {
+  const entries: Record<string, ProducerEntry> = {}
+  for (const [k, e] of Object.entries(db.entries)) {
+    const { albumsChecked, albumCount, albums, albumsTruncated, ...rest } = e
+    void albumsChecked
+    void albumCount
+    void albums
+    void albumsTruncated
+    entries[k] = rest
+  }
+  return { ...db, updatedAt: Date.now(), entries }
 }
 
 /** 关键词匹配相册名（多词 OR，大小写不敏感，纯本地零请求） */

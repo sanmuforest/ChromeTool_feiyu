@@ -70,6 +70,9 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'IMG_RESULT':
       adaptersView?.onImgbbResult(msg.kind, msg.data, msg.done, msg.error)
       break
+    case 'IMG_SCORE_PROGRESS_FWD':
+      adaptersView?.onScoreProgress(msg)
+      break
     case 'BD_RESULT':
       buonduaView?.onResult(msg.kind, msg.data, msg.done, msg.error)
       break

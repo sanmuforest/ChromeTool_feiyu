@@ -132,6 +132,8 @@ export interface ProducerEntry {
   albumCount?: number
   /** 是否已做过 albums 确认 */
   albumsChecked?: boolean
+  /** 相册分页未遍历完（达到页数上限，需彻底遍历） */
+  albumsTruncated?: boolean
   /** 相册名列表（确认时缓存，检索零请求本地匹配） */
   albums?: { name: string; url: string }[]
 }

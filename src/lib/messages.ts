@@ -77,12 +77,16 @@ export type Message =
   | { type: 'IMG_DIFFUSE_START'; srcTabId: number; startUser: string }
   | { type: 'IMG_DIFFUSE_BATCH'; srcTabId: number; batchSize: number; concurrency: number; intervalMs: number }
   | { type: 'IMG_DIFFUSE_PROGRESS' }
-  | { type: 'IMG_DB_GET' }
+  | { type: 'IMG_DB_GET'; w1?: number; topN?: number }
   | { type: 'IMG_DB_SAVE'; source: string }
   | { type: 'IMG_DB_CLEAR' }
   | { type: 'IMG_DB_EXPORT' }
   | { type: 'IMG_DB_IMPORT'; db: unknown }
-  | { type: 'IMG_SCORE_BATCH'; batchSize: number; concurrency: number; intervalMs: number; order?: 'inDegree' | 'newest' | 'score'; w1?: number; w2?: number }
+  | { type: 'IMG_DB_RESET_CONFIRM' }
+  | { type: 'IMG_SCORE_BATCH'; srcTabId: number; batchSize: number; concurrency: number; intervalMs: number; order?: 'inDegree' | 'newest' | 'score'; w1?: number; w2?: number }
+  | { type: 'IMG_SCORE_STOP' }
+  | { type: 'IMG_SCORE_FULL'; username: string }
+  | { type: 'IMG_SCORE_PROGRESS_FWD'; done: number; total: number; username: string; albumCount: number; truncated?: boolean; failed: number; cancelled?: boolean }
   | { type: 'IMG_SEARCH_START'; keywords: string[]; fromPct: number; toPct: number; w1: number; w2: number; batchSize: number }
   | { type: 'IMG_SEARCH_BATCH'; batchSize: number }
   // ---- GitHub 同步（FP-005） ----
@@ -131,7 +135,12 @@ export type MessageResponse =
       producers?: number
       maxInDegree?: number
       dist?: { label: string; count: number }[]
-      topUsers?: { username: string; inDegree: number; url: string }[]
+      topUsers?: { username: string; inDegree: number; url: string; score?: number; albumCount?: number; checked?: boolean }[]
+      rankScore?: { username: string; url: string; inDegree: number; albumCount?: number; score: number; truncated?: boolean }[]
+      rankDegree?: { username: string; url: string; inDegree: number }[]
+      rankAlbum?: { username: string; url: string; albumCount: number; inDegree: number; truncated?: boolean }[]
+      full?: { username: string; albumCount: number; truncated: boolean }
+      cancelled?: boolean
       score?: ScoreBatchResult
       search?: SearchBatchResult
       unconfirmed?: number

@@ -3368,6 +3368,7 @@
           <div class="row">
             <button id="db-save" class="btn">\u5408\u5E76\u5165\u5E93</button>
             <button id="db-load" class="btn">\u8BFB\u53D6</button>
+            <button id="db-reset-confirm" class="btn primary">\u91CD\u65B0\u786E\u8BA4</button>
             <button id="db-clear" class="btn danger">\u6E05\u7A7A</button>
             <span id="db-status" class="status-text"></span>
           </div>
@@ -3375,6 +3376,7 @@
             <span class="row-label">\u76F8\u518C\u7EDF\u8BA1</span>
             <button id="score-start" class="btn">\u786E\u8BA4\u8BC4\u5206</button>
             <button id="score-next" class="btn">\u4E0B\u4E00\u6279\u786E\u8BA4</button>
+            <button id="score-stop" class="btn danger" disabled>\u505C\u6B62</button>
             <label class="radio-label"><input type="radio" name="score-order" value="inDegree" checked>\u5165\u5EA6\u4F18\u5148</label>
             <label class="radio-label"><input type="radio" name="score-order" value="newest">\u6700\u65B0\u4F18\u5148</label>
             <label class="radio-label"><input type="radio" name="score-order" value="score">\u8BC4\u5206\u4F18\u5148</label>
@@ -3383,18 +3385,20 @@
             <span id="score-status" class="status-text"></span>
           </div>
           <div class="row">
-            <span class="row-label">\u4F1A\u8BDD</span>
-            <span id="diffuse-users-total" class="status-text"></span>
-            <span class="row-label">\u5E93</span>
-            <span id="db-users-total" class="status-text"></span>
+            <span class="row-label">\u6392\u884C\u6570\u91CF</span>
+            <input id="rank-n" class="num-input" value="100" type="number" min="10" max="500" style="width:60px">
           </div>
           <div id="db-composition" class="db-composition"></div>
-          <div class="chart-block">
-            <div class="chart-title">\u5165\u5EA6\u5206\u5E03</div>
-            <div class="bar-chart" id="db-dist"></div>
+          <div class="rank-groups">
+            <div class="rank-group"><div class="rank-title">\u5F97\u5206 Top <span class="rank-num" id="rank-score-n">100</span></div><div class="user-list" id="rank-score"></div></div>
+            <div class="rank-group"><div class="rank-title">\u5165\u5EA6 Top <span class="rank-num" id="rank-degree-n">100</span></div><div class="user-list" id="rank-degree"></div></div>
+            <div class="rank-group"><div class="rank-title">\u76F8\u518C\u6570 Top <span class="rank-num" id="rank-album-n">100</span>\uFF08\u5DF2\u786E\u8BA4\uFF09</div><div class="user-list" id="rank-album"></div></div>
+          </div>
+          <div class="row">
+            <span class="row-label">\u4F1A\u8BDD</span>
+            <span id="diffuse-users-total" class="status-text"></span>
           </div>
           <div class="user-list" id="diffuse-users"></div>
-          <div class="user-list" id="db-users"></div>
         </div>
         <div class="diffuse-section">
           <div class="section-title">\u2462 \u76F8\u518C\u5173\u952E\u8BCD\u68C0\u7D22\uFF08\u7EAF\u672C\u5730\u5339\u914D\uFF09</div>
@@ -3696,8 +3700,13 @@
     const diffuseLogEl = root.querySelector("#diffuse-log");
     const diffuseUsersEl = root.querySelector("#diffuse-users");
     const diffuseUsersTotal = root.querySelector("#diffuse-users-total");
-    const dbUsersEl = root.querySelector("#db-users");
-    const dbUsersTotal = root.querySelector("#db-users-total");
+    const rankScoreEl = root.querySelector("#rank-score");
+    const rankDegreeEl = root.querySelector("#rank-degree");
+    const rankAlbumEl = root.querySelector("#rank-album");
+    const rankScoreN = root.querySelector("#rank-score-n");
+    const rankDegreeN = root.querySelector("#rank-degree-n");
+    const rankAlbumN = root.querySelector("#rank-album-n");
+    const rankNInput = root.querySelector("#rank-n");
     const dbStatus = root.querySelector("#db-status");
     const DIFFUSE_BATCH_SIZE = 50;
     const DIFFUSE_CONCURRENCY = 4;
@@ -3739,22 +3748,57 @@
     }
     function renderSessionUsers(snapshot) {
       if (diffuseUsersTotal) {
-        diffuseUsersTotal.textContent = `\u68C0\u7D22\u5230 ${snapshot.userTotal} \u4E2A\u7528\u6237\uFF08\u663E\u793A\u524D ${USER_LIST_LIMIT}\uFF09`;
+        diffuseUsersTotal.textContent = `\u4F1A\u8BDD ${snapshot.userTotal} \u4EBA\uFF08\u663E\u793A\u524D ${USER_LIST_LIMIT}\uFF09`;
       }
       if (!diffuseUsersEl) return;
       const list = snapshot.users.slice(0, USER_LIST_LIMIT);
       diffuseUsersEl.innerHTML = list.map(
-        (u, i) => `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="https://${u.username}.imgbb.com" target="_blank">${u.username}</a><span class="user-degree">\u5165\u5EA6 ${u.inDegree}</span></div>`
+        (u, i) => `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="https://${u.username}.imgbb.com" target="_blank">${u.username}</a><span class="user-score">-</span><span class="user-degree">${u.inDegree}</span><span class="user-albums">\u5F85\u786E\u8BA4</span></div>`
       ).join("");
     }
-    function renderDbUsers(users, total) {
-      if (dbUsersTotal) dbUsersTotal.textContent = `\u5E93\u5185 ${total} \u4E2A\u7528\u6237\uFF08\u663E\u793A\u524D ${USER_LIST_LIMIT}\uFF09`;
-      if (!dbUsersEl) return;
-      const list = users.slice(0, USER_LIST_LIMIT);
-      dbUsersEl.innerHTML = list.map(
-        (u, i) => `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="${u.url}" target="_blank">${u.username}</a><span class="user-degree">\u5165\u5EA6 ${u.inDegree}</span></div>`
-      ).join("");
+    function renderRanks(res) {
+      const n = res.total;
+      if (rankScoreN) rankScoreN.textContent = String(n);
+      if (rankDegreeN) rankDegreeN.textContent = String(n);
+      if (rankAlbumN) rankAlbumN.textContent = String(n);
+      const albumCell = (count, truncated, username) => {
+        const val = count ?? "-";
+        const plus = truncated ? "+" : "";
+        return truncated ? `<span class="user-albums truncated" data-full="${username}" title="\u672A\u904D\u5386\u5B8C\uFF0C\u70B9\u51FB\u5F7B\u5E95\u904D\u5386">${val}${plus}</span>` : `<span class="user-albums">${val}</span>`;
+      };
+      if (rankScoreEl) {
+        rankScoreEl.innerHTML = (res.rankScore ?? []).map(
+          (u, i) => `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="${u.url}" target="_blank">${u.username}</a><span class="user-score">${u.score.toFixed(2)}</span><span class="user-degree">${u.inDegree}</span>${albumCell(u.albumCount, u.truncated, u.username)}</div>`
+        ).join("");
+      }
+      if (rankDegreeEl) {
+        rankDegreeEl.innerHTML = (res.rankDegree ?? []).map(
+          (u, i) => `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="${u.url}" target="_blank">${u.username}</a><span class="user-score">-</span><span class="user-degree">${u.inDegree}</span><span class="user-albums">-</span></div>`
+        ).join("");
+      }
+      if (rankAlbumEl) {
+        rankAlbumEl.innerHTML = (res.rankAlbum ?? []).map(
+          (u, i) => `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="${u.url}" target="_blank">${u.username}</a><span class="user-score">-</span><span class="user-degree">${u.inDegree}</span>${albumCell(u.albumCount, u.truncated, u.username)}</div>`
+        ).join("");
+      }
     }
+    const onTruncatedClick = async (ev) => {
+      const el = ev.target.closest(".truncated");
+      if (!el) return;
+      const username = el.dataset.full;
+      if (!username) return;
+      if (!window.confirm(`\u5F7B\u5E95\u904D\u5386 ${username} \u7684\u5168\u90E8\u76F8\u518C\uFF08\u6700\u591A 300 \u9875\uFF0C\u8017\u65F6\u8F83\u957F\uFF09\uFF1F`)) return;
+      setStatus(dbStatus, `\u5F7B\u5E95\u904D\u5386 ${username} \u4E2D\u2026`);
+      const res = await sendMessage({ type: "IMG_SCORE_FULL", username });
+      if (!res.ok) {
+        setStatus(dbStatus, `\u5F7B\u5E95\u904D\u5386\u5931\u8D25\uFF1A${res.error}`, true);
+        return;
+      }
+      setStatus(dbStatus, `${username} \u76F8\u518C\u6570\u66F4\u65B0\u4E3A ${res.full?.albumCount}${res.full?.truncated ? "\uFF08\u4ECD\u8D85 300 \u9875\u4E0A\u9650\uFF09" : ""}`);
+      void loadDbStats();
+    };
+    rankScoreEl?.addEventListener("click", onTruncatedClick);
+    rankAlbumEl?.addEventListener("click", onTruncatedClick);
     function renderDiffuse(snapshot, result) {
       if (diffuseProgress && snapshot) {
         diffuseProgress.textContent = `\u5DF2\u63A2\u7D22 ${snapshot.visitedTotal} \xB7 \u961F\u5217 ${snapshot.queueSize} \xB7 \u7D2F\u8BA1\u8BF7\u6C42 ${snapshot.totalRequests}`;
@@ -3793,15 +3837,6 @@
       const h = batchHistory[batchHistory.length - 1];
       tr.innerHTML = `<td>${h.batch}</td><td>${h.processed}</td><td>${h.newUsers}</td><td>${h.failed}</td><td>${(h.durationMs / 1e3).toFixed(1)}s</td><td>${h.avgRequestMs}ms</td><td>${h.inDegreeUsers}</td>`;
       diffuseHistoryBody.appendChild(tr);
-    }
-    function renderDist(dist) {
-      const el = root.querySelector("#db-dist");
-      if (!el || !dist) return;
-      const max = Math.max(...dist.map((d) => d.count), 1);
-      el.innerHTML = dist.map((d) => {
-        const h = Math.max(4, Math.round(d.count / max * 100));
-        return `<div class="bar-col" title="${d.label}\u6B21\uFF1A${d.count}\u4EBA"><div class="bar" style="height:${h}%"></div><span class="bar-label">${d.label}</span></div>`;
-      }).join("");
     }
     async function runDiffuseBatch() {
       if (!diffuseNextBtn) return;
@@ -3875,13 +3910,14 @@
       void loadDbStats();
     });
     async function loadDbStats() {
-      const res = await sendMessage({ type: "IMG_DB_GET" });
+      const w1 = Math.max(0, Math.min(100, Number(searchW1Input.value) || 60)) / 100;
+      const topN = Math.max(10, Math.min(500, Number(rankNInput?.value) || 100));
+      const res = await sendMessage({ type: "IMG_DB_GET", w1, topN });
       if (!res.ok) {
         setStatus(dbStatus, `\u8BFB\u53D6\u5931\u8D25\uFF1A${res.error}`, true);
         return;
       }
-      renderDist(res.dist);
-      renderDbUsers(res.topUsers ?? [], res.total);
+      renderRanks(res);
       const unconfirmed = res.total - res.confirmed;
       const zeroAlbums = res.confirmed - res.producers;
       const compEl = root.querySelector("#db-composition");
@@ -3890,16 +3926,29 @@
       }
       setStatus(dbStatus, `\u5DF2\u8BFB\u53D6\u672C\u5730\u5E93\uFF0C\u5E93\u5185 ${res.total} \u7528\u6237`);
     }
+    rankNInput?.addEventListener("change", () => void loadDbStats());
     root.querySelector("#db-load")?.addEventListener("click", () => void loadDbStats());
+    root.querySelector("#db-reset-confirm")?.addEventListener("click", async () => {
+      const ok = window.confirm("\u91CD\u7F6E\u6240\u6709\u7528\u6237\u7684\u76F8\u518C\u786E\u8BA4\u72B6\u6001\uFF08\u4FDD\u7559\u5165\u5EA6\uFF09\u5E76\u7ACB\u5373\u5F00\u59CB\u91CD\u65B0\u786E\u8BA4\uFF1F");
+      if (!ok) return;
+      const res = await sendMessage({ type: "IMG_DB_RESET_CONFIRM" });
+      if (!res.ok) {
+        setStatus(dbStatus, `\u91CD\u7F6E\u5931\u8D25\uFF1A${res.error}`, true);
+        return;
+      }
+      setStatus(dbStatus, `\u5DF2\u91CD\u7F6E\u786E\u8BA4\u72B6\u6001\uFF08${res.total} \u7528\u6237\u4FDD\u7559\uFF09\uFF0C\u5F00\u59CB\u91CD\u65B0\u786E\u8BA4\u2026`);
+      void loadDbStats();
+      void runScoreBatch();
+    });
     root.querySelector("#db-clear")?.addEventListener("click", async () => {
       const res = await sendMessage({ type: "IMG_DB_CLEAR" });
       if (!res.ok) {
         setStatus(dbStatus, `\u6E05\u7A7A\u5931\u8D25\uFF1A${res.error}`, true);
         return;
       }
-      if (dbUsersEl) dbUsersEl.innerHTML = "";
-      if (dbUsersTotal) dbUsersTotal.textContent = "";
-      renderDist([]);
+      if (rankScoreEl) rankScoreEl.innerHTML = "";
+      if (rankDegreeEl) rankDegreeEl.innerHTML = "";
+      if (rankAlbumEl) rankAlbumEl.innerHTML = "";
       const compEl = root.querySelector("#db-composition");
       if (compEl) compEl.textContent = "";
       setStatus(dbStatus, "\u751F\u4EA7\u8005\u5E93\u5DF2\u6E05\u7A7A");
@@ -3913,9 +3962,12 @@
     const searchW1Input = root.querySelector("#search-w1");
     const searchNextBtn = root.querySelector("#search-next");
     const scoreNextBtn = root.querySelector("#score-next");
+    const scoreStopBtn = root.querySelector("#score-stop");
+    let lastScoreRefresh = 0;
     searchPctInput?.addEventListener("input", () => {
       if (searchPctVal) searchPctVal.textContent = searchPctInput.value;
     });
+    searchW1Input?.addEventListener("input", () => void loadDbStats());
     function renderScoreResult(score, unconfirmed) {
       setStatus(
         scoreStatus,
@@ -3944,19 +3996,25 @@
     }
     async function runScoreBatch() {
       if (scoreNextBtn) scoreNextBtn.disabled = true;
+      if (scoreStopBtn) scoreStopBtn.disabled = false;
       const orderEl = root.querySelector('input[name="score-order"]:checked');
       const order = orderEl?.value || "inDegree";
       const batchSize = Number(root.querySelector("#score-batch")?.value) || 50;
       const w1 = Math.max(0, Math.min(100, Number(searchW1Input.value) || 60)) / 100;
       const orderLabel = order === "newest" ? "\u6700\u65B0\u4F18\u5148" : order === "score" ? "\u8BC4\u5206\u4F18\u5148" : "\u5165\u5EA6\u4F18\u5148";
       setStatus(scoreStatus, `\u786E\u8BA4\u8BC4\u5206\u4E2D\uFF08${orderLabel} \xB7 \u6BCF\u6279 ${batchSize} \xB7 \u5E76\u53D1 4\uFF09\u2026`);
-      const res = await sendMessage({ type: "IMG_SCORE_BATCH", batchSize, concurrency: 4, intervalMs: 1e3, order, w1, w2: 1 - w1 });
+      const res = await sendMessage({ type: "IMG_SCORE_BATCH", srcTabId: srcTabId2, batchSize, concurrency: 4, intervalMs: 1e3, order, w1, w2: 1 - w1 });
       if (scoreNextBtn) scoreNextBtn.disabled = false;
+      if (scoreStopBtn) scoreStopBtn.disabled = true;
       if (!res.ok) {
         setStatus(scoreStatus, `\u786E\u8BA4\u5931\u8D25\uFF1A${res.error}`, true);
         return;
       }
-      renderScoreResult(res.score, res.unconfirmed ?? 0);
+      if (res.cancelled) {
+        setStatus(scoreStatus, `\u5DF2\u505C\u6B62\uFF1A\u672C\u6279\u786E\u8BA4 ${res.score.processed} \u4EBA\uFF08\u4FDD\u7559\u5DF2\u786E\u8BA4\u90E8\u5206\uFF09`);
+      } else {
+        renderScoreResult(res.score, res.unconfirmed ?? 0);
+      }
       void loadDbStats();
     }
     root.querySelector("#score-start")?.addEventListener("click", async () => {
@@ -3967,6 +4025,10 @@
       void runScoreBatch();
     });
     scoreNextBtn?.addEventListener("click", () => void runScoreBatch());
+    scoreStopBtn?.addEventListener("click", () => {
+      void sendMessage({ type: "IMG_SCORE_STOP" });
+      setStatus(scoreStatus, "\u505C\u6B62\u8BF7\u6C42\u5DF2\u53D1\u9001\uFF0C\u7B49\u5F85\u5F53\u524D\u7528\u6237\u5B8C\u6210\u2026");
+    });
     async function runSearch(start) {
       if (searchNextBtn) searchNextBtn.disabled = true;
       const keywords = searchKeywordsInput.value.split(/[,，]/).map((k) => k.trim()).filter(Boolean);
@@ -4166,6 +4228,18 @@
             setStatus(followingStatus, `\u5DF2\u5206\u6790 ${following.length} \u4E2A\u6709\u6548\u7528\u6237\uFF08\u672C\u6279 ${items.length}\uFF09${done ? "\uFF0C\u5168\u90E8\u5B8C\u6210" : ""}`);
           }
           logger4.info("adapters", "\u5173\u6CE8\u5899\u5206\u6790\u7ED3\u679C", { count: following.length, done });
+        }
+      },
+      onScoreProgress: (msg) => {
+        const stop = msg.cancelled ? " \xB7 \u5DF2\u8BF7\u6C42\u505C\u6B62" : "";
+        setStatus(
+          scoreStatus,
+          `\u786E\u8BA4\u4E2D ${msg.done}/${msg.total} \xB7 ${msg.username}\uFF08\u76F8\u518C ${msg.albumCount}${msg.truncated ? "+" : ""}\uFF09\xB7 \u5931\u8D25 ${msg.failed}${stop}`
+        );
+        const now = Date.now();
+        if (now - lastScoreRefresh >= 2e3) {
+          lastScoreRefresh = now;
+          void loadDbStats();
         }
       },
       onDownloadProgress: (job) => {
@@ -4745,7 +4819,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260811142244" : "dev";
+  var BUILD_TIME = true ? "20260811144836" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
@@ -4792,6 +4866,9 @@
         break;
       case "IMG_RESULT":
         adaptersView?.onImgbbResult(msg.kind, msg.data, msg.done, msg.error);
+        break;
+      case "IMG_SCORE_PROGRESS_FWD":
+        adaptersView?.onScoreProgress(msg);
         break;
       case "BD_RESULT":
         buonduaView?.onResult(msg.kind, msg.data, msg.done, msg.error);

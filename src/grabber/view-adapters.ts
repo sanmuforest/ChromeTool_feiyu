@@ -27,6 +27,7 @@ const BATCH_PAGES = 3 // 每批页数（约 32 张/页 → 一批约 100 张）
 
 export interface AdaptersViewHandle {
   onImgbbResult(kind: ImgResultKind, data: ImgbbImage[] | ImgbbAlbum[] | ImgbbFollowingUser[], done: boolean, error?: string): void
+  onScoreProgress(msg: { done: number; total: number; username: string; albumCount: number; truncated?: boolean; failed: number; cancelled?: boolean }): void
   onDownloadProgress(job: DownloadJob): void
   onDownloadDone(job: DownloadJob): void
 }
@@ -153,6 +154,7 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
           <div class="row">
             <button id="db-save" class="btn">合并入库</button>
             <button id="db-load" class="btn">读取</button>
+            <button id="db-reset-confirm" class="btn primary">重新确认</button>
             <button id="db-clear" class="btn danger">清空</button>
             <span id="db-status" class="status-text"></span>
           </div>
@@ -160,6 +162,7 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
             <span class="row-label">相册统计</span>
             <button id="score-start" class="btn">确认评分</button>
             <button id="score-next" class="btn">下一批确认</button>
+            <button id="score-stop" class="btn danger" disabled>停止</button>
             <label class="radio-label"><input type="radio" name="score-order" value="inDegree" checked>入度优先</label>
             <label class="radio-label"><input type="radio" name="score-order" value="newest">最新优先</label>
             <label class="radio-label"><input type="radio" name="score-order" value="score">评分优先</label>
@@ -168,18 +171,20 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
             <span id="score-status" class="status-text"></span>
           </div>
           <div class="row">
-            <span class="row-label">会话</span>
-            <span id="diffuse-users-total" class="status-text"></span>
-            <span class="row-label">库</span>
-            <span id="db-users-total" class="status-text"></span>
+            <span class="row-label">排行数量</span>
+            <input id="rank-n" class="num-input" value="100" type="number" min="10" max="500" style="width:60px">
           </div>
           <div id="db-composition" class="db-composition"></div>
-          <div class="chart-block">
-            <div class="chart-title">入度分布</div>
-            <div class="bar-chart" id="db-dist"></div>
+          <div class="rank-groups">
+            <div class="rank-group"><div class="rank-title">得分 Top <span class="rank-num" id="rank-score-n">100</span></div><div class="user-list" id="rank-score"></div></div>
+            <div class="rank-group"><div class="rank-title">入度 Top <span class="rank-num" id="rank-degree-n">100</span></div><div class="user-list" id="rank-degree"></div></div>
+            <div class="rank-group"><div class="rank-title">相册数 Top <span class="rank-num" id="rank-album-n">100</span>（已确认）</div><div class="user-list" id="rank-album"></div></div>
+          </div>
+          <div class="row">
+            <span class="row-label">会话</span>
+            <span id="diffuse-users-total" class="status-text"></span>
           </div>
           <div class="user-list" id="diffuse-users"></div>
-          <div class="user-list" id="db-users"></div>
         </div>
         <div class="diffuse-section">
           <div class="section-title">③ 相册关键词检索（纯本地匹配）</div>
@@ -527,8 +532,13 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
   const diffuseLogEl = root.querySelector('#diffuse-log') as HTMLElement | null
   const diffuseUsersEl = root.querySelector('#diffuse-users') as HTMLElement | null
   const diffuseUsersTotal = root.querySelector('#diffuse-users-total') as HTMLElement | null
-  const dbUsersEl = root.querySelector('#db-users') as HTMLElement | null
-  const dbUsersTotal = root.querySelector('#db-users-total') as HTMLElement | null
+  const rankScoreEl = root.querySelector('#rank-score') as HTMLElement | null
+  const rankDegreeEl = root.querySelector('#rank-degree') as HTMLElement | null
+  const rankAlbumEl = root.querySelector('#rank-album') as HTMLElement | null
+  const rankScoreN = root.querySelector('#rank-score-n') as HTMLElement | null
+  const rankDegreeN = root.querySelector('#rank-degree-n') as HTMLElement | null
+  const rankAlbumN = root.querySelector('#rank-album-n') as HTMLElement | null
+  const rankNInput = root.querySelector('#rank-n') as HTMLInputElement | null
   const dbStatus = root.querySelector('#db-status')
 
   const DIFFUSE_BATCH_SIZE = 50
@@ -586,33 +596,85 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
     diffuseLogEl.scrollTop = diffuseLogEl.scrollHeight
   }
 
-  /** 会话检索到的用户列表（实时） */
+  /** 会话检索到的用户列表（实时，三栏：得分- / 入度 / 相册数待确认） */
   function renderSessionUsers(snapshot: DiffuseSnapshot): void {
     if (diffuseUsersTotal) {
-      diffuseUsersTotal.textContent = `检索到 ${snapshot.userTotal} 个用户（显示前 ${USER_LIST_LIMIT}）`
+      diffuseUsersTotal.textContent = `会话 ${snapshot.userTotal} 人（显示前 ${USER_LIST_LIMIT}）`
     }
     if (!diffuseUsersEl) return
     const list = snapshot.users.slice(0, USER_LIST_LIMIT)
     diffuseUsersEl.innerHTML = list
       .map(
         (u, i) =>
-          `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="https://${u.username}.imgbb.com" target="_blank">${u.username}</a><span class="user-degree">入度 ${u.inDegree}</span></div>`,
+          `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="https://${u.username}.imgbb.com" target="_blank">${u.username}</a><span class="user-score">-</span><span class="user-degree">${u.inDegree}</span><span class="user-albums">待确认</span></div>`,
       )
       .join('')
   }
 
-  /** 库内用户列表 */
-  function renderDbUsers(users: { username: string; inDegree: number; url: string }[], total: number): void {
-    if (dbUsersTotal) dbUsersTotal.textContent = `库内 ${total} 个用户（显示前 ${USER_LIST_LIMIT}）`
-    if (!dbUsersEl) return
-    const list = users.slice(0, USER_LIST_LIMIT)
-    dbUsersEl.innerHTML = list
-      .map(
-        (u, i) =>
-          `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="${u.url}" target="_blank">${u.username}</a><span class="user-degree">入度 ${u.inDegree}</span></div>`,
-      )
-      .join('')
+  /** 库内三组排行（得分 / 入度 / 相册数） */
+  function renderRanks(res: {
+    rankScore?: { username: string; url: string; inDegree: number; albumCount?: number; score: number; truncated?: boolean }[]
+    rankDegree?: { username: string; url: string; inDegree: number }[]
+    rankAlbum?: { username: string; url: string; albumCount: number; inDegree: number; truncated?: boolean }[]
+    total: number
+  }): void {
+    const n = res.total
+    if (rankScoreN) rankScoreN.textContent = String(n)
+    if (rankDegreeN) rankDegreeN.textContent = String(n)
+    if (rankAlbumN) rankAlbumN.textContent = String(n)
+    const albumCell = (count: number | undefined, truncated: boolean | undefined, username: string): string => {
+      const val = count ?? '-'
+      const plus = truncated ? '+' : ''
+      return truncated
+        ? `<span class="user-albums truncated" data-full="${username}" title="未遍历完，点击彻底遍历">${val}${plus}</span>`
+        : `<span class="user-albums">${val}</span>`
+    }
+    if (rankScoreEl) {
+      rankScoreEl.innerHTML = (res.rankScore ?? [])
+        .map(
+          (u, i) =>
+            `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="${u.url}" target="_blank">${u.username}</a><span class="user-score">${u.score.toFixed(2)}</span><span class="user-degree">${u.inDegree}</span>${albumCell(u.albumCount, u.truncated, u.username)}</div>`,
+        )
+        .join('')
+    }
+    if (rankDegreeEl) {
+      rankDegreeEl.innerHTML = (res.rankDegree ?? [])
+        .map(
+          (u, i) =>
+            `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="${u.url}" target="_blank">${u.username}</a><span class="user-score">-</span><span class="user-degree">${u.inDegree}</span><span class="user-albums">-</span></div>`,
+        )
+        .join('')
+    }
+    if (rankAlbumEl) {
+      rankAlbumEl.innerHTML = (res.rankAlbum ?? [])
+        .map(
+          (u, i) =>
+            `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="${u.url}" target="_blank">${u.username}</a><span class="user-score">-</span><span class="user-degree">${u.inDegree}</span>${albumCell(u.albumCount, u.truncated, u.username)}</div>`,
+        )
+        .join('')
+    }
   }
+
+  // 点击截断相册数 → 单用户彻底遍历
+  const onTruncatedClick = async (ev: Event): Promise<void> => {
+    const el = (ev.target as HTMLElement).closest<HTMLElement>('.truncated')
+    if (!el) return
+    const username = el.dataset.full
+    if (!username) return
+    if (!window.confirm(`彻底遍历 ${username} 的全部相册（最多 300 页，耗时较长）？`)) return
+    setStatus(dbStatus, `彻底遍历 ${username} 中…`)
+    const res = await sendMessage<
+      { ok: true; full?: { username: string; albumCount: number; truncated: boolean } } | { ok: false; error: string }
+    >({ type: 'IMG_SCORE_FULL', username })
+    if (!res.ok) {
+      setStatus(dbStatus, `彻底遍历失败：${res.error}`, true)
+      return
+    }
+    setStatus(dbStatus, `${username} 相册数更新为 ${res.full?.albumCount}${res.full?.truncated ? '（仍超 300 页上限）' : ''}`)
+    void loadDbStats()
+  }
+  rankScoreEl?.addEventListener('click', onTruncatedClick)
+  rankAlbumEl?.addEventListener('click', onTruncatedClick)
 
   function renderDiffuse(snapshot?: DiffuseSnapshot, result?: DiffuseBatchResult): void {
     if (diffuseProgress && snapshot) {
@@ -654,18 +716,6 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
     const h = batchHistory[batchHistory.length - 1]
     tr.innerHTML = `<td>${h.batch}</td><td>${h.processed}</td><td>${h.newUsers}</td><td>${h.failed}</td><td>${(h.durationMs / 1000).toFixed(1)}s</td><td>${h.avgRequestMs}ms</td><td>${h.inDegreeUsers}</td>`
     diffuseHistoryBody.appendChild(tr)
-  }
-
-  function renderDist(dist?: { label: string; count: number }[]): void {
-    const el = root.querySelector('#db-dist')
-    if (!el || !dist) return
-    const max = Math.max(...dist.map((d) => d.count), 1)
-    el.innerHTML = dist
-      .map((d) => {
-        const h = Math.max(4, Math.round((d.count / max) * 100))
-        return `<div class="bar-col" title="${d.label}次：${d.count}人"><div class="bar" style="height:${h}%"></div><span class="bar-label">${d.label}</span></div>`
-      })
-      .join('')
   }
 
   async function runDiffuseBatch(): Promise<void> {
@@ -751,6 +801,8 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
   })
 
   async function loadDbStats(): Promise<void> {
+    const w1 = Math.max(0, Math.min(100, Number(searchW1Input.value) || 60)) / 100
+    const topN = Math.max(10, Math.min(500, Number(rankNInput?.value) || 100))
     const res = await sendMessage<
       {
         ok: true
@@ -759,16 +811,16 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
         confirmed: number
         producers: number
         maxInDegree: number
-        dist?: { label: string; count: number }[]
-        topUsers?: { username: string; inDegree: number; url: string }[]
+        rankScore?: { username: string; url: string; inDegree: number; albumCount?: number; score: number }[]
+        rankDegree?: { username: string; url: string; inDegree: number }[]
+        rankAlbum?: { username: string; url: string; albumCount: number; inDegree: number }[]
       } | { ok: false; error: string }
-    >({ type: 'IMG_DB_GET' })
+    >({ type: 'IMG_DB_GET', w1, topN })
     if (!res.ok) {
       setStatus(dbStatus, `读取失败：${res.error}`, true)
       return
     }
-    renderDist(res.dist)
-    renderDbUsers(res.topUsers ?? [], res.total)
+    renderRanks(res)
     // 库构成：可检索 = 库 − 未确认 − 零相册
     const unconfirmed = res.total - res.confirmed
     const zeroAlbums = res.confirmed - res.producers
@@ -779,7 +831,23 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
     setStatus(dbStatus, `已读取本地库，库内 ${res.total} 用户`)
   }
 
+  // 排行数量变化 → 刷新
+  rankNInput?.addEventListener('change', () => void loadDbStats())
+
   root.querySelector('#db-load')?.addEventListener('click', () => void loadDbStats())
+
+  root.querySelector('#db-reset-confirm')?.addEventListener('click', async () => {
+    const ok = window.confirm('重置所有用户的相册确认状态（保留入度）并立即开始重新确认？')
+    if (!ok) return
+    const res = await sendMessage<{ ok: true; total?: number } | { ok: false; error: string }>({ type: 'IMG_DB_RESET_CONFIRM' })
+    if (!res.ok) {
+      setStatus(dbStatus, `重置失败：${res.error}`, true)
+      return
+    }
+    setStatus(dbStatus, `已重置确认状态（${res.total} 用户保留），开始重新确认…`)
+    void loadDbStats()
+    void runScoreBatch() // 自动开始重新确认第一批
+  })
 
   root.querySelector('#db-clear')?.addEventListener('click', async () => {
     const res = await sendMessage<{ ok: true } | { ok: false; error: string }>({ type: 'IMG_DB_CLEAR' })
@@ -787,9 +855,9 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
       setStatus(dbStatus, `清空失败：${res.error}`, true)
       return
     }
-    if (dbUsersEl) dbUsersEl.innerHTML = ''
-    if (dbUsersTotal) dbUsersTotal.textContent = ''
-    renderDist([])
+    if (rankScoreEl) rankScoreEl.innerHTML = ''
+    if (rankDegreeEl) rankDegreeEl.innerHTML = ''
+    if (rankAlbumEl) rankAlbumEl.innerHTML = ''
     const compEl = root.querySelector('#db-composition')
     if (compEl) compEl.textContent = ''
     setStatus(dbStatus, '生产者库已清空')
@@ -805,10 +873,16 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
   const searchW1Input = root.querySelector('#search-w1') as HTMLInputElement
   const searchNextBtn = root.querySelector('#search-next') as HTMLButtonElement | null
   const scoreNextBtn = root.querySelector('#score-next') as HTMLButtonElement | null
+  const scoreStopBtn = root.querySelector('#score-stop') as HTMLButtonElement | null
+  // 进度刷新节流（2s 内最多一次 loadDbStats）
+  let lastScoreRefresh = 0
 
   searchPctInput?.addEventListener('input', () => {
     if (searchPctVal) searchPctVal.textContent = searchPctInput.value
   })
+
+  // 权重调整 → 立即刷新得分列表（得分随权重变化）
+  searchW1Input?.addEventListener('input', () => void loadDbStats())
 
   function renderScoreResult(score: ScoreBatchResult, unconfirmed: number): void {
     setStatus(
@@ -840,6 +914,7 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
 
   async function runScoreBatch(): Promise<void> {
     if (scoreNextBtn) scoreNextBtn.disabled = true
+    if (scoreStopBtn) scoreStopBtn.disabled = false
     const orderEl = root.querySelector<HTMLInputElement>('input[name="score-order"]:checked')
     const order = (orderEl?.value as 'inDegree' | 'newest' | 'score') || 'inDegree'
     const batchSize = Number((root.querySelector('#score-batch') as HTMLSelectElement)?.value) || 50
@@ -847,14 +922,19 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
     const orderLabel = order === 'newest' ? '最新优先' : order === 'score' ? '评分优先' : '入度优先'
     setStatus(scoreStatus, `确认评分中（${orderLabel} · 每批 ${batchSize} · 并发 4）…`)
     const res = await sendMessage<
-      { ok: true; score: ScoreBatchResult; unconfirmed?: number } | { ok: false; error: string }
-    >({ type: 'IMG_SCORE_BATCH', batchSize, concurrency: 4, intervalMs: 1000, order, w1, w2: 1 - w1 })
+      { ok: true; score: ScoreBatchResult; unconfirmed?: number; cancelled?: boolean } | { ok: false; error: string }
+    >({ type: 'IMG_SCORE_BATCH', srcTabId, batchSize, concurrency: 4, intervalMs: 1000, order, w1, w2: 1 - w1 })
     if (scoreNextBtn) scoreNextBtn.disabled = false
+    if (scoreStopBtn) scoreStopBtn.disabled = true
     if (!res.ok) {
       setStatus(scoreStatus, `确认失败：${res.error}`, true)
       return
     }
-    renderScoreResult(res.score, res.unconfirmed ?? 0)
+    if (res.cancelled) {
+      setStatus(scoreStatus, `已停止：本批确认 ${res.score.processed} 人（保留已确认部分）`)
+    } else {
+      renderScoreResult(res.score, res.unconfirmed ?? 0)
+    }
     void loadDbStats() // 刷新库统计
   }
 
@@ -866,6 +946,11 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
     void runScoreBatch()
   })
   scoreNextBtn?.addEventListener('click', () => void runScoreBatch())
+
+  scoreStopBtn?.addEventListener('click', () => {
+    void sendMessage<{ ok: true } | { ok: false; error: string }>({ type: 'IMG_SCORE_STOP' })
+    setStatus(scoreStatus, '停止请求已发送，等待当前用户完成…')
+  })
 
   async function runSearch(start: boolean): Promise<void> {
     if (searchNextBtn) searchNextBtn.disabled = true
@@ -1088,6 +1173,19 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
           setStatus(followingStatus, `已分析 ${following.length} 个有效用户（本批 ${items.length}）${done ? '，全部完成' : ''}`)
         }
         logger.info('adapters', '关注墙分析结果', { count: following.length, done })
+      }
+    },
+    onScoreProgress: (msg) => {
+      // 确认一个更新一个：状态文本实时 + 排行节流刷新
+      const stop = msg.cancelled ? ' · 已请求停止' : ''
+      setStatus(
+        scoreStatus,
+        `确认中 ${msg.done}/${msg.total} · ${msg.username}（相册 ${msg.albumCount}${msg.truncated ? '+' : ''}）· 失败 ${msg.failed}${stop}`,
+      )
+      const now = Date.now()
+      if (now - lastScoreRefresh >= 2000) {
+        lastScoreRefresh = now
+        void loadDbStats()
       }
     },
     onDownloadProgress: (job) => {

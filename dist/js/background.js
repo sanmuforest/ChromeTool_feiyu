@@ -763,8 +763,22 @@
     }
     return buckets.map((b, i) => ({ label: b.label, count: counts[i] }));
   }
-  function topList(db, n) {
-    return Object.values(db.entries).sort((a, b) => b.inDegree - a.inDegree).slice(0, Math.max(0, n)).map((e) => ({ username: e.username, inDegree: e.inDegree, url: `https://${e.username}.imgbb.com` }));
+  function scoreTop(db, n, w1, w2) {
+    const { maxInDegree, maxAlbumCount } = collectStats(db);
+    return Object.values(db.entries).map((e) => ({
+      username: e.username,
+      url: `https://${e.username}.imgbb.com`,
+      inDegree: e.inDegree,
+      albumCount: e.albumsChecked ? e.albumCount : void 0,
+      score: computeScore(e, maxInDegree, maxAlbumCount, w1, w2),
+      truncated: e.albumsTruncated
+    })).sort((a, b) => b.score - a.score).slice(0, Math.max(0, n));
+  }
+  function degreeTop(db, n) {
+    return Object.values(db.entries).sort((a, b) => b.inDegree - a.inDegree).slice(0, Math.max(0, n)).map((e) => ({ username: e.username, url: `https://${e.username}.imgbb.com`, inDegree: e.inDegree }));
+  }
+  function albumTop(db, n) {
+    return Object.values(db.entries).filter((e) => e.albumsChecked && (e.albumCount ?? 0) > 0).sort((a, b) => (b.albumCount ?? 0) - (a.albumCount ?? 0)).slice(0, Math.max(0, n)).map((e) => ({ username: e.username, url: `https://${e.username}.imgbb.com`, albumCount: e.albumCount ?? 0, inDegree: e.inDegree, truncated: e.albumsTruncated }));
   }
   function unconfirmedCandidates(db, n, order = "inDegree", w1 = DEFAULT_SCORE_W1, w2 = DEFAULT_SCORE_W2) {
     const list = Object.values(db.entries).filter((e) => !e.albumsChecked);
@@ -788,6 +802,14 @@
   function confirmedScored(db, w1, w2) {
     const { maxInDegree, maxAlbumCount } = collectStats(db);
     return Object.values(db.entries).filter((e) => e.albumsChecked && (e.albumCount ?? 0) > 0).map((e) => ({ ...e, score: computeScore(e, maxInDegree, maxAlbumCount, w1, w2) })).sort((a, b) => b.score - a.score);
+  }
+  function resetConfirmations(db) {
+    const entries = {};
+    for (const [k, e] of Object.entries(db.entries)) {
+      const { albumsChecked, albumCount, albums, albumsTruncated, ...rest } = e;
+      entries[k] = rest;
+    }
+    return { ...db, updatedAt: Date.now(), entries };
   }
   function matchAlbums(entry, keywords) {
     if (keywords.length === 0 || !entry.albums) return [];
@@ -1422,17 +1444,42 @@
   void storageGet("dl_concurrency").then((n) => {
     if (typeof n === "number" && n > 0) downloadManager.setConcurrency(n);
   });
-  void storageGet(PRODUCER_DB_KEY).then((raw) => {
-    producerDb = loadDb(raw);
-    logger5.info("diffuse", "\u751F\u4EA7\u8005\u5E93\u5DF2\u6062\u590D", { total: Object.keys(producerDb.entries).length });
-  });
   chrome.downloads.onChanged.addListener((delta) => {
     downloadManager.handleChanged(delta);
   });
   var imgbb = new ImgbbService();
   var followingUsersCache = /* @__PURE__ */ new Map();
+  async function fetchUserAlbums(username, maxPages) {
+    const all = [];
+    const seen = /* @__PURE__ */ new Set();
+    let url = `https://${username}.imgbb.com/albums`;
+    let page = 0;
+    while (url && page < maxPages) {
+      const html = await imgbb.fetchHtml(url);
+      const items = parseAlbumItems(html);
+      for (const a of items) {
+        if (!seen.has(a.id)) {
+          seen.add(a.id);
+          all.push(a);
+        }
+      }
+      const next = parseAlbumNextPage(html, `https://${username}.imgbb.com/albums`);
+      if (!next || next === url || items.length === 0) break;
+      url = next;
+      page++;
+    }
+    return { albums: all, truncated: url !== null && page >= maxPages };
+  }
+  var SCORE_MAX_PAGES = 20;
+  var SCORE_FULL_MAX_PAGES = 300;
+  var scoreBatchCancelled = false;
   var diffuse = new DiffuseEngine();
   var producerDb = emptyDb();
+  var producerDbReady = (async () => {
+    const raw = await storageGet(PRODUCER_DB_KEY);
+    producerDb = loadDb(raw);
+    logger5.info("diffuse", "\u751F\u4EA7\u8005\u5E93\u5DF2\u6062\u590D", { total: Object.keys(producerDb.entries).length });
+  })();
   var searchCandidates = [];
   var searchCursor = 0;
   var searchKeywords = [];
@@ -1759,6 +1806,7 @@
       }
       case "IMG_DIFFUSE_BATCH": {
         await ensureDiffuseRestored();
+        await producerDbReady;
         if (diffuse.is429Throttled) {
           logger5.warn("diffuse", "\u8FDE\u7EED 429\uFF0C\u5DF2\u963B\u6B62\u7EE7\u7EED\u6269\u6563\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5");
           return { ok: false, error: "\u8FDE\u7EED 429 \u9650\u6D41\uFF0C\u8BF7\u7B49\u5F85 30 \u79D2\u540E\u518D\u7EE7\u7EED" };
@@ -1777,27 +1825,54 @@
         return { ok: true, snapshot: diffuse.snapshot() };
       }
       case "IMG_DB_GET": {
+        await producerDbReady;
         const sum = dbSummary(producerDb);
         const dist = inDegreeDist(producerDb);
-        const topUsers = topList(producerDb, 200);
-        return { ok: true, db: producerDb, total: sum.total, confirmed: sum.confirmed, producers: sum.producers, maxInDegree: sum.maxInDegree, dist, topUsers };
+        const w1 = message.w1 ?? 0.6;
+        const topN = message.topN ?? 100;
+        const rankScore = scoreTop(producerDb, topN, w1, 1 - w1);
+        const rankDegree = degreeTop(producerDb, topN);
+        const rankAlbum = albumTop(producerDb, topN);
+        return {
+          ok: true,
+          db: producerDb,
+          total: sum.total,
+          confirmed: sum.confirmed,
+          producers: sum.producers,
+          maxInDegree: sum.maxInDegree,
+          dist,
+          rankScore,
+          rankDegree,
+          rankAlbum
+        };
       }
       case "IMG_DB_SAVE": {
+        await producerDbReady;
         await storageSet(PRODUCER_DB_KEY, producerDb);
         const sum = dbSummary(producerDb);
         logger5.info("diffuse", "\u751F\u4EA7\u8005\u5E93\u5DF2\u4FDD\u5B58", { total: sum.total, source: message.source });
         return { ok: true, total: sum.total, confirmed: sum.confirmed, producers: sum.producers, maxInDegree: sum.maxInDegree };
       }
       case "IMG_DB_CLEAR": {
+        await producerDbReady;
         producerDb = emptyDb();
         await storageSet(PRODUCER_DB_KEY, producerDb);
         logger5.info("diffuse", "\u751F\u4EA7\u8005\u5E93\u5DF2\u6E05\u7A7A");
         return { ok: true, total: 0 };
       }
       case "IMG_DB_EXPORT": {
+        await producerDbReady;
         return { ok: true, json: JSON.stringify(producerDb, null, 1) };
       }
+      case "IMG_DB_RESET_CONFIRM": {
+        await producerDbReady;
+        producerDb = resetConfirmations(producerDb);
+        await storageSet(PRODUCER_DB_KEY, producerDb);
+        logger5.info("diffuse", "\u786E\u8BA4\u72B6\u6001\u5DF2\u91CD\u7F6E\uFF08\u4FDD\u7559\u5165\u5EA6\uFF09\uFF0C\u9700\u91CD\u65B0\u786E\u8BA4\u8BC4\u5206");
+        return { ok: true, total: Object.keys(producerDb.entries).length };
+      }
       case "IMG_DB_IMPORT": {
+        await producerDbReady;
         const imported = loadDb(message.db);
         const before = Object.keys(producerDb.entries).length;
         producerDb = mergeDb(producerDb, imported);
@@ -1815,6 +1890,8 @@
         };
       }
       case "IMG_SCORE_BATCH": {
+        await producerDbReady;
+        scoreBatchCancelled = false;
         const candidates = unconfirmedCandidates(producerDb, message.batchSize, message.order ?? "inDegree", message.w1, message.w2);
         if (candidates.length === 0) {
           return { ok: true, score: { processed: 0, withAlbums: 0, zeroAlbums: 0, failed: 0, done: true } };
@@ -1832,20 +1909,34 @@
             const c = candidates[idx];
             await sleep(message.intervalMs);
             try {
-              const html = await imgbb.fetchHtml(`https://${c.username}.imgbb.com/albums`);
-              const albums = parseAlbumItems(html);
+              const { albums: userAlbums, truncated } = await fetchUserAlbums(c.username, SCORE_MAX_PAGES);
               updated[c.username] = {
                 ...c,
-                albumCount: albums.length,
+                albumCount: userAlbums.length,
                 albumsChecked: true,
-                albums: albums.map((a) => ({ name: a.name, url: a.url }))
+                albumsTruncated: truncated || void 0,
+                albums: userAlbums.map((a) => ({ name: a.name, url: a.url }))
               };
-              if (albums.length > 0) withAlbums++;
+              if (userAlbums.length > 0) withAlbums++;
               else zeroAlbums++;
+              const session = sessions.get(message.srcTabId);
+              if (session) {
+                await sendToTab(session.grabTabId, {
+                  type: "IMG_SCORE_PROGRESS_FWD",
+                  done: withAlbums + zeroAlbums + failed,
+                  total: candidates.length,
+                  username: c.username,
+                  albumCount: userAlbums.length,
+                  truncated: truncated || void 0,
+                  failed,
+                  cancelled: scoreBatchCancelled || void 0
+                });
+              }
             } catch (err) {
               failed++;
               logger5.warn("score", "albums \u786E\u8BA4\u5931\u8D25\uFF08\u8DF3\u8FC7\uFF09", { user: c.username, error: String(err) });
             }
+            if (scoreBatchCancelled) return;
           }
         };
         await Promise.all(Array.from({ length: Math.min(message.concurrency, candidates.length) }, () => worker()));
@@ -1854,14 +1945,54 @@
         producerDb = { ...producerDb, updatedAt: Date.now(), entries };
         await storageSet(PRODUCER_DB_KEY, producerDb);
         const unconfirmed = unconfirmedCount(producerDb);
-        logger5.info("score", "\u786E\u8BA4\u6279\u6B21\u5B8C\u6210", { processed: candidates.length, withAlbums, zeroAlbums, failed, unconfirmed });
+        const truncatedCount = Object.values(updated).filter((u) => u.albumsTruncated).length;
+        logger5.info("score", "\u786E\u8BA4\u6279\u6B21\u5B8C\u6210", { processed: Object.keys(updated).length, withAlbums, zeroAlbums, failed, unconfirmed, truncated: truncatedCount, cancelled: scoreBatchCancelled });
         return {
           ok: true,
-          score: { processed: candidates.length, withAlbums, zeroAlbums, failed, done: unconfirmed === 0 },
-          unconfirmed
+          score: {
+            processed: Object.keys(updated).length,
+            withAlbums,
+            zeroAlbums,
+            failed,
+            done: !scoreBatchCancelled && unconfirmed === 0
+          },
+          unconfirmed,
+          cancelled: scoreBatchCancelled || void 0
         };
       }
+      case "IMG_SCORE_STOP": {
+        scoreBatchCancelled = true;
+        logger5.info("score", "\u786E\u8BA4\u5DF2\u8BF7\u6C42\u505C\u6B62");
+        return { ok: true };
+      }
+      case "IMG_SCORE_FULL": {
+        await producerDbReady;
+        const username = (message.username || "").toLowerCase();
+        const entry = producerDb.entries[username];
+        if (!entry) return { ok: false, error: "\u5E93\u4E2D\u65E0\u6B64\u7528\u6237" };
+        logger5.info("score", "\u5F7B\u5E95\u904D\u5386\u5F00\u59CB", { user: username, maxPages: SCORE_FULL_MAX_PAGES });
+        try {
+          const { albums: userAlbums, truncated } = await fetchUserAlbums(username, SCORE_FULL_MAX_PAGES);
+          producerDb.entries[username] = {
+            ...entry,
+            albumCount: userAlbums.length,
+            albumsChecked: true,
+            albumsTruncated: truncated || void 0,
+            albums: userAlbums.map((a) => ({ name: a.name, url: a.url }))
+          };
+          await storageSet(PRODUCER_DB_KEY, producerDb);
+          logger5.info("score", "\u5F7B\u5E95\u904D\u5386\u5B8C\u6210", { user: username, albums: userAlbums.length, truncated });
+          return {
+            ok: true,
+            full: { username, albumCount: userAlbums.length, truncated }
+          };
+        } catch (err) {
+          logger5.error("score", "\u5F7B\u5E95\u904D\u5386\u5931\u8D25", { user: username, error: String(err) });
+          return { ok: false, error: String(err) };
+        }
+      }
       case "IMG_SEARCH_START": {
+        await producerDbReady;
         const scored = confirmedScored(producerDb, message.w1, message.w2);
         const from = Math.min(scored.length, Math.floor(scored.length * message.fromPct / 100));
         const to = Math.min(scored.length, Math.floor(scored.length * message.toPct / 100));
@@ -1903,6 +2034,7 @@
       }
       case "IMG_GITHUB_PUSH": {
         try {
+          await producerDbReady;
           const cfg = normalizeConfig(await storageGet(GITHUB_CONFIG_KEY));
           if (!cfg) return { ok: false, error: "\u672A\u914D\u7F6E GitHub\uFF0C\u8BF7\u5148\u4FDD\u5B58\u4ED3\u5E93\u4E0E token" };
           const remote = await pullDb(cfg);
@@ -1916,6 +2048,7 @@
       }
       case "IMG_GITHUB_PULL": {
         try {
+          await producerDbReady;
           const cfg = normalizeConfig(await storageGet(GITHUB_CONFIG_KEY));
           if (!cfg) return { ok: false, error: "\u672A\u914D\u7F6E GitHub\uFF0C\u8BF7\u5148\u4FDD\u5B58\u4ED3\u5E93\u4E0E token" };
           const remote = await pullDb(cfg);
