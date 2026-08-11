@@ -6,7 +6,7 @@
 // 4. 下载队列管理（DownloadManager）
 // 注意：SW 生命周期短、无 DOM，状态持久化到 chrome.storage（内存 Map 可重建）
 
-import { DownloadManager, arrayBufferToBase64, fetchImageBytes } from '../lib/downloader'
+import { DownloadManager, arrayBufferToBase64, fetchImageBytes, fetchImgbbViaSrcTab } from '../lib/downloader'
 import { DiffuseEngine } from './imgbb-diffuse'
 import { emptyDb, loadDb, mergeInDegree, mergeDb, dbSummary, inDegreeDist, unconfirmedCandidates, unconfirmedCount, confirmedScored, matchAlbums, scoreTop, degreeTop, albumTop, resetConfirmations, PRODUCER_DB_KEY } from '../lib/producer-db'
 import { normalizeConfig, pullDb, pushDb, GITHUB_CONFIG_KEY } from '../lib/github-sync'
@@ -383,10 +383,21 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       return { ok: true }
 
     // ---- 打包下载：background 抓取图片字节（imgbb 防降级） ----
+    // 降级链：源页注入（imgbb 域页面 MAIN world，Referer=页面URL 放行原图）→ background fetch（现可能 180）
     case 'GRAB_FETCH_IMAGE': {
       try {
-        const buf = await fetchImageBytes(message.url)
-        logger.debug('download', 'GRAB_FETCH_IMAGE 抓取完成', { bytes: buf.byteLength, url: message.url })
+        let buf: ArrayBuffer
+        if (message.srcTabId) {
+          try {
+            buf = await fetchImgbbViaSrcTab(message.srcTabId, message.url)
+            logger.debug('download', 'GRAB_FETCH_IMAGE 源页注入抓取完成', { bytes: buf.byteLength, url: message.url })
+          } catch (err) {
+            logger.warn('download', 'GRAB_FETCH_IMAGE 源页注入失败，降级 background', { url: message.url, error: String(err) })
+            buf = await fetchImageBytes(message.url)
+          }
+        } else {
+          buf = await fetchImageBytes(message.url)
+        }
         // runtime message 为 JSON 序列化，ArrayBuffer 会丢失（实测变空对象）→ 必须 base64 字符串回传
         return { ok: true, data: arrayBufferToBase64(buf) }
       } catch (err) {

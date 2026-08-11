@@ -119,6 +119,26 @@
     }
     return btoa(binary);
   }
+  async function fetchImgbbViaSrcTab(srcTabId, url) {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: srcTabId },
+      world: "MAIN",
+      func: (imgUrl) => (async () => {
+        const resp = await fetch(imgUrl, {
+          headers: {
+            Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+          }
+        });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const buf = await resp.arrayBuffer();
+        return Array.from(new Uint8Array(buf));
+      })(),
+      args: [url]
+    });
+    const arr = results?.[0]?.result;
+    if (!arr || arr.length === 0) throw new Error("\u9875\u9762\u672A\u8FD4\u56DE\u5B57\u8282");
+    return new Uint8Array(arr).buffer;
+  }
   var DownloadManager = class {
     constructor(callbacks) {
       this.callbacks = callbacks;
@@ -270,21 +290,32 @@
           const controller = new AbortController();
           this.fetchControllers.set(job.id, controller);
           try {
-            const buf = await fetchImageBytes(item.url, controller.signal);
+            const buf = await fetchImgbbViaSrcTab(job.srcTabId, item.url);
             this.fetchControllers.delete(job.id);
             if (job.status !== "running") return;
-            const tB64 = Date.now();
             url = `data:image/jpeg;base64,${arrayBufferToBase64(buf)}`;
-            logger.debug("download", "imgbb \u539F\u56FE\u8F6C data URL", {
-              jobId: job.id,
-              fetchMs: tB64 - tFetch,
-              b64Ms: Date.now() - tB64,
-              bytes: buf.byteLength
-            });
+            logger.debug("download", "imgbb \u6E90\u9875\u6CE8\u5165\u8F6C data URL", { jobId: job.id, fetchMs: Date.now() - tFetch, bytes: buf.byteLength });
           } catch (err) {
             this.fetchControllers.delete(job.id);
             if (job.status !== "running") return;
-            logger.warn("download", "imgbb background \u6293\u53D6\u5931\u8D25\uFF0C\u964D\u7EA7\u76F4\u8FDE", { url: item.url, error: String(err) });
+            logger.warn("download", "imgbb \u6E90\u9875\u6CE8\u5165\u5931\u8D25\uFF0C\u964D\u7EA7 background fetch", { url: item.url, error: String(err) });
+            try {
+              const buf = await fetchImageBytes(item.url, controller.signal);
+              this.fetchControllers.delete(job.id);
+              if (job.status !== "running") return;
+              const tB64 = Date.now();
+              url = `data:image/jpeg;base64,${arrayBufferToBase64(buf)}`;
+              logger.debug("download", "imgbb \u539F\u56FE\u8F6C data URL", {
+                jobId: job.id,
+                fetchMs: tB64 - tFetch,
+                b64Ms: Date.now() - tB64,
+                bytes: buf.byteLength
+              });
+            } catch (err2) {
+              this.fetchControllers.delete(job.id);
+              if (job.status !== "running") return;
+              logger.warn("download", "imgbb background \u6293\u53D6\u5931\u8D25\uFF0C\u964D\u7EA7\u76F4\u8FDE", { url: item.url, error: String(err2) });
+            }
           }
         }
         const tDl = Date.now();
@@ -2066,8 +2097,18 @@
         return { ok: true };
       case "GRAB_FETCH_IMAGE": {
         try {
-          const buf = await fetchImageBytes(message.url);
-          logger5.debug("download", "GRAB_FETCH_IMAGE \u6293\u53D6\u5B8C\u6210", { bytes: buf.byteLength, url: message.url });
+          let buf;
+          if (message.srcTabId) {
+            try {
+              buf = await fetchImgbbViaSrcTab(message.srcTabId, message.url);
+              logger5.debug("download", "GRAB_FETCH_IMAGE \u6E90\u9875\u6CE8\u5165\u6293\u53D6\u5B8C\u6210", { bytes: buf.byteLength, url: message.url });
+            } catch (err) {
+              logger5.warn("download", "GRAB_FETCH_IMAGE \u6E90\u9875\u6CE8\u5165\u5931\u8D25\uFF0C\u964D\u7EA7 background", { url: message.url, error: String(err) });
+              buf = await fetchImageBytes(message.url);
+            }
+          } else {
+            buf = await fetchImageBytes(message.url);
+          }
           return { ok: true, data: arrayBufferToBase64(buf) };
         } catch (err) {
           logger5.warn("download", "GRAB_FETCH_IMAGE \u6293\u53D6\u5931\u8D25", { url: message.url, error: String(err) });

@@ -48,6 +48,33 @@ export function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary)
 }
 
+/**
+ * 源页（imgbb 域页面）MAIN world 注入抓图字节：
+ * 页面上下文 fetch 的 Referer = 页面 URL（imgbb 域），imgbb 放行原图（= 用户浏览行为）；
+ * srcTab 非 imgbb 域 / 已关闭 / 无 host 权限时注入失败，由调用方降级
+ */
+export async function fetchImgbbViaSrcTab(srcTabId: number, url: string): Promise<ArrayBuffer> {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: srcTabId },
+    world: 'MAIN',
+    func: (imgUrl: string): Promise<number[]> =>
+      (async () => {
+        const resp = await fetch(imgUrl, {
+          headers: {
+            Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          },
+        })
+        if (!resp.ok) throw new Error('HTTP ' + resp.status)
+        const buf = await resp.arrayBuffer()
+        return Array.from(new Uint8Array(buf))
+      })(),
+    args: [url],
+  })
+  const arr = results?.[0]?.result as number[] | undefined
+  if (!arr || arr.length === 0) throw new Error('页面未返回字节')
+  return new Uint8Array(arr).buffer
+}
+
 interface ActiveDownload {
   jobId: number
   downloadId: number
@@ -247,29 +274,40 @@ export class DownloadManager {
     logger.debug('download', '派发下载项', { jobId: job.id, filename: item.filename, queueWaitMs: Date.now() - enqueuedAt })
     try {
       let url = item.url
-      // imgbb 防 180x180：chrome.downloads 直连 i.ibb.co 会被 imgbb 降级为 180 缩略图
-      // （扩展上下文 TLS 指纹差异），background fetch 能拿原图 → 转 data URL 下载
-      // （data URL 无服务器文件名，filename 参数必定生效）
+      // imgbb 防 180x180：SW / 扩展页 / 沙箱上下文一律被降级（2026-08-11 实测），
+      // 仅源页（imgbb 域页面）上下文请求放行原图 → 优先源页注入，失败降级 background fetch
       if (/(i\.ibb\.co|ibb\.co)/.test(url)) {
         const tFetch = Date.now()
         const controller = new AbortController()
         this.fetchControllers.set(job.id, controller)
         try {
-          const buf = await fetchImageBytes(item.url, controller.signal)
+          const buf = await fetchImgbbViaSrcTab(job.srcTabId, item.url)
           this.fetchControllers.delete(job.id)
           if (job.status !== 'running') return // 抓取期间已取消
-          const tB64 = Date.now()
           url = `data:image/jpeg;base64,${arrayBufferToBase64(buf)}`
-          logger.debug('download', 'imgbb 原图转 data URL', {
-            jobId: job.id,
-            fetchMs: tB64 - tFetch,
-            b64Ms: Date.now() - tB64,
-            bytes: buf.byteLength,
-          })
+          logger.debug('download', 'imgbb 源页注入转 data URL', { jobId: job.id, fetchMs: Date.now() - tFetch, bytes: buf.byteLength })
         } catch (err) {
+          // 降级 1：background fetch（历史方案，现可能拿到 180 缩略图）
           this.fetchControllers.delete(job.id)
           if (job.status !== 'running') return
-          logger.warn('download', 'imgbb background 抓取失败，降级直连', { url: item.url, error: String(err) })
+          logger.warn('download', 'imgbb 源页注入失败，降级 background fetch', { url: item.url, error: String(err) })
+          try {
+            const buf = await fetchImageBytes(item.url, controller.signal)
+            this.fetchControllers.delete(job.id)
+            if (job.status !== 'running') return // 抓取期间已取消
+            const tB64 = Date.now()
+            url = `data:image/jpeg;base64,${arrayBufferToBase64(buf)}`
+            logger.debug('download', 'imgbb 原图转 data URL', {
+              jobId: job.id,
+              fetchMs: tB64 - tFetch,
+              b64Ms: Date.now() - tB64,
+              bytes: buf.byteLength,
+            })
+          } catch (err2) {
+            this.fetchControllers.delete(job.id)
+            if (job.status !== 'running') return
+            logger.warn('download', 'imgbb background 抓取失败，降级直连', { url: item.url, error: String(err2) })
+          }
         }
       }
       const tDl = Date.now()

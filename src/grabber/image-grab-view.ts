@@ -541,7 +541,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
         try {
           let blob: Blob | null = null
           if (/(i\.ibb\.co|ibb\.co)/.test(item.url)) {
-            // imgbb：background 上下文 fetch（扩展页面 fetch 会被降级为 180 缩略图）
+            // imgbb：background 抓取字节（内部优先源页注入拿原图，失败降级 SW fetch）
             // 响应为 base64 字符串（runtime message 为 JSON 序列化，ArrayBuffer 直传会丢失数据）
             const res = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
               type: 'GRAB_FETCH_IMAGE',

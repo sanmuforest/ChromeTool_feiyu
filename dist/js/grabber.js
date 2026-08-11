@@ -3737,7 +3737,11 @@
       }
       setStatus(albumsStatus, `\u5206\u6790\u4E2D\uFF08\u7B2C ${page} \u6279\uFF09\u2026`);
       const res = await sendMessage({ type: "IMG_ANALYZE_ALBUMS", srcTabId: srcTabId2, username, page });
-      if (!res.ok) setStatus(albumsStatus, `\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`, true);
+      if (res.ok) {
+        albumsPage = page;
+      } else {
+        setStatus(albumsStatus, `\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`, true);
+      }
     }
     root.querySelector("#albums-start")?.addEventListener("click", () => {
       albums = [];
@@ -4381,13 +4385,14 @@
           }
         } else if (kind === "albums") {
           const items = data;
-          albums = albums.concat(items);
-          albumsPage = Math.max(albumsPage, 1);
+          const seen = new Set(albums.map((a) => a.url));
+          const fresh = items.filter((a) => !seen.has(a.url));
+          albums = albums.concat(fresh);
           renderAlbums(albumsGrid, albums);
           if (error) {
             setStatus(albumsStatus, `\u5206\u6790\u5931\u8D25\uFF1A${error}`, true);
           } else {
-            setStatus(albumsStatus, `\u5DF2\u5206\u6790 ${albums.length} \u4E2A\u76F8\u518C\uFF08\u672C\u6279 ${items.length}\uFF09`);
+            setStatus(albumsStatus, `\u5DF2\u5206\u6790 ${albums.length} \u4E2A\u76F8\u518C\uFF08\u672C\u6279\u65B0\u589E ${fresh.length}\uFF09`);
           }
           logger4.info("adapters", "\u76F8\u518C\u5206\u6790\u7ED3\u679C", { count: albums.length });
         } else if (kind === "following") {
@@ -4994,7 +4999,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260811161644" : "dev";
+  var BUILD_TIME = true ? "20260812001826" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

@@ -474,7 +474,12 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
     }
     setStatus(albumsStatus, `分析中（第 ${page} 批）…`)
     const res = await sendMessage({ type: 'IMG_ANALYZE_ALBUMS', srcTabId, username, page })
-    if (!res.ok) setStatus(albumsStatus, `请求失败：${res.error}`, true)
+    if (res.ok) {
+      // 请求成功即推进页码（IMG_RESULT 推送先于本响应到达，albums 已追加）
+      albumsPage = page
+    } else {
+      setStatus(albumsStatus, `请求失败：${res.error}`, true)
+    }
   }
 
   root.querySelector('#albums-start')?.addEventListener('click', () => {
@@ -1245,13 +1250,15 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
         }
       } else if (kind === 'albums') {
         const items = data as ImgbbAlbum[]
-        albums = albums.concat(items)
-        albumsPage = Math.max(albumsPage, 1)
+        // 按 url 去重追加（imgbb 分页页间可能重复，避免反复出现前 32 条）
+        const seen = new Set(albums.map((a) => a.url))
+        const fresh = items.filter((a) => !seen.has(a.url))
+        albums = albums.concat(fresh)
         renderAlbums(albumsGrid, albums)
         if (error) {
           setStatus(albumsStatus, `分析失败：${error}`, true)
         } else {
-          setStatus(albumsStatus, `已分析 ${albums.length} 个相册（本批 ${items.length}）`)
+          setStatus(albumsStatus, `已分析 ${albums.length} 个相册（本批新增 ${fresh.length}）`)
         }
         logger.info('adapters', '相册分析结果', { count: albums.length })
       } else if (kind === 'following') {
