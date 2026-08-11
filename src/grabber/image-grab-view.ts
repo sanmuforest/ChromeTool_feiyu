@@ -31,7 +31,8 @@ export interface GrabViewHandle {
   setParseProgress(scanned: number, total: number): void
   setParseText(text: string): void
   setBusyParsing(busy: boolean): void
-  setLoadMoreEnabled(enabled: boolean): void
+  /** loading=true 时按钮显示「加载中…」；否则显示「加载下一批」（仅 enabled 时可点） */
+  setLoadMoreEnabled(enabled: boolean, loading?: boolean): void
   setDownloadJob(job: DownloadJob | null): void
   selectAll(): void
   clear(): void
@@ -527,7 +528,9 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     renderZip()
     const zip = new JSZip()
     let okCount = 0
-    const CONCURRENCY = 6 // 打包并发（参考项目 asyncPool）
+    // 打包并发 = 全局下载并发设置（imgbb/buondua/通用统一生效），读取失败回退默认 12
+    const ccRes = await sendMessage<{ ok: true; concurrency: number } | { ok: false; error: string }>({ type: 'GRAB_GET_CONCURRENCY' })
+    const CONCURRENCY = Math.max(1, Math.min(128, ccRes.ok ? ccRes.concurrency : 12))
     let cursor = 0
     const worker = async (): Promise<void> => {
       while (true) {
@@ -539,16 +542,14 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
           let blob: Blob | null = null
           if (/(i\.ibb\.co|ibb\.co)/.test(item.url)) {
             // imgbb：background 上下文 fetch（扩展页面 fetch 会被降级为 180 缩略图）
-            const res = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
+            // 响应直接回传 Uint8Array（structured clone），省去 base64 编码/解码/逐字节拷贝
+            const res = await sendMessage<{ ok: true; data?: ArrayBuffer } | { ok: false; error: string }>({
               type: 'GRAB_FETCH_IMAGE',
               srcTabId: options.srcTabId,
               url: item.url,
             })
             if (res.ok && res.data) {
-              const bin = atob(res.data)
-              const bytes = new Uint8Array(bin.length)
-              for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-              blob = new Blob([bytes])
+              blob = new Blob([res.data])
             }
           } else {
             const resp = await fetch(item.url)
@@ -567,7 +568,8 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       }
     }
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, () => worker()))
-    const blob = await zip.generateAsync({ type: 'blob' })
+    // STORE：图片本身已压缩（jpg/png），跳过 DEFLATE 纯 CPU 开销，体积几乎不变
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' })
     const objectUrl = URL.createObjectURL(blob)
     try {
       await chrome.downloads.download({ url: objectUrl, filename: `${options.getFolderName()}.zip` })
@@ -664,10 +666,10 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     setBusyParsing: (busy) => {
       if (btnParseCancel) btnParseCancel.disabled = !busy
     },
-    setLoadMoreEnabled: (enabled) => {
+    setLoadMoreEnabled: (enabled, loading = false) => {
       if (!btnLoadMore) return
       btnLoadMore.disabled = !enabled
-      btnLoadMore.textContent = enabled ? '加载下一批' : '加载中…'
+      btnLoadMore.textContent = loading ? '加载中…' : '加载下一批'
     },
     setDownloadJob: (j) => {
       job = j

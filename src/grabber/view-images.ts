@@ -41,6 +41,7 @@ export function initImagesView(root: HTMLElement, session: GrabSession): ImagesV
     getFolderName: () => session.folderName,
     getAlbumName: () => session.title,
     onReparse: () => {
+      grabView.setLoadMoreEnabled(false, true) // 重新解析：按钮置加载中
       grabView.clear()
       void sendMessage({ type: 'GRAB_PARSE_START', srcTabId: session.srcTabId })
     },
@@ -58,9 +59,12 @@ export function initImagesView(root: HTMLElement, session: GrabSession): ImagesV
       grabView.appendImages(msg.images)
       grabView.setParseProgress(msg.scanned, msg.total)
       grabView.setBusyParsing(true)
+      grabView.setLoadMoreEnabled(false, true) // 解析中：禁用按钮，显示加载中
     },
     onParseDone: (cancelled, reachedLimit) => {
       grabView.setBusyParsing(false)
+      // 还有更多未抓完 → 启用「加载下一批」；否则禁用（显示默认文案）
+      grabView.setLoadMoreEnabled(!!(reachedLimit && !cancelled))
       if (!cancelled) {
         grabView.selectAll() // 解析完成默认全选
       }
@@ -70,6 +74,7 @@ export function initImagesView(root: HTMLElement, session: GrabSession): ImagesV
     },
     onParseError: (error) => {
       grabView.setBusyParsing(false)
+      grabView.setLoadMoreEnabled(false)
       grabView.setParseText(`解析失败，展示已解析 ${totalImages} 张`)
       logger.error('view', '解析失败（已保留已解析内容）', error)
     },

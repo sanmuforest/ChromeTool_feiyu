@@ -103,9 +103,9 @@ export class DownloadManager {
   private nextJobId = 1
   private maxConcurrent = DEFAULT_CONCURRENCY
 
-  /** 设置下载并发（1~24），由 background 经 GRAB_SET_CONCURRENCY 调用 */
+  /** 设置下载并发（1~128），由 background 经 GRAB_SET_CONCURRENCY 调用 */
   setConcurrency(n: number): void {
-    this.maxConcurrent = Math.max(1, Math.min(24, Math.round(n) || DEFAULT_CONCURRENCY))
+    this.maxConcurrent = Math.max(1, Math.min(128, Math.round(n) || DEFAULT_CONCURRENCY))
     logger.info('download', '下载并发已设置', { concurrency: this.maxConcurrent })
     this.pump()
   }

@@ -105,7 +105,7 @@ void (async () => {
     }
   })
   concurrencyBtn?.addEventListener('click', () => {
-    const n = Math.max(1, Math.min(24, Number(concurrencyInput?.value) || 12))
+    const n = Math.max(1, Math.min(128, Number(concurrencyInput?.value) || 12))
     if (concurrencyInput) concurrencyInput.value = String(n)
     void sendMessage({ type: 'GRAB_SET_CONCURRENCY', concurrency: n }).then((res) => {
       if (res.ok) {
