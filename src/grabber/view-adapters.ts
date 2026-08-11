@@ -7,6 +7,7 @@
 import { initLogger } from '../lib/logger'
 import { sendMessage, type ImgResultKind } from '../lib/messages'
 import { extractAlbumId, extractUsername } from '../lib/imgbb-parse'
+import { noteFor } from '../lib/tag-extract'
 import type {
   DownloadJob,
   GrabbedImage,
@@ -185,6 +186,17 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
             <span id="diffuse-users-total" class="status-text"></span>
           </div>
           <div class="user-list" id="diffuse-users"></div>
+          <div class="diffuse-section tag-cloud-section">
+            <div class="section-title">⑤ 标签云（点击标签自动检索相册）</div>
+            <div class="row">
+              <span class="row-label">Top</span>
+              <input id="tag-n" class="num-input" value="100" type="number" min="20" max="500" style="width:60px">
+              <button id="tag-refresh" class="btn primary">生成标签云</button>
+              <span id="tag-status" class="status-text"></span>
+            </div>
+            <div class="tag-legend" id="tag-legend"></div>
+            <div class="tag-cloud" id="tag-cloud"></div>
+          </div>
         </div>
         <div class="diffuse-section">
           <div class="section-title">③ 相册关键词检索（纯本地匹配）</div>
@@ -1019,6 +1031,78 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
       searchPage++
       renderSearchPage()
     }
+  })
+
+  // ---------- 事件：标签云（FP-006） ----------
+  const tagStatus = root.querySelector('#tag-status')
+  const tagCloudEl = root.querySelector('#tag-cloud') as HTMLElement | null
+  const tagLegendEl = root.querySelector('#tag-legend') as HTMLElement | null
+  const tagNInput = root.querySelector('#tag-n') as HTMLInputElement | null
+
+  const TAG_COLOR: Record<string, string> = {
+    japanese: '#4a9eff', korean: '#c792ea', theme: '#7bc47f', clothes: '#e07ab5', brand: '#e8a03a', english: '#9aa5b1', at: '#5ac8d8',
+  }
+  const TAG_LABEL: Record<string, string> = {
+    japanese: '演员', korean: '韩语', theme: '主题', clothes: '服装', brand: '品牌', english: '英文', at: '引用',
+  }
+
+  async function refreshTagCloud(): Promise<void> {
+    const topN = Math.max(20, Math.min(500, Number(tagNInput?.value) || 100))
+    setStatus(tagStatus, '统计中…')
+    const res = await sendMessage<
+      { ok: true; tags?: import('../lib/tag-extract').TagStat[] } | { ok: false; error: string }
+    >({ type: 'IMG_TAG_GET', topN })
+    if (!res.ok) {
+      setStatus(tagStatus, `标签云失败：${res.error}`, true)
+      return
+    }
+    if (!res.tags) {
+      setStatus(tagStatus, '标签云失败：无数据', true)
+      return
+    }
+    const tags = res.tags
+    if (tags.length === 0) {
+      setStatus(tagStatus, '暂无标签（需先确认评分补相册名）', true)
+      if (tagCloudEl) tagCloudEl.innerHTML = ''
+      return
+    }
+    // 图例
+    const catCount: Record<string, number> = {}
+    for (const t of tags) catCount[t.c] = (catCount[t.c] ?? 0) + 1
+    if (tagLegendEl) {
+      tagLegendEl.innerHTML = Object.entries(catCount)
+        .map(([c, n]) => `<span style="color:${TAG_COLOR[c]}">■ ${TAG_LABEL[c] ?? c} ${n}</span>`)
+        .join('')
+    }
+    // 标签云
+    const maxAlbums = tags[0]?.albums ?? 1
+    if (tagCloudEl) {
+      tagCloudEl.innerHTML = tags
+        .map((x) => {
+          const isCjk = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(x.t)
+          const label = isCjk ? x.t : `${x.t}（${noteFor(x.t)}）`
+          const size = 13 + Math.round((x.albums / maxAlbums) * 26)
+          return `<span class="tag" data-tag="${x.t}" data-albums="${x.albums}" data-users="${x.users}" style="font-size:${size}px;color:${TAG_COLOR[x.c] || '#999'}" title="${x.t} · ${x.albums}相册 · ${x.users}人">${label}</span>`
+        })
+        .join('')
+    }
+    setStatus(tagStatus, `已生成 ${tags.length} 个标签（相册≥10 且 用户≥2）`)
+  }
+
+  root.querySelector('#tag-refresh')?.addEventListener('click', () => void refreshTagCloud())
+  tagNInput?.addEventListener('change', () => void refreshTagCloud())
+
+  // 点击标签 → 自动填关键词 → 触发③区检索
+  tagCloudEl?.addEventListener('click', (ev) => {
+    const el = (ev.target as HTMLElement).closest<HTMLElement>('.tag')
+    if (!el) return
+    const tag = el.dataset.tag
+    if (!tag) return
+    searchKeywordsInput.value = tag
+    setStatus(tagStatus, `已填入关键词「${tag}」，检索中…`)
+    void runSearch()
+    // 滚动到③区
+    searchResultsEl?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   })
 
   // ---------- 事件：本地数据表导出/导入（FP-005） ----------

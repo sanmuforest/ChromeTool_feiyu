@@ -896,6 +896,372 @@
     return decodeURIComponent(escape(atob(b64)));
   }
 
+  // src/lib/tag-extract.ts
+  var TAG_MIN_ALBUMS = 10;
+  var TAG_MIN_USERS = 2;
+  var TAG_DEFAULT_TOP = 100;
+  var BRANDS = [
+    "tokyo hot",
+    "pornbox",
+    "jav",
+    "spermmania",
+    "pacific girls",
+    "pacificgirls",
+    "blacksonblondes",
+    "fellatiojapan",
+    "dpdiva",
+    "\u79C0\u4EBA\u7F51",
+    "ugirls",
+    "miko\u9171",
+    "little red",
+    "popdaily"
+  ];
+  var THEMES = /* @__PURE__ */ new Set([
+    "\u857E\u59C6",
+    "\u62C9\u59C6",
+    "\u539F\u795E",
+    "\u78A7\u84DD\u822A\u7EBF",
+    "\u96F7\u7535\u5C06\u519B",
+    "\u80E1\u6843",
+    "\u7518\u96E8",
+    "\u521D\u97F3",
+    "\u660E\u65E5\u65B9\u821F",
+    "fgo",
+    "\u8D5B\u9A6C\u5A18",
+    "\u8230\u5A18",
+    "fate",
+    "\u841D\u8389",
+    "\u5FA1\u59D0",
+    "\u6E29\u6CC9",
+    "\u6D74\u8863",
+    "\u5C45\u5BB6",
+    "\u5065\u8EAB",
+    "\u8FD0\u52A8",
+    "\u5723\u8BDE",
+    "\u65B0\u5E74",
+    "\u751F\u65E5",
+    "\u60C5\u4FA3",
+    "\u95FA\u871C",
+    "\u53CC\u4EBA",
+    "\u59D0\u59B9",
+    "\u6D77\u8FB9",
+    "\u6C99\u6EE9",
+    "\u6CF3\u6C60",
+    "\u9152\u5E97",
+    "\u6559\u5BA4",
+    "\u529E\u516C\u5BA4",
+    "\u5929\u53F0",
+    "\u591C\u666F",
+    "\u96E8\u5929",
+    "\u96EA\u5730"
+  ]);
+  var CLOTHES_CN = /* @__PURE__ */ new Set([
+    "\u9ED1\u4E1D",
+    "\u767D\u4E1D",
+    "\u4E1D\u889C",
+    "\u6E14\u7F51\u889C",
+    "\u8FC7\u819D\u889C",
+    "\u889C",
+    "\u5236\u670D",
+    "\u4F53\u64CD\u670D",
+    "\u6C34\u624B\u670D",
+    "\u6821\u670D",
+    "\u6CF3\u88C5",
+    "\u6BD4\u57FA\u5C3C",
+    "\u6B7B\u5E93\u6C34",
+    "\u6C49\u670D",
+    "\u65D7\u888D",
+    "\u5A5A\u7EB1",
+    "\u5154\u5973\u90CE",
+    "\u5973\u4EC6",
+    "\u62A4\u58EB\u88C5",
+    "\u62A4\u58EB",
+    "\u732B\u8033",
+    "\u5154\u8033",
+    "\u53E4\u88C5",
+    "\u548C\u670D",
+    "\u6D74\u8863",
+    "\u809A\u515C",
+    "\u7761\u8863",
+    "\u5185\u8863",
+    "\u857E\u4E1D",
+    "\u900F\u660E",
+    "\u8584\u7EB1",
+    "\u7EB1\u88D9",
+    "\u540A\u5E26",
+    "\u7D27\u8EAB\u8863",
+    "\u7D27\u8EAB",
+    "\u8FDE\u4F53",
+    "\u80F6\u8863",
+    "\u76AE\u8863",
+    "\u76AE\u88E4",
+    "\u76AE\u88D9",
+    "\u6E14\u7F51",
+    "\u77ED\u88E4",
+    "\u70ED\u88E4",
+    "\u957F\u88D9",
+    "\u77ED\u88D9",
+    "\u8FF7\u4F60\u88D9",
+    "\u767E\u8936\u88D9",
+    "\u5305\u81C0\u88D9",
+    "\u886C\u886B",
+    "\u767D\u886C\u886B",
+    "\u536B\u8863",
+    "\u6BDB\u8863",
+    "\u9488\u7EC7",
+    "\u98CE\u8863",
+    "\u5927\u8863",
+    "\u6597\u7BF7",
+    "\u9886\u5E26",
+    "\u9886\u7ED3",
+    "\u8774\u8776\u7ED3",
+    "\u957F\u9774",
+    "\u77ED\u9774",
+    "\u9A6C\u4E01\u9774",
+    "\u9AD8\u8DDF\u978B",
+    "\u51C9\u978B",
+    "\u88F8\u8DB3",
+    "\u7389\u8DB3",
+    "\u624B\u5957",
+    "\u8D1D\u96F7\u5E3D",
+    "\u68D2\u7403\u5E3D",
+    "\u9762\u5177",
+    "\u9762\u7EB1",
+    "\u5934\u7EB1",
+    "\u56F4\u5DFE",
+    "\u4E1D\u5DFE",
+    "\u88E4\u889C",
+    "\u8FDE\u88E4\u889C",
+    "\u540A\u5E26\u889C",
+    "\u957F\u889C",
+    "\u4E2D\u7B52\u889C",
+    "\u77ED\u889C",
+    "\u8239\u889C",
+    "\u5206\u8DBE\u889C"
+  ]);
+  var CLOTHES_EN = /* @__PURE__ */ new Set(["ol", "jk", "lolita", "latex", "cosplay", "t"]);
+  var STOP = /* @__PURE__ */ new Set([
+    "model",
+    "models",
+    "original",
+    "premade",
+    "custom",
+    "latepost",
+    "goddess",
+    "goddes",
+    "feed",
+    "photo",
+    "photos",
+    "pic",
+    "pics",
+    "set",
+    "sets",
+    "collection",
+    "vol",
+    "vols",
+    "part",
+    "full",
+    "hd",
+    "uhd",
+    "4k",
+    "uncensored",
+    "censored",
+    "preview",
+    "gallery",
+    "album",
+    "video",
+    "videos",
+    "update",
+    "new",
+    "exclusive",
+    "bts",
+    "cover",
+    "cos",
+    "irl",
+    "ootd",
+    "\u5199\u771F",
+    "\u753B\u50CF",
+    "\u7167\u7247",
+    "\u56FE\u7247",
+    "\u56FE\u96C6",
+    "\u56FE\u5305",
+    "\u5957\u56FE",
+    "\u5408\u96C6",
+    "\u7CFB\u5217",
+    "\u9884\u89C8",
+    "\u65E0\u7801",
+    "\u6709\u7801",
+    "\u62CD\u6444",
+    "\u4F5C\u54C1",
+    "\u798F\u5229",
+    "\u65E5\u5E38",
+    "\u751F\u6D3B",
+    "\u6742\u56FE",
+    "\u7F8E\u5973",
+    "\u58C1\u7EB8",
+    "\u81EA\u62CD",
+    "\u5B9A\u5236",
+    "\u7D27\u6025\u4F01\u5212",
+    "\u65E0\u6C34\u5370",
+    "\u798F\u5229\u59EC",
+    "\u6A21\u7279",
+    "sexy",
+    "random",
+    "my",
+    "the",
+    "girl",
+    "asian",
+    "chinese",
+    "tits",
+    "feb",
+    "prompt",
+    "deleted",
+    "test shoots",
+    "may",
+    "various",
+    "onlyfans",
+    "amateur",
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
+    "photobook",
+    "pure",
+    "media",
+    "expensive",
+    "delicious",
+    "naked",
+    "overseas",
+    "last",
+    "stop",
+    "love",
+    "style",
+    "cute",
+    "pretty",
+    "beauty",
+    "beautiful",
+    "photoshoot",
+    "digital",
+    "series",
+    "official",
+    "hardcore",
+    "softcore",
+    "photography",
+    "\uC139\uC2DC",
+    "\uC0AC\uC9C4",
+    "\uBAA8\uC74C",
+    "\uD654\uBCF4",
+    "\uB514\uC9C0\uD138",
+    "\uD558\uC774\uD004\uB9AC\uD2F0",
+    "\uD648\uD2B8\uB808\uC774\uB2DD",
+    "\uBE68\uB798",
+    "\uC0E4\uC6CC",
+    "\uC218\uC601",
+    "\uCC28\uC6D0",
+    "\uB208\uBE5B",
+    "\uCC98\uC74C",
+    "\uC5B4\uC82F\uBC24",
+    "\uC11C\uC6B8",
+    "\uBC24",
+    "\uB9E4\uD639",
+    "\uC5EC\uC790",
+    "\uB0A8\uC790",
+    "\uC0AC\uC9C4\uC9D1",
+    "\uB514\uC9C0\uD138\uD654\uBCF4"
+  ]);
+  var PINYIN_MERGE = {
+    "wang yu chun": "\u738B\u96E8\u7EAF",
+    "xia mei jiang": "\u590F\u7F8E\u9171",
+    "huang le ran": "\u9EC4\u697D\u7136",
+    "li ke ke": "\u674E\u53EF\u53EF"
+  };
+  function cleanEmoji(s) {
+    return s.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2B50}\u{2B06}\u{2B07}\u{25B6}\u{25C0}]/gu, " ");
+  }
+  function extractTags(raw) {
+    let s = cleanEmoji(raw).replace(/&amp;/g, "&");
+    const tags = [];
+    s = s.replace(/@([a-zA-Z0-9_]+)/g, (_m, u) => {
+      tags.push({ t: "@" + u, c: "at" });
+      return " ";
+    });
+    for (const b of BRANDS) {
+      if (s.toLowerCase().startsWith(b.toLowerCase())) {
+        tags.push({ t: b.toLowerCase(), c: "brand" });
+        s = s.slice(b.length);
+        break;
+      }
+    }
+    s = s.replace(/E\d{2,4}/gi, " ").replace(/-\d{2,4}/g, " ").replace(/\d+/g, " ");
+    for (const b of BRANDS) s = s.replace(new RegExp(b, "ig"), " ");
+    for (const part of s.split(/[,&;()]|[(（)]/).map((p) => p.trim()).filter(Boolean)) {
+      for (const m of part.match(/[\uac00-\ud7af]{2,}/g) ?? []) {
+        if (!STOP.has(m)) tags.push({ t: m, c: "korean" });
+      }
+      const jap = part.match(/[\u3040-\u30ff\u4e00-\u9fff]+/g);
+      if (jap) {
+        for (const j of jap) if (j.length >= 2 && !STOP.has(j)) tags.push({ t: j, c: THEMES.has(j) ? "theme" : "japanese" });
+      }
+      const en = part.split(/[\s\-]+/).filter((w) => /^[A-Z][a-z']{1,}$/.test(w) && !STOP.has(w.toLowerCase()));
+      if (en.length >= 1) {
+        const name = en.join(" ").toLowerCase();
+        if (name.length >= 2 && name.length <= 40) {
+          tags.push({ t: name, c: THEMES.has(en.length === 1 ? en[0].toLowerCase() : "") ? "theme" : "english" });
+        }
+      }
+    }
+    return tags;
+  }
+  function extractClothes(raw) {
+    const lower = raw.toLowerCase();
+    const tokens = new Set(lower.split(/[^a-z0-9]+/).filter(Boolean));
+    const hit = /* @__PURE__ */ new Set();
+    for (const c of CLOTHES_CN) if (raw.includes(c)) hit.add(c);
+    for (const c of CLOTHES_EN) if (tokens.has(c)) hit.add(c);
+    return [...hit].map((c) => ({ t: c, c: "clothes" }));
+  }
+  function computeTags(entries, topN = TAG_DEFAULT_TOP) {
+    const total = /* @__PURE__ */ new Map();
+    const users = /* @__PURE__ */ new Map();
+    const catOf = /* @__PURE__ */ new Map();
+    for (const e of entries) {
+      if (!e.albums) continue;
+      for (const a of e.albums) {
+        const tags = [...extractTags(a.name), ...extractClothes(a.name)];
+        for (const { t, c } of tags) {
+          total.set(t, (total.get(t) ?? 0) + 1);
+          if (!users.has(t)) users.set(t, /* @__PURE__ */ new Set());
+          users.get(t).add(e.username);
+          if (!catOf.has(t)) catOf.set(t, c);
+        }
+      }
+    }
+    const merged = /* @__PURE__ */ new Map();
+    for (const [t, c] of catOf) {
+      const albums = total.get(t) ?? 0;
+      const uc = users.get(t)?.size ?? 0;
+      if (albums < TAG_MIN_ALBUMS || uc < TAG_MIN_USERS) continue;
+      const cn = PINYIN_MERGE[t];
+      const k = cn && merged.has(cn) ? cn : t;
+      const prev = merged.get(k);
+      if (prev) {
+        prev.albums += albums;
+        prev.users = Math.max(prev.users, uc);
+      } else {
+        merged.set(k, { t: k, c, albums, users: uc });
+      }
+    }
+    return [...merged.values()].sort((a, b) => b.albums - a.albums).slice(0, Math.max(0, topN));
+  }
+
   // src/background/imgbb-service.ts
   var logger3 = initLogger("background");
   var LoginWallError = class extends Error {
@@ -1867,6 +2233,12 @@
         await storageSet(PRODUCER_DB_KEY, producerDb);
         logger5.info("diffuse", "\u786E\u8BA4\u72B6\u6001\u5DF2\u91CD\u7F6E\uFF08\u4FDD\u7559\u5165\u5EA6\uFF09\uFF0C\u9700\u91CD\u65B0\u786E\u8BA4\u8BC4\u5206");
         return { ok: true, total: Object.keys(producerDb.entries).length };
+      }
+      case "IMG_TAG_GET": {
+        await producerDbReady;
+        const tags = computeTags(Object.values(producerDb.entries), message.topN ?? 100);
+        logger5.info("tag", "\u6807\u7B7E\u4E91\u7EDF\u8BA1\u5B8C\u6210", { tags: tags.length, topN: message.topN ?? 100 });
+        return { ok: true, tags };
       }
       case "IMG_DB_IMPORT": {
         await producerDbReady;

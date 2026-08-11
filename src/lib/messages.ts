@@ -83,6 +83,7 @@ export type Message =
   | { type: 'IMG_DB_EXPORT' }
   | { type: 'IMG_DB_IMPORT'; db: unknown }
   | { type: 'IMG_DB_RESET_CONFIRM' }
+  | { type: 'IMG_TAG_GET'; topN?: number }
   | { type: 'IMG_SCORE_BATCH'; srcTabId: number; batchSize: number; concurrency: number; intervalMs: number; order?: 'inDegree' | 'newest' | 'score'; w1?: number; w2?: number }
   | { type: 'IMG_SCORE_STOP' }
   | { type: 'IMG_SCORE_FULL'; username: string }
@@ -141,6 +142,7 @@ export type MessageResponse =
       rankAlbum?: { username: string; url: string; albumCount: number; inDegree: number; truncated?: boolean }[]
       full?: { username: string; albumCount: number; truncated: boolean }
       cancelled?: boolean
+      tags?: import('./tag-extract').TagStat[]
       score?: ScoreBatchResult
       search?: SearchBatchResult
       unconfirmed?: number

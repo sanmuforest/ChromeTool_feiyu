@@ -2641,6 +2641,93 @@
     return m ? m[1] : null;
   }
 
+  // src/lib/tag-extract.ts
+  var NOTE = {
+    "tokyo hot": "\u4E1C\u4EAC\u70ED",
+    jav: "\u65E5\u5F0F\u6210\u4EBA",
+    pornbox: "\u6210\u4EBA\u5E73\u53F0",
+    spermmania: "\u6210\u4EBA\u54C1\u724C",
+    "pacific girls": "\u592A\u5E73\u6D0B\u5973\u5B69",
+    blacksonblondes: "\u54C1\u724C",
+    fellatiojapan: "\u54C1\u724C",
+    ugirls: "\u6210\u4EBA\u5E73\u53F0",
+    dpdiva: "\u54C1\u724C",
+    "miko\u9171": "\u54C1\u724C",
+    "little red": "\u54C1\u724C",
+    popdaily: "\u54C1\u724C",
+    ol: "\u804C\u4E1A\u88C5",
+    jk: "\u6821\u670D",
+    lolita: "\u6D1B\u4E3D\u5854",
+    latex: "\u80F6\u8863",
+    cosplay: "\u89D2\u8272\u626E\u6F14",
+    t: "T\u6064",
+    "petra verkaik": "\u4F69\u7279\u62C9\xB7\u97E6\u5C14\u51EF\u514B",
+    bambi: "\u6591\u6BD4",
+    "jinny rux land": "\u91D1\u59AE\xB7\u9C81\u514B\u65AF",
+    "wang yu chun": "\u738B\u96E8\u7EAF",
+    "erica campbell": "\u827E\u4E3D\u5361\xB7\u574E\u8D1D\u5C14",
+    "xia mei jiang": "\u590F\u7F8E\u9171",
+    "jenny suen": "\u73CD\u59AE\xB7\u82CF\u6069",
+    "stracy stone": "\u53F2\u9EDB\u897F\xB7\u65AF\u901A",
+    "masked queen": "\u8499\u9762\u5973\u738B",
+    hijaber: "\u5E0C\u8D3E\u4F2F",
+    kokuhui: "\u56FD\u8F89",
+    sira: "\u897F\u62C9",
+    cherry: "\u6A31\u6843",
+    maya: "\u739B\u96C5",
+    anna: "\u5B89\u5A1C",
+    mia: "\u7C73\u5A05",
+    rose: "\u73AB\u7470",
+    luna: "\u9732\u5A1C",
+    zoe: "\u4F50\u4F0A",
+    alice: "\u7231\u4E3D\u4E1D",
+    sarah: "\u838E\u62C9",
+    laura: "\u52B3\u62C9",
+    fiona: "\u83F2\u5965\u5A1C",
+    maria: "\u739B\u4E3D\u4E9A",
+    isabella: "\u4F0A\u838E\u8D1D\u62C9",
+    eva: "\u4F0A\u5A03",
+    mina: "\u7C73\u5A1C",
+    angela: "\u5B89\u5409\u62C9",
+    jenny: "\u73CD\u59AE",
+    tina: "\u8482\u5A1C",
+    chloe: "\u514B\u6D1B\u4F0A",
+    bella: "\u8D1D\u62C9",
+    samantha: "\u8428\u66FC\u838E",
+    sofia: "\u7D22\u83F2\u4E9A",
+    karen: "\u51EF\u4F26",
+    nina: "\u59AE\u5A1C",
+    mary: "\u739B\u4E3D",
+    yuna: "\u7531\u5948",
+    sara: "\u838E\u62C9",
+    yuria: "\u5C24\u91CC\u4E9A",
+    "huang le ran": "\u9EC4\u697D\u7136",
+    "li ke ke": "\u674E\u53EF\u53EF",
+    "gloria sol": "\u683C\u6D1B\u4E3D\u4E9A",
+    july: "\u4E03\u6708",
+    apr: "\u56DB\u6708",
+    "\u3051\u3093\u3051\u3093": "\u5065\u5065",
+    "\u3051\u3093\u7814": "\u5065\u7814",
+    "\u30EC\u30E0": "\u857E\u59C6",
+    "rissa may": "\u4E3D\u838E\xB7\u6885",
+    "lexi lore": "\u83B1\u514B\u897F\xB7\u6D1B\u5C14",
+    "emily willis": "\u827E\u7C73\u4E3D\xB7\u5A01\u5229\u65AF",
+    "\uC608\uD558": "\u827A\u590F",
+    "\uC815\uBBF8": "\u8D1E\u7F8E",
+    "\uBCF4\uB77C": "\u5B9D\u62C9",
+    "\uC190\uC608\uC740": "\u5B59\u827A\u6069",
+    "\uBBFC\uD558\uB9B0": "\u95F5\u590F\u7433",
+    "\uBC15\uC544\uB78C": "\u6734\u96C5\u5C9A",
+    "\uC9C0\uC601": "\u667A\u82F1",
+    "\uC5F0\uC6B0": "\u598D\u96E8",
+    "\uAC15\uC778\uACBD": "\u59DC\u4EC1\u4EAC",
+    "\uC774\uD558": "\u674E\u590F",
+    "\uC544\uB78C": "\u96C5\u5C9A"
+  };
+  function noteFor(t) {
+    return NOTE[t] ?? (t.startsWith("@") ? "\u5F15\u7528\u7528\u6237" : /[a-z]/i.test(t) ? "\u82F1\u6587\u540D" : /[\uac00-\ud7af]/.test(t) ? "\u97E9\u8BED\u540D" : "\u65E5\u6587\u540D");
+  }
+
   // src/grabber/image-grab-view.ts
   var import_jszip = __toESM(require_jszip_min(), 1);
 
@@ -3399,6 +3486,17 @@
             <span id="diffuse-users-total" class="status-text"></span>
           </div>
           <div class="user-list" id="diffuse-users"></div>
+          <div class="diffuse-section tag-cloud-section">
+            <div class="section-title">\u2464 \u6807\u7B7E\u4E91\uFF08\u70B9\u51FB\u6807\u7B7E\u81EA\u52A8\u68C0\u7D22\u76F8\u518C\uFF09</div>
+            <div class="row">
+              <span class="row-label">Top</span>
+              <input id="tag-n" class="num-input" value="100" type="number" min="20" max="500" style="width:60px">
+              <button id="tag-refresh" class="btn primary">\u751F\u6210\u6807\u7B7E\u4E91</button>
+              <span id="tag-status" class="status-text"></span>
+            </div>
+            <div class="tag-legend" id="tag-legend"></div>
+            <div class="tag-cloud" id="tag-cloud"></div>
+          </div>
         </div>
         <div class="diffuse-section">
           <div class="section-title">\u2462 \u76F8\u518C\u5173\u952E\u8BCD\u68C0\u7D22\uFF08\u7EAF\u672C\u5730\u5339\u914D\uFF09</div>
@@ -4090,6 +4188,74 @@
         searchPage++;
         renderSearchPage();
       }
+    });
+    const tagStatus = root.querySelector("#tag-status");
+    const tagCloudEl = root.querySelector("#tag-cloud");
+    const tagLegendEl = root.querySelector("#tag-legend");
+    const tagNInput = root.querySelector("#tag-n");
+    const TAG_COLOR = {
+      japanese: "#4a9eff",
+      korean: "#c792ea",
+      theme: "#7bc47f",
+      clothes: "#e07ab5",
+      brand: "#e8a03a",
+      english: "#9aa5b1",
+      at: "#5ac8d8"
+    };
+    const TAG_LABEL = {
+      japanese: "\u6F14\u5458",
+      korean: "\u97E9\u8BED",
+      theme: "\u4E3B\u9898",
+      clothes: "\u670D\u88C5",
+      brand: "\u54C1\u724C",
+      english: "\u82F1\u6587",
+      at: "\u5F15\u7528"
+    };
+    async function refreshTagCloud() {
+      const topN = Math.max(20, Math.min(500, Number(tagNInput?.value) || 100));
+      setStatus(tagStatus, "\u7EDF\u8BA1\u4E2D\u2026");
+      const res = await sendMessage({ type: "IMG_TAG_GET", topN });
+      if (!res.ok) {
+        setStatus(tagStatus, `\u6807\u7B7E\u4E91\u5931\u8D25\uFF1A${res.error}`, true);
+        return;
+      }
+      if (!res.tags) {
+        setStatus(tagStatus, "\u6807\u7B7E\u4E91\u5931\u8D25\uFF1A\u65E0\u6570\u636E", true);
+        return;
+      }
+      const tags = res.tags;
+      if (tags.length === 0) {
+        setStatus(tagStatus, "\u6682\u65E0\u6807\u7B7E\uFF08\u9700\u5148\u786E\u8BA4\u8BC4\u5206\u8865\u76F8\u518C\u540D\uFF09", true);
+        if (tagCloudEl) tagCloudEl.innerHTML = "";
+        return;
+      }
+      const catCount = {};
+      for (const t of tags) catCount[t.c] = (catCount[t.c] ?? 0) + 1;
+      if (tagLegendEl) {
+        tagLegendEl.innerHTML = Object.entries(catCount).map(([c, n]) => `<span style="color:${TAG_COLOR[c]}">\u25A0 ${TAG_LABEL[c] ?? c} ${n}</span>`).join("");
+      }
+      const maxAlbums = tags[0]?.albums ?? 1;
+      if (tagCloudEl) {
+        tagCloudEl.innerHTML = tags.map((x) => {
+          const isCjk = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(x.t);
+          const label = isCjk ? x.t : `${x.t}\uFF08${noteFor(x.t)}\uFF09`;
+          const size = 13 + Math.round(x.albums / maxAlbums * 26);
+          return `<span class="tag" data-tag="${x.t}" data-albums="${x.albums}" data-users="${x.users}" style="font-size:${size}px;color:${TAG_COLOR[x.c] || "#999"}" title="${x.t} \xB7 ${x.albums}\u76F8\u518C \xB7 ${x.users}\u4EBA">${label}</span>`;
+        }).join("");
+      }
+      setStatus(tagStatus, `\u5DF2\u751F\u6210 ${tags.length} \u4E2A\u6807\u7B7E\uFF08\u76F8\u518C\u226510 \u4E14 \u7528\u6237\u22652\uFF09`);
+    }
+    root.querySelector("#tag-refresh")?.addEventListener("click", () => void refreshTagCloud());
+    tagNInput?.addEventListener("change", () => void refreshTagCloud());
+    tagCloudEl?.addEventListener("click", (ev) => {
+      const el = ev.target.closest(".tag");
+      if (!el) return;
+      const tag = el.dataset.tag;
+      if (!tag) return;
+      searchKeywordsInput.value = tag;
+      setStatus(tagStatus, `\u5DF2\u586B\u5165\u5173\u952E\u8BCD\u300C${tag}\u300D\uFF0C\u68C0\u7D22\u4E2D\u2026`);
+      void runSearch();
+      searchResultsEl?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
     const localStatus = root.querySelector("#local-status");
     const dbImportFile = root.querySelector("#db-import-file");
@@ -4828,7 +4994,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260811150838" : "dev";
+  var BUILD_TIME = true ? "20260811161644" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

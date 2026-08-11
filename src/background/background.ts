@@ -10,6 +10,7 @@ import { DownloadManager, arrayBufferToBase64, fetchImageBytes } from '../lib/do
 import { DiffuseEngine } from './imgbb-diffuse'
 import { emptyDb, loadDb, mergeInDegree, mergeDb, dbSummary, inDegreeDist, unconfirmedCandidates, unconfirmedCount, confirmedScored, matchAlbums, scoreTop, degreeTop, albumTop, resetConfirmations, PRODUCER_DB_KEY } from '../lib/producer-db'
 import { normalizeConfig, pullDb, pushDb, GITHUB_CONFIG_KEY } from '../lib/github-sync'
+import { computeTags } from '../lib/tag-extract'
 import type { GithubConfig } from '../lib/github-sync'
 import { parseAlbumItems, parseAlbumNextPage } from '../lib/imgbb-parse'
 import type { ProducerDb } from '../lib/producer-db'
@@ -565,6 +566,12 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       await storageSet(PRODUCER_DB_KEY, producerDb)
       logger.info('diffuse', '确认状态已重置（保留入度），需重新确认评分')
       return { ok: true, total: Object.keys(producerDb.entries).length }
+    }
+    case 'IMG_TAG_GET': {
+      await producerDbReady
+      const tags = computeTags(Object.values(producerDb.entries), message.topN ?? 100)
+      logger.info('tag', '标签云统计完成', { tags: tags.length, topN: message.topN ?? 100 })
+      return { ok: true, tags }
     }
     case 'IMG_DB_IMPORT': {
       await producerDbReady

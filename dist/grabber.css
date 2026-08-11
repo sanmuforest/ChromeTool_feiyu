@@ -814,11 +814,50 @@ body {
 }
 
 /* 检索结果（FP-005 模块 2） */
+/* 库构成行（FP-005） */
 .db-composition {
   font-size: 12px;
   color: #9bb;
   padding: 2px 0;
 }
+
+/* 标签云（FP-006） */
+.tag-cloud-section {
+  margin-top: 4px;
+}
+
+.tag-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: #888;
+}
+
+.tag-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 10px;
+  background: #17191d;
+  border: 1px solid #2a2e33;
+  border-radius: 8px;
+  min-height: 60px;
+}
+
+.tag-cloud .tag {
+  cursor: pointer;
+  line-height: 1.5;
+  transition: transform 0.1s;
+}
+
+.tag-cloud .tag:hover {
+  transform: scale(1.12);
+  text-shadow: 0 0 8px currentColor;
+}
+
 
 /* 三组排行（得分/入度/相册数）横向并排 */
 .rank-groups {
