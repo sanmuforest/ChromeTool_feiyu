@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>浏览器插件</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="header">
+    <div class="title-row">
+      <h1 id="app-name">浏览器插件</h1>
+      <span id="app-version" class="version">v0.0.0</span>
+    </div>
+    <div class="level-row">
+      <label for="level-select">日志等级</label>
+      <select id="level-select">
+        <option value="debug">debug（详细）</option>
+        <option value="info" selected>info（默认）</option>
+        <option value="warn">warn</option>
+        <option value="error">error</option>
+      </select>
+    </div>
+  </header>
+
+  <section class="filter-bar">
+    <span class="filter-label">过滤</span>
+    <button data-filter="all" class="chip active">全部</button>
+    <button data-filter="debug" class="chip">debug</button>
+    <button data-filter="info" class="chip">info</button>
+    <button data-filter="warn" class="chip warn">warn</button>
+    <button data-filter="error" class="chip error">error</button>
+  </section>
+
+  <section class="actions">
+    <button id="btn-refresh" class="btn">刷新</button>
+    <button id="btn-clear" class="btn danger">清空</button>
+    <button id="btn-copy" class="btn">复制</button>
+    <button id="btn-export" class="btn">导出</button>
+  </section>
+
+  <main id="log-list" class="log-list"></main>
+  <div id="empty-tip" class="empty-tip">暂无日志。请操作插件后点「刷新」。</div>
+
+  <footer class="footer">
+    <span id="log-count"></span>
+    <span class="hint">复制/导出后贴给 pi 即可定位问题</span>
+  </footer>
+
+  <script src="js/popup.js"></script>
+</body>
+</html>

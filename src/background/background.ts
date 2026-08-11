@@ -7,6 +7,12 @@
 // 注意：SW 生命周期短、无 DOM，状态持久化到 chrome.storage（内存 Map 可重建）
 
 import { DownloadManager, arrayBufferToBase64, fetchImageBytes } from '../lib/downloader'
+import { DiffuseEngine } from './imgbb-diffuse'
+import { emptyDb, loadDb, mergeInDegree, mergeDb, dbSummary, inDegreeDist, topList, unconfirmedCandidates, unconfirmedCount, confirmedScored, matchAlbums, PRODUCER_DB_KEY } from '../lib/producer-db'
+import { normalizeConfig, pullDb, pushDb, GITHUB_CONFIG_KEY } from '../lib/github-sync'
+import type { GithubConfig } from '../lib/github-sync'
+import { parseAlbumItems } from '../lib/imgbb-parse'
+import type { ProducerDb } from '../lib/producer-db'
 import { appendLog, clearEntries, getEntries, getLevel, initLogger, setLevel } from '../lib/logger'
 import { sendToTab, type ImgResultKind, type Message, type MessageResponse } from '../lib/messages'
 import { storageGet, storageSet } from '../lib/storage'
@@ -50,6 +56,12 @@ void storageGet<number>('dl_concurrency').then((n) => {
   if (typeof n === 'number' && n > 0) downloadManager.setConcurrency(n)
 })
 
+// 启动时恢复生产者库（SW 重启后保持，FP-005）
+void storageGet<unknown>(PRODUCER_DB_KEY).then((raw) => {
+  producerDb = loadDb(raw)
+  logger.info('diffuse', '生产者库已恢复', { total: Object.keys(producerDb.entries).length })
+})
+
 chrome.downloads.onChanged.addListener((delta) => {
   downloadManager.handleChanged(delta)
 })
@@ -59,6 +71,40 @@ chrome.downloads.onChanged.addListener((delta) => {
 const imgbb = new ImgbbService()
 /** 关注墙用户列表缓存（按 用户名|方向 缓存，避免每批重复抓取） */
 const followingUsersCache = new Map<string, import('../lib/types').ImgbbUser[]>()
+
+// ---------- 扩散引擎 + 生产者库（FP-005） ----------
+
+const diffuse = new DiffuseEngine()
+let producerDb: ProducerDb = emptyDb()
+/** 检索候选（IMG_SEARCH_START 生成，SW 重启后需重新 start） */
+let searchCandidates: import('../lib/types').ProducerEntry[] = []
+let searchCursor = 0
+let searchKeywords: string[] = []
+/** 扩散状态持久化键（storage.session：SW 休眠/重启不丢，不写磁盘） */
+const DIFFUSE_STATE_KEY = 'diffuse_state'
+
+/** 消息处理前恢复扩散状态（SW 重启后续跑） */
+async function ensureDiffuseRestored(): Promise<void> {
+  try {
+    const r = await chrome.storage.session.get(DIFFUSE_STATE_KEY)
+    const state = r[DIFFUSE_STATE_KEY] as import('./imgbb-diffuse').DiffusePersistState | undefined
+    if (state && Array.isArray(state.queue) && !diffuse.isActive()) {
+      diffuse.restore(state)
+      logger.info('diffuse', '扩散状态已从 session 恢复', { queueSize: state.queue.length, visited: state.visited.length })
+    }
+  } catch {
+    // session 存储不可用（极端情况）静默，下次扩散重新开始
+  }
+}
+
+/** 扩散状态持久化 */
+async function saveDiffuseState(): Promise<void> {
+  try {
+    await chrome.storage.session.set({ [DIFFUSE_STATE_KEY]: diffuse.save() })
+  } catch {
+    // 忽略：session 存储失败不影响运行
+  }
+}
 
 // ---------- buondua 适配器服务（FP-004） ----------
 
@@ -413,6 +459,199 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
         await pushImgbbResult(message.srcTabId, 'following', [], true, String(err))
       }
       return { ok: true }
+    }
+
+    // ---- 扩散检索（FP-005） ----
+    case 'IMG_DIFFUSE_START': {
+      diffuse.start(message.startUser)
+      await saveDiffuseState()
+      return { ok: true, snapshot: diffuse.snapshot() }
+    }
+    case 'IMG_DIFFUSE_BATCH': {
+      await ensureDiffuseRestored()
+      if (diffuse.is429Throttled) {
+        logger.warn('diffuse', '连续 429，已阻止继续扩散，请稍后再试')
+        return { ok: false, error: '连续 429 限流，请等待 30 秒后再继续' }
+      }
+      const result = await diffuse.processBatch(message.batchSize, message.concurrency, message.intervalMs)
+      await saveDiffuseState()
+      const snapshot = diffuse.snapshot()
+      // 本批入度增量立即合并入本地库（起点 = 本次起点用户）并持久化（防 SW 重启丢失）
+      if (Object.keys(result.inDegreeDelta).length > 0) {
+        producerDb = mergeInDegree(producerDb, result.inDegreeDelta, snapshot.startUser)
+        await storageSet(PRODUCER_DB_KEY, producerDb)
+      }
+      return { ok: true, result, snapshot }
+    }
+    case 'IMG_DIFFUSE_PROGRESS': {
+      await ensureDiffuseRestored()
+      return { ok: true, snapshot: diffuse.snapshot() }
+    }
+    case 'IMG_DB_GET': {
+      const sum = dbSummary(producerDb)
+      const dist = inDegreeDist(producerDb)
+      const topUsers = topList(producerDb, 200)
+      return { ok: true, db: producerDb, total: sum.total, confirmed: sum.confirmed, producers: sum.producers, maxInDegree: sum.maxInDegree, dist, topUsers }
+    }
+    case 'IMG_DB_SAVE': {
+      await storageSet(PRODUCER_DB_KEY, producerDb)
+      const sum = dbSummary(producerDb)
+      logger.info('diffuse', '生产者库已保存', { total: sum.total, source: message.source })
+      return { ok: true, total: sum.total, confirmed: sum.confirmed, producers: sum.producers, maxInDegree: sum.maxInDegree }
+    }
+    case 'IMG_DB_CLEAR': {
+      producerDb = emptyDb()
+      await storageSet(PRODUCER_DB_KEY, producerDb)
+      logger.info('diffuse', '生产者库已清空')
+      return { ok: true, total: 0 }
+    }
+    case 'IMG_DB_EXPORT': {
+      return { ok: true, json: JSON.stringify(producerDb, null, 1) }
+    }
+    case 'IMG_DB_IMPORT': {
+      const imported = loadDb(message.db)
+      const before = Object.keys(producerDb.entries).length
+      producerDb = mergeDb(producerDb, imported)
+      await storageSet(PRODUCER_DB_KEY, producerDb)
+      const after = Object.keys(producerDb.entries).length
+      const sum = dbSummary(producerDb)
+      logger.info('diffuse', '数据表已导入合并', { before, after, imported: Object.keys(imported.entries).length })
+      return {
+        ok: true,
+        total: after,
+        confirmed: sum.confirmed,
+        producers: sum.producers,
+        maxInDegree: sum.maxInDegree,
+        github: { message: `导入合并：${before} → ${after}` },
+      }
+    }
+
+    // ---- 确认+评分（FP-005 模块 2）：抓 albums 补相册名 → 回写库 ----
+    case 'IMG_SCORE_BATCH': {
+      const candidates = unconfirmedCandidates(producerDb, message.batchSize, message.order ?? 'inDegree', message.w1, message.w2)
+      if (candidates.length === 0) {
+        return { ok: true, score: { processed: 0, withAlbums: 0, zeroAlbums: 0, failed: 0, done: true } }
+      }
+      let withAlbums = 0
+      let zeroAlbums = 0
+      let failed = 0
+      let cursor = 0
+      const updated: Record<string, import('../lib/types').ProducerEntry> = {}
+      const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+      const worker = async (): Promise<void> => {
+        while (true) {
+          const idx = cursor++
+          if (idx >= candidates.length) return
+          const c = candidates[idx]
+          await sleep(message.intervalMs)
+          try {
+            const html = await imgbb.fetchHtml(`https://${c.username}.imgbb.com/albums`)
+            const albums = parseAlbumItems(html)
+            updated[c.username] = {
+              ...c,
+              albumCount: albums.length,
+              albumsChecked: true,
+              albums: albums.map((a) => ({ name: a.name, url: a.url })),
+            }
+            if (albums.length > 0) withAlbums++
+            else zeroAlbums++
+          } catch (err) {
+            failed++
+            logger.warn('score', 'albums 确认失败（跳过）', { user: c.username, error: String(err) })
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(message.concurrency, candidates.length) }, () => worker()))
+      const entries = { ...producerDb.entries }
+      for (const [u, e] of Object.entries(updated)) entries[u] = e
+      producerDb = { ...producerDb, updatedAt: Date.now(), entries }
+      // 持久化：防 SW 重启丢失确认数据（此前仅存内存导致检索 0 候选）
+      await storageSet(PRODUCER_DB_KEY, producerDb)
+      const unconfirmed = unconfirmedCount(producerDb)
+      logger.info('score', '确认批次完成', { processed: candidates.length, withAlbums, zeroAlbums, failed, unconfirmed })
+      return {
+        ok: true,
+        score: { processed: candidates.length, withAlbums, zeroAlbums, failed, done: unconfirmed === 0 },
+        unconfirmed,
+      }
+    }
+
+    // ---- 区间检索（FP-005 模块 2）：纯本地评分区间 + 关键词匹配（零请求） ----
+    case 'IMG_SEARCH_START': {
+      const scored = confirmedScored(producerDb, message.w1, message.w2)
+      const from = Math.min(scored.length, Math.floor((scored.length * message.fromPct) / 100))
+      const to = Math.min(scored.length, Math.floor((scored.length * message.toPct) / 100))
+      searchCandidates = scored.slice(from, to)
+      searchCursor = 0
+      searchKeywords = message.keywords.map((k) => k.toLowerCase()).filter(Boolean)
+      const batch = searchCandidates.slice(0, message.batchSize)
+      searchCursor = batch.length
+      const matches = batch
+        .map((c) => ({ username: c.username, inDegree: c.inDegree, albums: matchAlbums(c, searchKeywords) }))
+        .filter((m) => m.albums.length > 0)
+      const done = searchCursor >= searchCandidates.length
+      logger.info('search', '检索启动', {
+        keywords: searchKeywords,
+        range: `0~${message.toPct}%`,
+        candidates: searchCandidates.length,
+        hits: matches.length,
+      })
+      return { ok: true, search: { total: searchCandidates.length, processed: batch.length, matches, done }, unconfirmed: unconfirmedCount(producerDb) }
+    }
+    case 'IMG_SEARCH_BATCH': {
+      const batch = searchCandidates.slice(searchCursor, searchCursor + message.batchSize)
+      searchCursor += batch.length
+      const matches = batch
+        .map((c) => ({ username: c.username, inDegree: c.inDegree, albums: matchAlbums(c, searchKeywords) }))
+        .filter((m) => m.albums.length > 0)
+      const done = searchCursor >= searchCandidates.length
+      return { ok: true, search: { total: searchCandidates.length, processed: batch.length, matches, done } }
+    }
+
+    // ---- GitHub 同步（FP-005，手动触发） ----
+    case 'IMG_GITHUB_GET_CONFIG': {
+      const cfg = normalizeConfig(await storageGet<GithubConfig>(GITHUB_CONFIG_KEY))
+      return {
+        ok: true,
+        config: cfg ? { repo: cfg.repo, branch: cfg.branch, configured: true } : { repo: '', branch: 'main', configured: false },
+      }
+    }
+    case 'IMG_GITHUB_SAVE_CONFIG': {
+      const cfg = normalizeConfig({ repo: message.repo, token: message.token, branch: message.branch })
+      if (!cfg) return { ok: false, error: '仓库与 token 不能为空' }
+      await storageSet(GITHUB_CONFIG_KEY, cfg)
+      logger.info('github', '同步配置已保存', { repo: cfg.repo, branch: cfg.branch })
+      return { ok: true }
+    }
+    case 'IMG_GITHUB_PUSH': {
+      try {
+        const cfg = normalizeConfig(await storageGet<GithubConfig>(GITHUB_CONFIG_KEY))
+        if (!cfg) return { ok: false, error: '未配置 GitHub，请先保存仓库与 token' }
+        // 先拉取拿远程 sha（远程不存在则创建），再推送覆盖
+        const remote = await pullDb(cfg)
+        const res = await pushDb(cfg, producerDb, remote.sha)
+        logger.info('github', '生产者库已推送', { repo: cfg.repo, total: Object.keys(producerDb.entries).length })
+        return { ok: true, github: { message: `${res.message}（库 ${Object.keys(producerDb.entries).length} 用户）` } }
+      } catch (err) {
+        logger.error('github', '推送失败', String(err))
+        return { ok: false, error: String(err) }
+      }
+    }
+    case 'IMG_GITHUB_PULL': {
+      try {
+        const cfg = normalizeConfig(await storageGet<GithubConfig>(GITHUB_CONFIG_KEY))
+        if (!cfg) return { ok: false, error: '未配置 GitHub，请先保存仓库与 token' }
+        const remote = await pullDb(cfg)
+        if (remote.db) {
+          producerDb = mergeDb(producerDb, remote.db)
+          await storageSet(PRODUCER_DB_KEY, producerDb)
+          logger.info('github', '生产者库已拉取合并', { total: Object.keys(producerDb.entries).length })
+        }
+        return { ok: true, github: { message: `${remote.message}（库 ${Object.keys(producerDb.entries).length} 用户）` } }
+      } catch (err) {
+        logger.error('github', '拉取失败', String(err))
+        return { ok: false, error: String(err) }
+      }
     }
 
     // ---- buondua 适配器（FP-004） ----

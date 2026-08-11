@@ -13,6 +13,11 @@ import type {
   ImgbbAlbum,
   ImgbbFollowingUser,
   ImgbbImage,
+  DiffuseBatchResult,
+  DiffuseSnapshot,
+  ScoreBatchResult,
+  SearchBatchResult,
+  SearchMatch,
 } from '../lib/types'
 import { createGrabView, type GrabViewHandle } from './image-grab-view'
 
@@ -62,6 +67,7 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
         <button data-sub="album" class="adapter-tab">相册抓取</button>
         <button data-sub="albums" class="adapter-tab">相册分析</button>
         <button data-sub="following" class="adapter-tab">关注墙</button>
+        <button data-sub="diffuse" class="adapter-tab">扩散检索</button>
       </div>
 
       <div id="sub-home" class="adapter-panel active">
@@ -115,6 +121,88 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
           <span id="following-status" class="status-text"></span>
         </div>
         <div class="following-list" id="following-list"></div>
+      </div>
+
+      <div id="sub-diffuse" class="adapter-panel">
+        <div class="diffuse-section">
+          <div class="section-title">① 广域筛选：following 扩散 → 入度统计</div>
+          <div class="row">
+            <input id="diffuse-user" class="text-input diffuse-user-input" placeholder="起点用户名">
+            <button id="diffuse-start" class="btn primary">开始扩散</button>
+            <button id="diffuse-next" class="btn">下一批(50)</button>
+            <span id="diffuse-status" class="status-text"></span>
+          </div>
+          <div class="row">
+            <span class="row-label">实时</span>
+            <span id="diffuse-progress" class="status-text"></span>
+            <span class="row-label">429</span>
+            <span id="diffuse-429" class="status-text"></span>
+          </div>
+          <div class="batch-progress-row">
+            <div class="progress-bar thin"><div id="diffuse-batch-fill" class="progress-fill"></div></div>
+            <span id="diffuse-batch-text" class="progress-text"></span>
+          </div>
+          <div class="diffuse-log" id="diffuse-log"></div>
+          <table class="batch-history" id="diffuse-history">
+            <thead><tr><th>批</th><th>处理</th><th>新增</th><th>失败</th><th>耗时</th><th>均请求</th><th>入度+</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="diffuse-section">
+          <div class="section-title">② 生产者库：用户相册统计与评分</div>
+          <div class="row">
+            <button id="db-save" class="btn">合并入库</button>
+            <button id="db-load" class="btn">读取</button>
+            <button id="db-clear" class="btn danger">清空</button>
+            <span id="db-status" class="status-text"></span>
+          </div>
+          <div class="row">
+            <span class="row-label">相册统计</span>
+            <button id="score-start" class="btn">确认评分</button>
+            <button id="score-next" class="btn">下一批确认</button>
+            <label class="radio-label"><input type="radio" name="score-order" value="inDegree" checked>入度优先</label>
+            <label class="radio-label"><input type="radio" name="score-order" value="newest">最新优先</label>
+            <label class="radio-label"><input type="radio" name="score-order" value="score">评分优先</label>
+            <label class="radio-label">每批 <select id="score-batch" class="num-input"><option value="50" selected>50</option><option value="100">100</option><option value="200">200</option></select></label>
+            <label class="radio-label">入度权重 <input id="search-w1" class="num-input" value="60" type="number" min="0" max="100" style="width:48px">%</label>
+            <span id="score-status" class="status-text"></span>
+          </div>
+          <div class="row">
+            <span class="row-label">会话</span>
+            <span id="diffuse-users-total" class="status-text"></span>
+            <span class="row-label">库</span>
+            <span id="db-users-total" class="status-text"></span>
+          </div>
+          <div id="db-composition" class="db-composition"></div>
+          <div class="chart-block">
+            <div class="chart-title">入度分布</div>
+            <div class="bar-chart" id="db-dist"></div>
+          </div>
+          <div class="user-list" id="diffuse-users"></div>
+          <div class="user-list" id="db-users"></div>
+        </div>
+        <div class="diffuse-section">
+          <div class="section-title">③ 相册关键词检索（纯本地匹配）</div>
+          <div class="row">
+            <input id="search-keywords" class="text-input" placeholder="关键词，逗号分隔">
+            <label class="radio-label">取前 <input id="search-pct" type="range" min="1" max="100" value="100" class="pct-range"> <span id="search-pct-val">100</span>%</label>
+            <button id="search-start" class="btn primary">区间检索</button>
+            <button id="search-next" class="btn">下一批结果</button>
+            <span id="search-status" class="status-text"></span>
+          </div>
+          <div class="search-results" id="search-results"></div>
+        </div>
+        <div class="diffuse-section">
+          <div class="section-title">④ 本地数据表（导出 / 导入合并 JSON）</div>
+          <div class="row">
+            <button id="db-export" class="btn primary">导出数据表</button>
+            <button id="db-import" class="btn">导入合并</button>
+            <input id="db-import-file" type="file" accept=".json" style="display:none">
+            <span class="row-label">提示</span>
+            <span class="status-text">导出为 imgbb-producers.json，可保存到本工程目录</span>
+            <span id="local-status" class="status-text"></span>
+          </div>
+        </div>
       </div>
     </div>
   `
@@ -425,6 +513,471 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
       renderFollowing(followingList, [])
       setStatus(followingStatus, '方向已切换，请点击「开始分析」')
     })
+  })
+
+  // ---------- 事件：扩散检索（FP-005） ----------
+  const diffuseStatus = root.querySelector('#diffuse-status')
+  const diffuseProgress = root.querySelector('#diffuse-progress')
+  const diffuse429El = root.querySelector('#diffuse-429')
+  const diffuseUserInput = root.querySelector('#diffuse-user') as HTMLInputElement
+  const diffuseNextBtn = root.querySelector('#diffuse-next') as HTMLButtonElement | null
+  const diffuseBatchFill = root.querySelector('#diffuse-batch-fill') as HTMLElement | null
+  const diffuseBatchText = root.querySelector('#diffuse-batch-text') as HTMLElement | null
+  const diffuseHistoryBody = root.querySelector('#diffuse-history tbody') as HTMLElement | null
+  const diffuseLogEl = root.querySelector('#diffuse-log') as HTMLElement | null
+  const diffuseUsersEl = root.querySelector('#diffuse-users') as HTMLElement | null
+  const diffuseUsersTotal = root.querySelector('#diffuse-users-total') as HTMLElement | null
+  const dbUsersEl = root.querySelector('#db-users') as HTMLElement | null
+  const dbUsersTotal = root.querySelector('#db-users-total') as HTMLElement | null
+  const dbStatus = root.querySelector('#db-status')
+
+  const DIFFUSE_BATCH_SIZE = 50
+  const DIFFUSE_CONCURRENCY = 4
+  const DIFFUSE_INTERVAL_MS = 1000
+  const POLL_MS = 2000
+  const USER_LIST_LIMIT = 100 // 用户列表显示上限（避免 2s 全量重渲染卡顿）
+
+  // 前端会话状态
+  let batchCounter = 0
+  let pollTimer: ReturnType<typeof setInterval> | null = null
+  let lastLogLen = 0
+  const batchHistory: {
+    batch: number
+    processed: number
+    newUsers: number
+    failed: number
+    durationMs: number
+    avgRequestMs: number
+    inDegreeUsers: number
+  }[] = []
+
+  function stopPoll(): void {
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
+  }
+
+  function renderBatchProgress(snapshot: DiffuseSnapshot): void {
+    const total = snapshot.inBatchSize
+    const done = snapshot.inBatchProcessed
+    if (diffuseBatchFill && diffuseBatchText) {
+      const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
+      diffuseBatchFill.style.width = `${pct}%`
+      diffuseBatchText.textContent =
+        total > 0 ? `本批 ${done}/${total}（失败 ${snapshot.inBatchFailed}）` : '空闲'
+    }
+  }
+
+  /** 运行日志：增量追加 + 自动滚动（判断是否卡住） */
+  function renderDiffuseLog(logs: string[]): void {
+    if (!diffuseLogEl) return
+    for (let i = lastLogLen; i < logs.length; i++) {
+      const div = document.createElement('div')
+      div.textContent = logs[i]
+      if (logs[i].startsWith('✗')) div.className = 'log-fail'
+      else if (logs[i].startsWith('✓')) div.className = 'log-ok'
+      else div.className = 'log-info'
+      diffuseLogEl.appendChild(div)
+    }
+    lastLogLen = logs.length
+    // 保留最近 100 条 DOM
+    while (diffuseLogEl.children.length > 100) diffuseLogEl.removeChild(diffuseLogEl.firstChild!)
+    diffuseLogEl.scrollTop = diffuseLogEl.scrollHeight
+  }
+
+  /** 会话检索到的用户列表（实时） */
+  function renderSessionUsers(snapshot: DiffuseSnapshot): void {
+    if (diffuseUsersTotal) {
+      diffuseUsersTotal.textContent = `检索到 ${snapshot.userTotal} 个用户（显示前 ${USER_LIST_LIMIT}）`
+    }
+    if (!diffuseUsersEl) return
+    const list = snapshot.users.slice(0, USER_LIST_LIMIT)
+    diffuseUsersEl.innerHTML = list
+      .map(
+        (u, i) =>
+          `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="https://${u.username}.imgbb.com" target="_blank">${u.username}</a><span class="user-degree">入度 ${u.inDegree}</span></div>`,
+      )
+      .join('')
+  }
+
+  /** 库内用户列表 */
+  function renderDbUsers(users: { username: string; inDegree: number; url: string }[], total: number): void {
+    if (dbUsersTotal) dbUsersTotal.textContent = `库内 ${total} 个用户（显示前 ${USER_LIST_LIMIT}）`
+    if (!dbUsersEl) return
+    const list = users.slice(0, USER_LIST_LIMIT)
+    dbUsersEl.innerHTML = list
+      .map(
+        (u, i) =>
+          `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="${u.url}" target="_blank">${u.username}</a><span class="user-degree">入度 ${u.inDegree}</span></div>`,
+      )
+      .join('')
+  }
+
+  function renderDiffuse(snapshot?: DiffuseSnapshot, result?: DiffuseBatchResult): void {
+    if (diffuseProgress && snapshot) {
+      diffuseProgress.textContent = `已探索 ${snapshot.visitedTotal} · 队列 ${snapshot.queueSize} · 累计请求 ${snapshot.totalRequests}`
+    }
+    if (diffuse429El && snapshot) {
+      diffuse429El.textContent = snapshot.consecutive429 > 0 ? `×${snapshot.consecutive429}（限流中）` : '正常'
+      diffuse429El.classList.toggle('error', snapshot.consecutive429 >= 3)
+    }
+    if (snapshot) {
+      renderBatchProgress(snapshot)
+      renderDiffuseLog(snapshot.recentLog)
+      renderSessionUsers(snapshot)
+    }
+    if (diffuseStatus && result) {
+      const tail = result.done ? ' · 队列已耗尽' : ''
+      setStatus(
+        diffuseStatus,
+        `本批 ${result.processed} 人 · 新增 ${result.newUsers} · 失败 ${result.failed} · 耗时 ${(result.durationMs / 1000).toFixed(1)}s · 均请求 ${result.avgRequestMs}ms · 入度+${Object.keys(result.inDegreeDelta).length}${tail}`,
+      )
+    }
+  }
+
+  function pushBatchHistory(result: DiffuseBatchResult): void {
+    batchCounter++
+    batchHistory.push({
+      batch: batchCounter,
+      processed: result.processed,
+      newUsers: result.newUsers,
+      failed: result.failed,
+      durationMs: result.durationMs,
+      avgRequestMs: result.avgRequestMs,
+      inDegreeUsers: Object.keys(result.inDegreeDelta).length,
+    })
+    if (!diffuseHistoryBody) return
+    // 只保留最近 20 批
+    while (diffuseHistoryBody.children.length > 20) diffuseHistoryBody.removeChild(diffuseHistoryBody.firstChild!)
+    const tr = document.createElement('tr')
+    const h = batchHistory[batchHistory.length - 1]
+    tr.innerHTML = `<td>${h.batch}</td><td>${h.processed}</td><td>${h.newUsers}</td><td>${h.failed}</td><td>${(h.durationMs / 1000).toFixed(1)}s</td><td>${h.avgRequestMs}ms</td><td>${h.inDegreeUsers}</td>`
+    diffuseHistoryBody.appendChild(tr)
+  }
+
+  function renderDist(dist?: { label: string; count: number }[]): void {
+    const el = root.querySelector('#db-dist')
+    if (!el || !dist) return
+    const max = Math.max(...dist.map((d) => d.count), 1)
+    el.innerHTML = dist
+      .map((d) => {
+        const h = Math.max(4, Math.round((d.count / max) * 100))
+        return `<div class="bar-col" title="${d.label}次：${d.count}人"><div class="bar" style="height:${h}%"></div><span class="bar-label">${d.label}</span></div>`
+      })
+      .join('')
+  }
+
+  async function runDiffuseBatch(): Promise<void> {
+    if (!diffuseNextBtn) return
+    diffuseNextBtn.disabled = true
+    setStatus(diffuseStatus, '扩散中（并发 4 · 间隔 1s）…')
+    // 批内轮询：实时刷新本批进度 + 运行日志 + 用户列表
+    stopPoll()
+    pollTimer = setInterval(() => {
+      void sendMessage<{ ok: true; snapshot: DiffuseSnapshot } | { ok: false; error: string }>({ type: 'IMG_DIFFUSE_PROGRESS' }).then((res) => {
+        if (res.ok) {
+          renderBatchProgress(res.snapshot)
+          renderDiffuseLog(res.snapshot.recentLog)
+          renderSessionUsers(res.snapshot)
+        }
+      })
+    }, POLL_MS)
+    const res = await sendMessage<
+      { ok: true; result: DiffuseBatchResult; snapshot: DiffuseSnapshot } | { ok: false; error: string }
+    >({
+      type: 'IMG_DIFFUSE_BATCH',
+      srcTabId,
+      batchSize: DIFFUSE_BATCH_SIZE,
+      concurrency: DIFFUSE_CONCURRENCY,
+      intervalMs: DIFFUSE_INTERVAL_MS,
+    })
+    stopPoll()
+    diffuseNextBtn.disabled = false
+    if (!res.ok) {
+      setStatus(diffuseStatus, `扩散失败：${res.error}`, true)
+      return
+    }
+    pushBatchHistory(res.result)
+    renderDiffuse(res.snapshot, res.result)
+    if (res.result.done) setStatus(diffuseStatus, '队列已耗尽，扩散完成（可点「合并入库」保存）')
+  }
+
+  root.querySelector('#diffuse-start')?.addEventListener('click', async () => {
+    const user = diffuseUserInput.value.trim().toLowerCase()
+    if (!user) {
+      setStatus(diffuseStatus, '请填写起点用户名', true)
+      return
+    }
+    if (!(await ensureHostPermission())) {
+      setStatus(diffuseStatus, '需要授权访问 imgbb（<all_urls>）后才能扩散', true)
+      return
+    }
+    // 重置前端会话状态
+    batchCounter = 0
+    batchHistory.length = 0
+    lastLogLen = 0
+    if (diffuseHistoryBody) diffuseHistoryBody.innerHTML = ''
+    if (diffuseLogEl) diffuseLogEl.innerHTML = ''
+    if (diffuseUsersEl) diffuseUsersEl.innerHTML = ''
+    setStatus(diffuseStatus, '已重置扩散状态机，开始第一批…')
+    const res = await sendMessage<{ ok: true; snapshot: DiffuseSnapshot } | { ok: false; error: string }>({
+      type: 'IMG_DIFFUSE_START',
+      srcTabId,
+      startUser: user,
+    })
+    if (!res.ok) {
+      setStatus(diffuseStatus, `启动失败：${res.error}`, true)
+      return
+    }
+    renderDiffuse(res.snapshot)
+    void runDiffuseBatch()
+  })
+
+  diffuseNextBtn?.addEventListener('click', () => void runDiffuseBatch())
+
+  root.querySelector('#db-save')?.addEventListener('click', async () => {
+    const source = diffuseUserInput.value.trim().toLowerCase() || 'manual'
+    const res = await sendMessage<
+      { ok: true; total: number; confirmed: number; producers: number; maxInDegree: number } | { ok: false; error: string }
+    >({ type: 'IMG_DB_SAVE', source })
+    if (!res.ok) {
+      setStatus(dbStatus, `保存失败：${res.error}`, true)
+      return
+    }
+    setStatus(dbStatus, `已保存入库（起点 ${source}），库内 ${res.total} 用户`)
+    // 保存后刷新统计面板
+    void loadDbStats()
+  })
+
+  async function loadDbStats(): Promise<void> {
+    const res = await sendMessage<
+      {
+        ok: true
+        db: import('../lib/producer-db').ProducerDb
+        total: number
+        confirmed: number
+        producers: number
+        maxInDegree: number
+        dist?: { label: string; count: number }[]
+        topUsers?: { username: string; inDegree: number; url: string }[]
+      } | { ok: false; error: string }
+    >({ type: 'IMG_DB_GET' })
+    if (!res.ok) {
+      setStatus(dbStatus, `读取失败：${res.error}`, true)
+      return
+    }
+    renderDist(res.dist)
+    renderDbUsers(res.topUsers ?? [], res.total)
+    // 库构成：可检索 = 库 − 未确认 − 零相册
+    const unconfirmed = res.total - res.confirmed
+    const zeroAlbums = res.confirmed - res.producers
+    const compEl = root.querySelector('#db-composition')
+    if (compEl) {
+      compEl.textContent = `可检索 ${res.producers} = 库 ${res.total} − 未确认 ${unconfirmed} − 零相册 ${zeroAlbums}`
+    }
+    setStatus(dbStatus, `已读取本地库，库内 ${res.total} 用户`)
+  }
+
+  root.querySelector('#db-load')?.addEventListener('click', () => void loadDbStats())
+
+  root.querySelector('#db-clear')?.addEventListener('click', async () => {
+    const res = await sendMessage<{ ok: true } | { ok: false; error: string }>({ type: 'IMG_DB_CLEAR' })
+    if (!res.ok) {
+      setStatus(dbStatus, `清空失败：${res.error}`, true)
+      return
+    }
+    if (dbUsersEl) dbUsersEl.innerHTML = ''
+    if (dbUsersTotal) dbUsersTotal.textContent = ''
+    renderDist([])
+    const compEl = root.querySelector('#db-composition')
+    if (compEl) compEl.textContent = ''
+    setStatus(dbStatus, '生产者库已清空')
+  })
+
+  // ---------- 事件：确认评分（② 区）+ 区间检索（③ 区） ----------
+  const scoreStatus = root.querySelector('#score-status')
+  const searchStatus = root.querySelector('#search-status')
+  const searchResultsEl = root.querySelector('#search-results') as HTMLElement | null
+  const searchKeywordsInput = root.querySelector('#search-keywords') as HTMLInputElement
+  const searchPctInput = root.querySelector('#search-pct') as HTMLInputElement
+  const searchPctVal = root.querySelector('#search-pct-val') as HTMLElement | null
+  const searchW1Input = root.querySelector('#search-w1') as HTMLInputElement
+  const searchNextBtn = root.querySelector('#search-next') as HTMLButtonElement | null
+  const scoreNextBtn = root.querySelector('#score-next') as HTMLButtonElement | null
+
+  searchPctInput?.addEventListener('input', () => {
+    if (searchPctVal) searchPctVal.textContent = searchPctInput.value
+  })
+
+  function renderScoreResult(score: ScoreBatchResult, unconfirmed: number): void {
+    setStatus(
+      scoreStatus,
+      `确认 ${score.processed} 人：有相册 ${score.withAlbums} · 零相册 ${score.zeroAlbums} · 失败 ${score.failed} · 剩余未确认 ${unconfirmed}${score.done ? '（全部确认完毕）' : ''}`,
+    )
+  }
+
+  function renderSearchResults(matches: SearchMatch[], append: boolean): void {
+    if (!searchResultsEl) return
+    if (!append) searchResultsEl.innerHTML = ''
+    if (matches.length === 0 && !append) {
+      searchResultsEl.innerHTML = '<div class="empty-tip">无命中</div>'
+      return
+    }
+    for (const m of matches) {
+      const block = document.createElement('div')
+      block.className = 'search-hit'
+      block.innerHTML = `<div class="search-user"><a href="https://${m.username}.imgbb.com" target="_blank">${m.username}</a><span class="user-degree">入度 ${m.inDegree}</span></div>`
+      for (const a of m.albums) {
+        const line = document.createElement('div')
+        line.className = 'search-album'
+        line.innerHTML = `<a href="${a.url}" target="_blank">${a.name}</a>`
+        block.appendChild(line)
+      }
+      searchResultsEl.appendChild(block)
+    }
+  }
+
+  async function runScoreBatch(): Promise<void> {
+    if (scoreNextBtn) scoreNextBtn.disabled = true
+    const orderEl = root.querySelector<HTMLInputElement>('input[name="score-order"]:checked')
+    const order = (orderEl?.value as 'inDegree' | 'newest' | 'score') || 'inDegree'
+    const batchSize = Number((root.querySelector('#score-batch') as HTMLSelectElement)?.value) || 50
+    const w1 = Math.max(0, Math.min(100, Number(searchW1Input.value) || 60)) / 100
+    const orderLabel = order === 'newest' ? '最新优先' : order === 'score' ? '评分优先' : '入度优先'
+    setStatus(scoreStatus, `确认评分中（${orderLabel} · 每批 ${batchSize} · 并发 4）…`)
+    const res = await sendMessage<
+      { ok: true; score: ScoreBatchResult; unconfirmed?: number } | { ok: false; error: string }
+    >({ type: 'IMG_SCORE_BATCH', batchSize, concurrency: 4, intervalMs: 1000, order, w1, w2: 1 - w1 })
+    if (scoreNextBtn) scoreNextBtn.disabled = false
+    if (!res.ok) {
+      setStatus(scoreStatus, `确认失败：${res.error}`, true)
+      return
+    }
+    renderScoreResult(res.score, res.unconfirmed ?? 0)
+    void loadDbStats() // 刷新库统计
+  }
+
+  root.querySelector('#score-start')?.addEventListener('click', async () => {
+    if (!(await ensureHostPermission())) {
+      setStatus(scoreStatus, '需要授权访问 imgbb（<all_urls>）后才能确认评分', true)
+      return
+    }
+    void runScoreBatch()
+  })
+  scoreNextBtn?.addEventListener('click', () => void runScoreBatch())
+
+  async function runSearch(start: boolean): Promise<void> {
+    if (searchNextBtn) searchNextBtn.disabled = true
+    const keywords = searchKeywordsInput.value.split(/[,，]/).map((k) => k.trim()).filter(Boolean)
+    if (keywords.length === 0) {
+      setStatus(searchStatus, '请填写关键词', true)
+      if (searchNextBtn) searchNextBtn.disabled = false
+      return
+    }
+    const toPct = Math.max(1, Math.min(100, Number(searchPctInput?.value) || 100))
+    const w1 = Math.max(0, Math.min(100, Number(searchW1Input.value) || 60)) / 100
+    if (start) {
+      setStatus(searchStatus, `检索中（取前 ${toPct}% · 权重 ${Math.round(w1 * 100)}/${100 - Math.round(w1 * 100)}）…`)
+      const res = await sendMessage<
+        { ok: true; search: SearchBatchResult; unconfirmed?: number } | { ok: false; error: string }
+      >({ type: 'IMG_SEARCH_START', keywords, fromPct: 0, toPct, w1, w2: 1 - w1, batchSize: 50 })
+      if (!res.ok) {
+        setStatus(searchStatus, `检索失败：${res.error}`, true)
+        if (searchNextBtn) searchNextBtn.disabled = false
+        return
+      }
+      if (res.search.total === 0) {
+        const un = res.unconfirmed ?? 0
+        setStatus(
+          searchStatus,
+          un > 0
+            ? `无可检索用户：库内还有 ${un} 个未确认，请先在②区点「确认评分」补相册数`
+            : '无可检索用户：库内已确认用户均无相册，请先扩散更多起点',
+          true,
+        )
+        if (searchNextBtn) searchNextBtn.disabled = false
+        return
+      }
+      renderSearchResults(res.search.matches, false)
+      setStatus(
+        searchStatus,
+        `候选 ${res.search.total} 人 · 本批命中 ${res.search.matches.length}${res.search.done ? ' · 全部完成' : ''}`,
+      )
+    } else {
+      const res = await sendMessage<{ ok: true; search: SearchBatchResult } | { ok: false; error: string }>({
+        type: 'IMG_SEARCH_BATCH',
+        batchSize: 50,
+      })
+      if (!res.ok) {
+        setStatus(searchStatus, `下一批失败：${res.error}`, true)
+        if (searchNextBtn) searchNextBtn.disabled = false
+        return
+      }
+      renderSearchResults(res.search.matches, true)
+      setStatus(
+        searchStatus,
+        `已处理 ${res.search.processed}/${res.search.total} · 本批命中 ${res.search.matches.length}${res.search.done ? ' · 全部完成' : ''}`,
+      )
+    }
+    if (searchNextBtn) searchNextBtn.disabled = false
+  }
+
+  root.querySelector('#search-start')?.addEventListener('click', () => void runSearch(true))
+  searchNextBtn?.addEventListener('click', () => void runSearch(false))
+
+  // ---------- 事件：本地数据表导出/导入（FP-005） ----------
+  const localStatus = root.querySelector('#local-status')
+  const dbImportFile = root.querySelector('#db-import-file') as HTMLInputElement | null
+
+  root.querySelector('#db-export')?.addEventListener('click', async () => {
+    setStatus(localStatus, '导出中…')
+    const res = await sendMessage<{ ok: true; json?: string } | { ok: false; error: string }>({ type: 'IMG_DB_EXPORT' })
+    if (!res.ok) {
+      setStatus(localStatus, `导出失败：${res.error}`, true)
+      return
+    }
+    if (!res.json) {
+      setStatus(localStatus, '导出失败：无数据', true)
+      return
+    }
+    const blob = new Blob([res.json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    try {
+      await chrome.downloads.download({ url, filename: 'imgbb-producers.json' })
+      setStatus(localStatus, '已导出 imgbb-producers.json（在下载目录，可移到工程内保存）')
+      logger.info('adapters', '数据表已导出', { bytes: blob.size })
+    } catch (err) {
+      setStatus(localStatus, `导出失败：${String(err)}`, true)
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+  })
+
+  root.querySelector('#db-import')?.addEventListener('click', () => {
+    dbImportFile?.click()
+  })
+
+  dbImportFile?.addEventListener('change', async () => {
+    const file = dbImportFile.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text) as unknown
+      const res = await sendMessage<
+        { ok: true; github?: { message: string }; total?: number } | { ok: false; error: string }
+      >({ type: 'IMG_DB_IMPORT', db: data })
+      if (!res.ok) {
+        setStatus(localStatus, `导入失败：${res.error}`, true)
+        return
+      }
+      setStatus(localStatus, res.github?.message ?? `导入成功，库内 ${res.total} 用户`)
+      void loadDbStats() // 刷新库统计
+    } catch (err) {
+      setStatus(localStatus, `文件解析失败：${String(err)}`, true)
+    } finally {
+      dbImportFile.value = ''
+    }
   })
 
   // ---------- 自动填充：从源网页 URL 识别 imgbb 场景（可重试） ----------

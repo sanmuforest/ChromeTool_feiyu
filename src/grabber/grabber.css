@@ -685,6 +685,288 @@ body {
   display: flex;
 }
 
+/* 扩散检索（FP-005）：分区与摘要 */
+.diffuse-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #333;
+  border-radius: 8px;
+  background: #1c1f24;
+}
+
+.diffuse-section .section-title {
+  font-weight: bold;
+  font-size: 13px;
+  color: #e8c06a;
+}
+
+.db-summary {
+  font-size: 12px;
+  color: #9bb;
+}
+
+/* 扩散检索：输入框固定宽度 + 运行日志 + 用户列表 */
+.diffuse-user-input {
+  width: 140px;
+}
+
+.diffuse-log {
+  max-height: 120px;
+  overflow-y: auto;
+  background: #101216;
+  border: 1px solid #2a2e33;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-family: monospace;
+  line-height: 1.5;
+}
+
+.diffuse-log .log-ok {
+  color: #7bc47f;
+}
+
+.diffuse-log .log-fail {
+  color: #e07070;
+}
+
+.diffuse-log .log-info {
+  color: #9bb;
+}
+
+.user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #2a2e33;
+  border-radius: 4px;
+  padding: 4px;
+  background: #101216;
+}
+
+.user-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 1px 2px;
+}
+
+.user-rank {
+  width: 20px;
+  color: #666;
+  text-align: right;
+  font-size: 11px;
+}
+
+.user-row a {
+  color: #4a9eff;
+  text-decoration: none;
+}
+
+.user-row a:hover {
+  text-decoration: underline;
+}
+
+.user-degree {
+  margin-left: auto;
+  color: #e8c06a;
+  font-size: 11px;
+}
+
+/* 检索结果（FP-005 模块 2） */
+.db-composition {
+  font-size: 12px;
+  color: #9bb;
+  padding: 2px 0;
+}
+.pct-range {
+  vertical-align: middle;
+  width: 120px;
+}
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.search-hit {
+  border: 1px solid #2a2e33;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: #17191d;
+}
+
+.search-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.search-user a {
+  color: #4a9eff;
+  font-weight: bold;
+  text-decoration: none;
+}
+
+.search-album a {
+  color: #9bb;
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.search-album a:hover {
+  color: #e8c06a;
+  text-decoration: underline;
+}
+
+/* 扩散检索：批内进度条 + 批次历史表 */
+.batch-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.progress-bar.thin {
+  flex: 1;
+  height: 6px;
+}
+
+.batch-history {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.batch-history th,
+.batch-history td {
+  border: 1px solid #333;
+  padding: 2px 6px;
+  text-align: center;
+}
+
+.batch-history th {
+  background: #24292e;
+  color: #e8c06a;
+}
+
+/* 统计卡 + 柱状图 + Top 列表 */
+.db-stats-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stat-card {
+  flex: 1;
+  min-width: 90px;
+  background: #17191d;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #9bb;
+  text-align: center;
+}
+
+.stat-card b {
+  display: block;
+  font-size: 18px;
+  color: #e8c06a;
+}
+
+.db-charts {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.chart-block {
+  flex: 1;
+  min-width: 200px;
+}
+
+.chart-title {
+  font-size: 12px;
+  color: #9bb;
+  margin-bottom: 4px;
+}
+
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 90px;
+  border-bottom: 1px solid #333;
+}
+
+.bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 2px;
+}
+
+.bar-col .bar {
+  width: 70%;
+  background: #4a9eff;
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+}
+
+.bar-col .bar-label {
+  font-size: 10px;
+  color: #888;
+}
+
+.top-users {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.top-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.top-rank {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #24292e;
+  color: #e8c06a;
+  text-align: center;
+  line-height: 18px;
+  font-size: 11px;
+}
+
+.top-user a {
+  color: #4a9eff;
+  text-decoration: none;
+}
+
+.top-user a:hover {
+  text-decoration: underline;
+}
+
+.top-degree {
+  margin-left: auto;
+  color: #888;
+}
+
 /* 共享抓取视图挂载点（用户主页/相册子场景） */
 .grab-view-host {
   flex: 1;

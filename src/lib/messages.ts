@@ -21,7 +21,12 @@ import type {
   BuonduaImage,
   BuonduaLinkItem,
   BuonduaTarget,
+  DiffuseBatchResult,
+  DiffuseSnapshot,
+  ScoreBatchResult,
+  SearchBatchResult,
 } from './types'
+import type { ProducerDb } from './producer-db'
 
 export type Message =
   // ---- 日志（FP-001，复用）----
@@ -68,6 +73,23 @@ export type Message =
   | { type: 'IMG_ANALYZE_FOLLOWING'; srcTabId: number; username: string; side: 'following' | 'followers' | 'both'; batchStart: number; batchSize: number }
   // ---- imgbb 适配器：bg → grabber 推送 ----
   | { type: 'IMG_RESULT'; kind: ImgResultKind; data: ImgbbImage[] | ImgbbAlbum[] | ImgbbFollowingUser[]; done: boolean; error?: string }
+  // ---- 扩散检索（FP-005）：grabber → bg ----
+  | { type: 'IMG_DIFFUSE_START'; srcTabId: number; startUser: string }
+  | { type: 'IMG_DIFFUSE_BATCH'; srcTabId: number; batchSize: number; concurrency: number; intervalMs: number }
+  | { type: 'IMG_DIFFUSE_PROGRESS' }
+  | { type: 'IMG_DB_GET' }
+  | { type: 'IMG_DB_SAVE'; source: string }
+  | { type: 'IMG_DB_CLEAR' }
+  | { type: 'IMG_DB_EXPORT' }
+  | { type: 'IMG_DB_IMPORT'; db: unknown }
+  | { type: 'IMG_SCORE_BATCH'; batchSize: number; concurrency: number; intervalMs: number; order?: 'inDegree' | 'newest' | 'score'; w1?: number; w2?: number }
+  | { type: 'IMG_SEARCH_START'; keywords: string[]; fromPct: number; toPct: number; w1: number; w2: number; batchSize: number }
+  | { type: 'IMG_SEARCH_BATCH'; batchSize: number }
+  // ---- GitHub 同步（FP-005） ----
+  | { type: 'IMG_GITHUB_GET_CONFIG' }
+  | { type: 'IMG_GITHUB_SAVE_CONFIG'; repo: string; token: string; branch?: string }
+  | { type: 'IMG_GITHUB_PUSH' }
+  | { type: 'IMG_GITHUB_PULL' }
   // ---- buondua 适配器（FP-004）：grabber → bg ----
   | { type: 'BD_FETCH_ALBUM'; srcTabId: number; url: string }
   | { type: 'BD_SCAN_LINKS'; srcTabId: number; url: string; kind: 'recommended' | 'popular' }
@@ -90,7 +112,33 @@ export interface BuonduaBatchItem {
 }
 
 export type MessageResponse =
-  | { ok: true; entries?: LogEntry[]; level?: LogLevel; session?: GrabSession; job?: DownloadJob; username?: string | null; name?: string; concurrency?: number; data?: string }
+  | {
+      ok: true
+      entries?: LogEntry[]
+      level?: LogLevel
+      session?: GrabSession
+      job?: DownloadJob
+      username?: string | null
+      name?: string
+      concurrency?: number
+      data?: string
+      // ---- FP-005 扩散检索 ----
+      result?: DiffuseBatchResult
+      snapshot?: DiffuseSnapshot
+      db?: ProducerDb
+      total?: number
+      confirmed?: number
+      producers?: number
+      maxInDegree?: number
+      dist?: { label: string; count: number }[]
+      topUsers?: { username: string; inDegree: number; url: string }[]
+      score?: ScoreBatchResult
+      search?: SearchBatchResult
+      unconfirmed?: number
+      config?: { repo: string; branch: string; configured: boolean }
+      github?: { message: string; total?: number }
+      json?: string
+    }
   | { ok: false; error: string }
 
 /** 通用发送：扩展页面 → background */

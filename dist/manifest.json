@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "图片下载器",
+  "version": "0.2.1",
+  "description": "网页图片抓取：解析、尺寸筛选、预览选择、批量/打包下载",
+  "permissions": ["storage", "downloads", "activeTab", "scripting"],
+  "optional_host_permissions": ["<all_urls>"],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "background": {
+    "service_worker": "js/background.js"
+  },
+  "action": {
+    "default_title": "抓取本页图片",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  }
+}
