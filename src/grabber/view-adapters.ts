@@ -192,8 +192,13 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
             <input id="search-keywords" class="text-input" placeholder="关键词，逗号分隔">
             <label class="radio-label">取前 <input id="search-pct" type="range" min="1" max="100" value="100" class="pct-range"> <span id="search-pct-val">100</span>%</label>
             <button id="search-start" class="btn primary">区间检索</button>
-            <button id="search-next" class="btn">下一批结果</button>
             <span id="search-status" class="status-text"></span>
+          </div>
+          <div class="row">
+            <button id="search-prev" class="btn" disabled>上一页</button>
+            <span id="search-page" class="status-text"></span>
+            <button id="search-next" class="btn" disabled>下一页</button>
+            <span id="search-total" class="status-text"></span>
           </div>
           <div class="search-results" id="search-results"></div>
         </div>
@@ -871,11 +876,18 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
   const searchPctInput = root.querySelector('#search-pct') as HTMLInputElement
   const searchPctVal = root.querySelector('#search-pct-val') as HTMLElement | null
   const searchW1Input = root.querySelector('#search-w1') as HTMLInputElement
+  const searchPrevBtn = root.querySelector('#search-prev') as HTMLButtonElement | null
   const searchNextBtn = root.querySelector('#search-next') as HTMLButtonElement | null
+  const searchPageEl = root.querySelector('#search-page') as HTMLElement | null
+  const searchTotalEl = root.querySelector('#search-total') as HTMLElement | null
   const scoreNextBtn = root.querySelector('#score-next') as HTMLButtonElement | null
   const scoreStopBtn = root.querySelector('#score-stop') as HTMLButtonElement | null
   // 进度刷新节流（2s 内最多一次 loadDbStats）
   let lastScoreRefresh = 0
+  // 检索结果分页（每页 100 条）
+  const SEARCH_PAGE_SIZE = 100
+  let searchAll: SearchMatch[] = []
+  let searchPage = 0
 
   searchPctInput?.addEventListener('input', () => {
     if (searchPctVal) searchPctVal.textContent = searchPctInput.value
@@ -891,14 +903,17 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
     )
   }
 
-  function renderSearchResults(matches: SearchMatch[], append: boolean): void {
+  function renderSearchPage(): void {
     if (!searchResultsEl) return
-    if (!append) searchResultsEl.innerHTML = ''
-    if (matches.length === 0 && !append) {
+    const total = searchAll.length
+    const pages = Math.max(1, Math.ceil(total / SEARCH_PAGE_SIZE))
+    if (searchPage >= pages) searchPage = pages - 1
+    const slice = searchAll.slice(searchPage * SEARCH_PAGE_SIZE, (searchPage + 1) * SEARCH_PAGE_SIZE)
+    searchResultsEl.innerHTML = ''
+    if (total === 0) {
       searchResultsEl.innerHTML = '<div class="empty-tip">无命中</div>'
-      return
     }
-    for (const m of matches) {
+    for (const m of slice) {
       const block = document.createElement('div')
       block.className = 'search-hit'
       block.innerHTML = `<div class="search-user"><a href="https://${m.username}.imgbb.com" target="_blank">${m.username}</a><span class="user-degree">入度 ${m.inDegree}</span></div>`
@@ -910,6 +925,10 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
       }
       searchResultsEl.appendChild(block)
     }
+    if (searchPageEl) searchPageEl.textContent = total > 0 ? `第 ${searchPage + 1}/${pages} 页` : ''
+    if (searchTotalEl) searchTotalEl.textContent = total > 0 ? `共命中 ${total} 条` : ''
+    if (searchPrevBtn) searchPrevBtn.disabled = searchPage <= 0
+    if (searchNextBtn) searchNextBtn.disabled = searchPage >= pages - 1
   }
 
   async function runScoreBatch(): Promise<void> {
@@ -952,64 +971,55 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
     setStatus(scoreStatus, '停止请求已发送，等待当前用户完成…')
   })
 
-  async function runSearch(start: boolean): Promise<void> {
-    if (searchNextBtn) searchNextBtn.disabled = true
+  async function runSearch(): Promise<void> {
     const keywords = searchKeywordsInput.value.split(/[,，]/).map((k) => k.trim()).filter(Boolean)
     if (keywords.length === 0) {
       setStatus(searchStatus, '请填写关键词', true)
-      if (searchNextBtn) searchNextBtn.disabled = false
       return
     }
     const toPct = Math.max(1, Math.min(100, Number(searchPctInput?.value) || 100))
     const w1 = Math.max(0, Math.min(100, Number(searchW1Input.value) || 60)) / 100
-    if (start) {
-      setStatus(searchStatus, `检索中（取前 ${toPct}% · 权重 ${Math.round(w1 * 100)}/${100 - Math.round(w1 * 100)}）…`)
-      const res = await sendMessage<
-        { ok: true; search: SearchBatchResult; unconfirmed?: number } | { ok: false; error: string }
-      >({ type: 'IMG_SEARCH_START', keywords, fromPct: 0, toPct, w1, w2: 1 - w1, batchSize: 50 })
-      if (!res.ok) {
-        setStatus(searchStatus, `检索失败：${res.error}`, true)
-        if (searchNextBtn) searchNextBtn.disabled = false
-        return
-      }
-      if (res.search.total === 0) {
-        const un = res.unconfirmed ?? 0
-        setStatus(
-          searchStatus,
-          un > 0
-            ? `无可检索用户：库内还有 ${un} 个未确认，请先在②区点「确认评分」补相册数`
-            : '无可检索用户：库内已确认用户均无相册，请先扩散更多起点',
-          true,
-        )
-        if (searchNextBtn) searchNextBtn.disabled = false
-        return
-      }
-      renderSearchResults(res.search.matches, false)
-      setStatus(
-        searchStatus,
-        `候选 ${res.search.total} 人 · 本批命中 ${res.search.matches.length}${res.search.done ? ' · 全部完成' : ''}`,
-      )
-    } else {
-      const res = await sendMessage<{ ok: true; search: SearchBatchResult } | { ok: false; error: string }>({
-        type: 'IMG_SEARCH_BATCH',
-        batchSize: 50,
-      })
-      if (!res.ok) {
-        setStatus(searchStatus, `下一批失败：${res.error}`, true)
-        if (searchNextBtn) searchNextBtn.disabled = false
-        return
-      }
-      renderSearchResults(res.search.matches, true)
-      setStatus(
-        searchStatus,
-        `已处理 ${res.search.processed}/${res.search.total} · 本批命中 ${res.search.matches.length}${res.search.done ? ' · 全部完成' : ''}`,
-      )
+    setStatus(searchStatus, `检索中（取前 ${toPct}% · 权重 ${Math.round(w1 * 100)}/${100 - Math.round(w1 * 100)}）…`)
+    const res = await sendMessage<
+      { ok: true; search: SearchBatchResult; unconfirmed?: number } | { ok: false; error: string }
+    >({ type: 'IMG_SEARCH_START', keywords, fromPct: 0, toPct, w1, w2: 1 - w1, batchSize: SEARCH_PAGE_SIZE })
+    if (!res.ok) {
+      setStatus(searchStatus, `检索失败：${res.error}`, true)
+      return
     }
-    if (searchNextBtn) searchNextBtn.disabled = false
+    if (res.search.total === 0) {
+      const un = res.unconfirmed ?? 0
+      setStatus(
+        searchStatus,
+        un > 0
+          ? `无可检索用户：库内还有 ${un} 个未确认，请先在②区点「确认评分」补相册数`
+          : '无可检索用户：库内已确认用户均无相册，请先扩散更多起点',
+        true,
+      )
+      searchAll = []
+      searchPage = 0
+      renderSearchPage()
+      return
+    }
+    searchAll = res.search.matches
+    searchPage = 0
+    renderSearchPage()
+    setStatus(searchStatus, `检索完成：命中 ${res.search.total} 条（前 ${toPct}% 候选）`)
   }
 
-  root.querySelector('#search-start')?.addEventListener('click', () => void runSearch(true))
-  searchNextBtn?.addEventListener('click', () => void runSearch(false))
+  root.querySelector('#search-start')?.addEventListener('click', () => void runSearch())
+  searchPrevBtn?.addEventListener('click', () => {
+    if (searchPage > 0) {
+      searchPage--
+      renderSearchPage()
+    }
+  })
+  searchNextBtn?.addEventListener('click', () => {
+    if (searchPage < Math.ceil(searchAll.length / SEARCH_PAGE_SIZE) - 1) {
+      searchPage++
+      renderSearchPage()
+    }
+  })
 
   // ---------- 事件：本地数据表导出/导入（FP-005） ----------
   const localStatus = root.querySelector('#local-status')

@@ -1480,9 +1480,6 @@
     producerDb = loadDb(raw);
     logger5.info("diffuse", "\u751F\u4EA7\u8005\u5E93\u5DF2\u6062\u590D", { total: Object.keys(producerDb.entries).length });
   })();
-  var searchCandidates = [];
-  var searchCursor = 0;
-  var searchKeywords = [];
   var DIFFUSE_STATE_KEY = "diffuse_state";
   async function ensureDiffuseRestored() {
     try {
@@ -1996,27 +1993,22 @@
         const scored = confirmedScored(producerDb, message.w1, message.w2);
         const from = Math.min(scored.length, Math.floor(scored.length * message.fromPct / 100));
         const to = Math.min(scored.length, Math.floor(scored.length * message.toPct / 100));
-        searchCandidates = scored.slice(from, to);
-        searchCursor = 0;
-        searchKeywords = message.keywords.map((k) => k.toLowerCase()).filter(Boolean);
-        const batch = searchCandidates.slice(0, message.batchSize);
-        searchCursor = batch.length;
-        const matches = batch.map((c) => ({ username: c.username, inDegree: c.inDegree, albums: matchAlbums(c, searchKeywords) })).filter((m) => m.albums.length > 0);
-        const done = searchCursor >= searchCandidates.length;
-        logger5.info("search", "\u68C0\u7D22\u542F\u52A8", {
-          keywords: searchKeywords,
+        const keywords = message.keywords.map((k) => k.toLowerCase()).filter(Boolean);
+        const matches = scored.slice(from, to).map((c) => ({ username: c.username, inDegree: c.inDegree, albums: matchAlbums(c, keywords) })).filter((m) => m.albums.length > 0);
+        logger5.info("search", "\u68C0\u7D22\u5B8C\u6210\uFF08\u5168\u91CF\uFF09", {
+          keywords,
           range: `0~${message.toPct}%`,
-          candidates: searchCandidates.length,
+          candidates: to - from,
           hits: matches.length
         });
-        return { ok: true, search: { total: searchCandidates.length, processed: batch.length, matches, done }, unconfirmed: unconfirmedCount(producerDb) };
+        return {
+          ok: true,
+          search: { total: matches.length, processed: matches.length, matches, done: true },
+          unconfirmed: unconfirmedCount(producerDb)
+        };
       }
       case "IMG_SEARCH_BATCH": {
-        const batch = searchCandidates.slice(searchCursor, searchCursor + message.batchSize);
-        searchCursor += batch.length;
-        const matches = batch.map((c) => ({ username: c.username, inDegree: c.inDegree, albums: matchAlbums(c, searchKeywords) })).filter((m) => m.albums.length > 0);
-        const done = searchCursor >= searchCandidates.length;
-        return { ok: true, search: { total: searchCandidates.length, processed: batch.length, matches, done } };
+        return { ok: true, search: { total: 0, processed: 0, matches: [], done: true } };
       }
       case "IMG_GITHUB_GET_CONFIG": {
         const cfg = normalizeConfig(await storageGet(GITHUB_CONFIG_KEY));

@@ -111,10 +111,6 @@ const producerDbReady = (async (): Promise<void> => {
   producerDb = loadDb(raw)
   logger.info('diffuse', '生产者库已恢复', { total: Object.keys(producerDb.entries).length })
 })()
-/** 检索候选（IMG_SEARCH_START 生成，SW 重启后需重新 start） */
-let searchCandidates: import('../lib/types').ProducerEntry[] = []
-let searchCursor = 0
-let searchKeywords: string[] = []
 /** 扩散状态持久化键（storage.session：SW 休眠/重启不丢，不写磁盘） */
 const DIFFUSE_STATE_KEY = 'diffuse_state'
 
@@ -697,37 +693,32 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       }
     }
 
-    // ---- 区间检索（FP-005 模块 2）：纯本地评分区间 + 关键词匹配（零请求） ----
+    // ---- 区间检索（FP-005 模块 2）：纯本地评分区间 + 关键词匹配（零请求，一次全量） ----
     case 'IMG_SEARCH_START': {
       await producerDbReady
       const scored = confirmedScored(producerDb, message.w1, message.w2)
       const from = Math.min(scored.length, Math.floor((scored.length * message.fromPct) / 100))
       const to = Math.min(scored.length, Math.floor((scored.length * message.toPct) / 100))
-      searchCandidates = scored.slice(from, to)
-      searchCursor = 0
-      searchKeywords = message.keywords.map((k) => k.toLowerCase()).filter(Boolean)
-      const batch = searchCandidates.slice(0, message.batchSize)
-      searchCursor = batch.length
-      const matches = batch
-        .map((c) => ({ username: c.username, inDegree: c.inDegree, albums: matchAlbums(c, searchKeywords) }))
+      const keywords = message.keywords.map((k) => k.toLowerCase()).filter(Boolean)
+      const matches = scored
+        .slice(from, to)
+        .map((c) => ({ username: c.username, inDegree: c.inDegree, albums: matchAlbums(c, keywords) }))
         .filter((m) => m.albums.length > 0)
-      const done = searchCursor >= searchCandidates.length
-      logger.info('search', '检索启动', {
-        keywords: searchKeywords,
+      logger.info('search', '检索完成（全量）', {
+        keywords,
         range: `0~${message.toPct}%`,
-        candidates: searchCandidates.length,
+        candidates: to - from,
         hits: matches.length,
       })
-      return { ok: true, search: { total: searchCandidates.length, processed: batch.length, matches, done }, unconfirmed: unconfirmedCount(producerDb) }
+      return {
+        ok: true,
+        search: { total: matches.length, processed: matches.length, matches, done: true },
+        unconfirmed: unconfirmedCount(producerDb),
+      }
     }
     case 'IMG_SEARCH_BATCH': {
-      const batch = searchCandidates.slice(searchCursor, searchCursor + message.batchSize)
-      searchCursor += batch.length
-      const matches = batch
-        .map((c) => ({ username: c.username, inDegree: c.inDegree, albums: matchAlbums(c, searchKeywords) }))
-        .filter((m) => m.albums.length > 0)
-      const done = searchCursor >= searchCandidates.length
-      return { ok: true, search: { total: searchCandidates.length, processed: batch.length, matches, done } }
+      // 已由全量返回取代（保留分支兼容旧调用）
+      return { ok: true, search: { total: 0, processed: 0, matches: [], done: true } }
     }
 
     // ---- GitHub 同步（FP-005，手动触发） ----

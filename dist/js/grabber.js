@@ -3406,8 +3406,13 @@
             <input id="search-keywords" class="text-input" placeholder="\u5173\u952E\u8BCD\uFF0C\u9017\u53F7\u5206\u9694">
             <label class="radio-label">\u53D6\u524D <input id="search-pct" type="range" min="1" max="100" value="100" class="pct-range"> <span id="search-pct-val">100</span>%</label>
             <button id="search-start" class="btn primary">\u533A\u95F4\u68C0\u7D22</button>
-            <button id="search-next" class="btn">\u4E0B\u4E00\u6279\u7ED3\u679C</button>
             <span id="search-status" class="status-text"></span>
+          </div>
+          <div class="row">
+            <button id="search-prev" class="btn" disabled>\u4E0A\u4E00\u9875</button>
+            <span id="search-page" class="status-text"></span>
+            <button id="search-next" class="btn" disabled>\u4E0B\u4E00\u9875</button>
+            <span id="search-total" class="status-text"></span>
           </div>
           <div class="search-results" id="search-results"></div>
         </div>
@@ -3960,10 +3965,16 @@
     const searchPctInput = root.querySelector("#search-pct");
     const searchPctVal = root.querySelector("#search-pct-val");
     const searchW1Input = root.querySelector("#search-w1");
+    const searchPrevBtn = root.querySelector("#search-prev");
     const searchNextBtn = root.querySelector("#search-next");
+    const searchPageEl = root.querySelector("#search-page");
+    const searchTotalEl = root.querySelector("#search-total");
     const scoreNextBtn = root.querySelector("#score-next");
     const scoreStopBtn = root.querySelector("#score-stop");
     let lastScoreRefresh = 0;
+    const SEARCH_PAGE_SIZE = 100;
+    let searchAll = [];
+    let searchPage = 0;
     searchPctInput?.addEventListener("input", () => {
       if (searchPctVal) searchPctVal.textContent = searchPctInput.value;
     });
@@ -3974,14 +3985,17 @@
         `\u786E\u8BA4 ${score.processed} \u4EBA\uFF1A\u6709\u76F8\u518C ${score.withAlbums} \xB7 \u96F6\u76F8\u518C ${score.zeroAlbums} \xB7 \u5931\u8D25 ${score.failed} \xB7 \u5269\u4F59\u672A\u786E\u8BA4 ${unconfirmed}${score.done ? "\uFF08\u5168\u90E8\u786E\u8BA4\u5B8C\u6BD5\uFF09" : ""}`
       );
     }
-    function renderSearchResults(matches, append) {
+    function renderSearchPage() {
       if (!searchResultsEl) return;
-      if (!append) searchResultsEl.innerHTML = "";
-      if (matches.length === 0 && !append) {
+      const total = searchAll.length;
+      const pages = Math.max(1, Math.ceil(total / SEARCH_PAGE_SIZE));
+      if (searchPage >= pages) searchPage = pages - 1;
+      const slice = searchAll.slice(searchPage * SEARCH_PAGE_SIZE, (searchPage + 1) * SEARCH_PAGE_SIZE);
+      searchResultsEl.innerHTML = "";
+      if (total === 0) {
         searchResultsEl.innerHTML = '<div class="empty-tip">\u65E0\u547D\u4E2D</div>';
-        return;
       }
-      for (const m of matches) {
+      for (const m of slice) {
         const block = document.createElement("div");
         block.className = "search-hit";
         block.innerHTML = `<div class="search-user"><a href="https://${m.username}.imgbb.com" target="_blank">${m.username}</a><span class="user-degree">\u5165\u5EA6 ${m.inDegree}</span></div>`;
@@ -3993,6 +4007,10 @@
         }
         searchResultsEl.appendChild(block);
       }
+      if (searchPageEl) searchPageEl.textContent = total > 0 ? `\u7B2C ${searchPage + 1}/${pages} \u9875` : "";
+      if (searchTotalEl) searchTotalEl.textContent = total > 0 ? `\u5171\u547D\u4E2D ${total} \u6761` : "";
+      if (searchPrevBtn) searchPrevBtn.disabled = searchPage <= 0;
+      if (searchNextBtn) searchNextBtn.disabled = searchPage >= pages - 1;
     }
     async function runScoreBatch() {
       if (scoreNextBtn) scoreNextBtn.disabled = true;
@@ -4029,59 +4047,50 @@
       void sendMessage({ type: "IMG_SCORE_STOP" });
       setStatus(scoreStatus, "\u505C\u6B62\u8BF7\u6C42\u5DF2\u53D1\u9001\uFF0C\u7B49\u5F85\u5F53\u524D\u7528\u6237\u5B8C\u6210\u2026");
     });
-    async function runSearch(start) {
-      if (searchNextBtn) searchNextBtn.disabled = true;
+    async function runSearch() {
       const keywords = searchKeywordsInput.value.split(/[,，]/).map((k) => k.trim()).filter(Boolean);
       if (keywords.length === 0) {
         setStatus(searchStatus, "\u8BF7\u586B\u5199\u5173\u952E\u8BCD", true);
-        if (searchNextBtn) searchNextBtn.disabled = false;
         return;
       }
       const toPct = Math.max(1, Math.min(100, Number(searchPctInput?.value) || 100));
       const w1 = Math.max(0, Math.min(100, Number(searchW1Input.value) || 60)) / 100;
-      if (start) {
-        setStatus(searchStatus, `\u68C0\u7D22\u4E2D\uFF08\u53D6\u524D ${toPct}% \xB7 \u6743\u91CD ${Math.round(w1 * 100)}/${100 - Math.round(w1 * 100)}\uFF09\u2026`);
-        const res = await sendMessage({ type: "IMG_SEARCH_START", keywords, fromPct: 0, toPct, w1, w2: 1 - w1, batchSize: 50 });
-        if (!res.ok) {
-          setStatus(searchStatus, `\u68C0\u7D22\u5931\u8D25\uFF1A${res.error}`, true);
-          if (searchNextBtn) searchNextBtn.disabled = false;
-          return;
-        }
-        if (res.search.total === 0) {
-          const un = res.unconfirmed ?? 0;
-          setStatus(
-            searchStatus,
-            un > 0 ? `\u65E0\u53EF\u68C0\u7D22\u7528\u6237\uFF1A\u5E93\u5185\u8FD8\u6709 ${un} \u4E2A\u672A\u786E\u8BA4\uFF0C\u8BF7\u5148\u5728\u2461\u533A\u70B9\u300C\u786E\u8BA4\u8BC4\u5206\u300D\u8865\u76F8\u518C\u6570` : "\u65E0\u53EF\u68C0\u7D22\u7528\u6237\uFF1A\u5E93\u5185\u5DF2\u786E\u8BA4\u7528\u6237\u5747\u65E0\u76F8\u518C\uFF0C\u8BF7\u5148\u6269\u6563\u66F4\u591A\u8D77\u70B9",
-            true
-          );
-          if (searchNextBtn) searchNextBtn.disabled = false;
-          return;
-        }
-        renderSearchResults(res.search.matches, false);
-        setStatus(
-          searchStatus,
-          `\u5019\u9009 ${res.search.total} \u4EBA \xB7 \u672C\u6279\u547D\u4E2D ${res.search.matches.length}${res.search.done ? " \xB7 \u5168\u90E8\u5B8C\u6210" : ""}`
-        );
-      } else {
-        const res = await sendMessage({
-          type: "IMG_SEARCH_BATCH",
-          batchSize: 50
-        });
-        if (!res.ok) {
-          setStatus(searchStatus, `\u4E0B\u4E00\u6279\u5931\u8D25\uFF1A${res.error}`, true);
-          if (searchNextBtn) searchNextBtn.disabled = false;
-          return;
-        }
-        renderSearchResults(res.search.matches, true);
-        setStatus(
-          searchStatus,
-          `\u5DF2\u5904\u7406 ${res.search.processed}/${res.search.total} \xB7 \u672C\u6279\u547D\u4E2D ${res.search.matches.length}${res.search.done ? " \xB7 \u5168\u90E8\u5B8C\u6210" : ""}`
-        );
+      setStatus(searchStatus, `\u68C0\u7D22\u4E2D\uFF08\u53D6\u524D ${toPct}% \xB7 \u6743\u91CD ${Math.round(w1 * 100)}/${100 - Math.round(w1 * 100)}\uFF09\u2026`);
+      const res = await sendMessage({ type: "IMG_SEARCH_START", keywords, fromPct: 0, toPct, w1, w2: 1 - w1, batchSize: SEARCH_PAGE_SIZE });
+      if (!res.ok) {
+        setStatus(searchStatus, `\u68C0\u7D22\u5931\u8D25\uFF1A${res.error}`, true);
+        return;
       }
-      if (searchNextBtn) searchNextBtn.disabled = false;
+      if (res.search.total === 0) {
+        const un = res.unconfirmed ?? 0;
+        setStatus(
+          searchStatus,
+          un > 0 ? `\u65E0\u53EF\u68C0\u7D22\u7528\u6237\uFF1A\u5E93\u5185\u8FD8\u6709 ${un} \u4E2A\u672A\u786E\u8BA4\uFF0C\u8BF7\u5148\u5728\u2461\u533A\u70B9\u300C\u786E\u8BA4\u8BC4\u5206\u300D\u8865\u76F8\u518C\u6570` : "\u65E0\u53EF\u68C0\u7D22\u7528\u6237\uFF1A\u5E93\u5185\u5DF2\u786E\u8BA4\u7528\u6237\u5747\u65E0\u76F8\u518C\uFF0C\u8BF7\u5148\u6269\u6563\u66F4\u591A\u8D77\u70B9",
+          true
+        );
+        searchAll = [];
+        searchPage = 0;
+        renderSearchPage();
+        return;
+      }
+      searchAll = res.search.matches;
+      searchPage = 0;
+      renderSearchPage();
+      setStatus(searchStatus, `\u68C0\u7D22\u5B8C\u6210\uFF1A\u547D\u4E2D ${res.search.total} \u6761\uFF08\u524D ${toPct}% \u5019\u9009\uFF09`);
     }
-    root.querySelector("#search-start")?.addEventListener("click", () => void runSearch(true));
-    searchNextBtn?.addEventListener("click", () => void runSearch(false));
+    root.querySelector("#search-start")?.addEventListener("click", () => void runSearch());
+    searchPrevBtn?.addEventListener("click", () => {
+      if (searchPage > 0) {
+        searchPage--;
+        renderSearchPage();
+      }
+    });
+    searchNextBtn?.addEventListener("click", () => {
+      if (searchPage < Math.ceil(searchAll.length / SEARCH_PAGE_SIZE) - 1) {
+        searchPage++;
+        renderSearchPage();
+      }
+    });
     const localStatus = root.querySelector("#local-status");
     const dbImportFile = root.querySelector("#db-import-file");
     root.querySelector("#db-export")?.addEventListener("click", async () => {
@@ -4819,7 +4828,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260811144836" : "dev";
+  var BUILD_TIME = true ? "20260811150838" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
