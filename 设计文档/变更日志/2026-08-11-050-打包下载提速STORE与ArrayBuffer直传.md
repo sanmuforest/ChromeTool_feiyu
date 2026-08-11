@@ -32,13 +32,13 @@
 
 ## 风险与回退
 
-- ArrayBuffer 消息回传为行为变更，需实测确认 Chrome runtime messaging 传输正常
-- 若实测失败，回退方案：恢复 base64 回传（仅此一处），STORE 压缩保留
+- **ArrayBuffer 消息回传实测失败（已回退）**：chrome.runtime.sendMessage 内部为 JSON 序列化，ArrayBuffer 传输后变为空对象 `{}`，导致 zip 内全部条目为空文件（最大 15 字节）
+- 已回退为 base64 字符串回传（恢复 `arrayBufferToBase64` + atob 解码），**STORE 压缩保留**
 
 ## 回归检查（红线 1 第 3 条）
 
-- `MessageResponse.data` 类型放宽（`string | ArrayBuffer`），原有 string 调用点（LOG_ADD 等）不受影响
-- `arrayBufferToBase64` 仍在 `downloader.ts` 的下载选中 data URL 路径使用，未删除
+- `MessageResponse.data` 恢复为 `string`（与 050 前一致）
+- `arrayBufferToBase64` 恢复导入（background + downloader 双路径使用）
 - 打包 STORE 不影响 zip 结构合法性（标准 ZIP 支持 STORE 方法）
 
 ## 验证方式
@@ -47,5 +47,6 @@
 
 ## 状态
 
-- **验证通过（用户实测）**：冷缓存新相册 198/186 张打包 10~13s（~15 张/秒），zip 解压正常；CPU 瓶颈（base64/压缩）已消除，剩余为 imgbb 源网络速度限制
-- 与 049 配合：下载选中两条链路已持平（~32ms/张），打包链路可用
+- **方案 2（ArrayBuffer 直传）实测失败已回退**：runtime message 为 JSON 序列化，ArrayBuffer 变空对象，zip 条目全为空文件（用户实测发现，日志 2026/8/11 10:02）
+- **方案 1（STORE 压缩）保留有效**
+- **回退后验证通过（用户实测）**：龙珠超1（99 张 48.5MB）/ 龙珠超2（112 张 56.4MB）/ 龙珠超4（106 张 47.5MB）zip 全部正常，无空文件、可解压

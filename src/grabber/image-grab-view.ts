@@ -542,14 +542,17 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
           let blob: Blob | null = null
           if (/(i\.ibb\.co|ibb\.co)/.test(item.url)) {
             // imgbb：background 上下文 fetch（扩展页面 fetch 会被降级为 180 缩略图）
-            // 响应直接回传 Uint8Array（structured clone），省去 base64 编码/解码/逐字节拷贝
-            const res = await sendMessage<{ ok: true; data?: ArrayBuffer } | { ok: false; error: string }>({
+            // 响应为 base64 字符串（runtime message 为 JSON 序列化，ArrayBuffer 直传会丢失数据）
+            const res = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
               type: 'GRAB_FETCH_IMAGE',
               srcTabId: options.srcTabId,
               url: item.url,
             })
             if (res.ok && res.data) {
-              blob = new Blob([res.data])
+              const bin = atob(res.data)
+              const bytes = new Uint8Array(bin.length)
+              for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+              blob = new Blob([bytes])
             }
           } else {
             const resp = await fetch(item.url)
