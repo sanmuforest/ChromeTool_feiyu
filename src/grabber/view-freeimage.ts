@@ -159,7 +159,11 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
             <span class="row-label">深挖轮数</span>
             <input id="fh-sr-mine-rounds" class="num-input" value="5" type="number" min="1" max="50">
             <button id="fh-sr-mine" class="btn primary">中文深挖</button>
-            <span class="status-text">种子→属主→属主中文相册（递归，仅文字）</span>
+            <span class="status-text">探索补给+属主深挖（递归）</span>
+          </div>
+          <div class="row">
+            <input id="fh-sr-mine-seeds" class="text-input" placeholder="手动种子用户名，逗号分隔（如 jzqgoodlife，一次抓其全部中文相册）">
+            <button id="fh-sr-mine-seed-add" class="btn">加入种子并深挖</button>
           </div>
           <div class="row">
             <span class="row-label">进度</span>
@@ -192,6 +196,17 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
             <span id="fh-sr-total" class="status-text"></span>
           </div>
           <div class="fh-hit-list" id="fh-sr-hits"></div>
+        </div>
+        <div class="diffuse-section">
+          <div class="section-title">④ 中文相册总览（记录库全部中文相册，含深挖结果）</div>
+          <div class="row">
+            <button id="fh-sr-cn-all" class="btn primary">显示全部中文相册</button>
+            <button id="fh-cn-prev" class="btn" disabled>上一页</button>
+            <span id="fh-cn-page" class="status-text"></span>
+            <button id="fh-cn-next" class="btn" disabled>下一页</button>
+            <span id="fh-cn-total" class="status-text"></span>
+          </div>
+          <div class="fh-hit-list" id="fh-sr-cn-list"></div>
         </div>
       </div>
 
@@ -653,7 +668,7 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
   })
 
   // 中文深挖：种子（未深挖的中文相册）→ 属主 → 属主中文相册递归入索引
-  root.querySelector('#fh-sr-mine')?.addEventListener('click', async () => {
+  async function runMine(seedUsers?: string[]): Promise<void> {
     if (searchBusy) return
     if (!(await ensureHostPermission())) {
       setStatus(srHit, '需要授权访问 freeimage 后才能深挖', true)
@@ -664,12 +679,25 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
     srLog.innerHTML = ''
     updateProgress(0)
     setSearchBusy(true)
-    logSr(`中文深挖：${rounds} 轮（种子→属主→属主中文相册）…`)
-    const res = await sendMessage({ type: 'FH_EXPLORE_MINE', srcTabId, rounds, intervalMs: 200 })
+    logSr(`中文深挖：${rounds} 轮（每轮探索补给 + 属主深挖）${seedUsers?.length ? `，种子用户：${seedUsers.join(', ')}` : ''}…`)
+    const res = await sendMessage({ type: 'FH_EXPLORE_MINE', srcTabId, rounds, intervalMs: 200, seedUsers })
     if (!res.ok) {
       setSearchBusy(false)
       logSr(`深挖启动失败：${res.error}`)
     }
+  }
+
+  root.querySelector('#fh-sr-mine')?.addEventListener('click', () => void runMine())
+  root.querySelector('#fh-sr-mine-seed-add')?.addEventListener('click', () => {
+    const seeds = (root.querySelector('#fh-sr-mine-seeds') as HTMLInputElement).value
+      .split(/[,，]/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (seeds.length === 0) {
+      setStatus(srHit, '请输入种子用户名', true)
+      return
+    }
+    void runMine(seeds)
   })
 
   function searchModeLabel(mode: string): string {
@@ -742,6 +770,70 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
     if (searchPage < pages - 1) {
       searchPage++
       renderSearchPage()
+    }
+  })
+
+  // ---------- 中文相册总览（全部中文相册分页展示） ----------
+  const cnListEl = root.querySelector('#fh-sr-cn-list') as HTMLElement
+  const cnPageEl = root.querySelector('#fh-cn-page') as HTMLElement
+  const cnTotalEl = root.querySelector('#fh-cn-total') as HTMLElement
+  const cnPrevBtn = root.querySelector('#fh-cn-prev') as HTMLButtonElement
+  const cnNextBtn = root.querySelector('#fh-cn-next') as HTMLButtonElement
+  let cnAll: { name: string; url: string; username?: string; source: string }[] = []
+  let cnPage = 0
+
+  function renderCnPage(): void {
+    const total = cnAll.length
+    const pages = Math.max(1, Math.ceil(total / SEARCH_PAGE_SIZE))
+    if (cnPage >= pages) cnPage = pages - 1
+    const slice = cnAll.slice(cnPage * SEARCH_PAGE_SIZE, (cnPage + 1) * SEARCH_PAGE_SIZE)
+    cnListEl.innerHTML = ''
+    if (total === 0) {
+      cnListEl.innerHTML = '<div class="empty-tip">暂无中文相册（先探索采集 / 中文深挖）。</div>'
+    }
+    for (const hit of slice) {
+      const block = document.createElement('div')
+      block.className = 'search-hit'
+      const user = document.createElement('div')
+      user.className = 'search-user'
+      const a = document.createElement('a')
+      a.href = hit.url
+      a.target = '_blank'
+      a.textContent = hit.name
+      user.appendChild(a)
+      const deg = document.createElement('span')
+      deg.className = 'user-degree'
+      const srcLabel = hit.source === 'mine' ? '深挖' : hit.source === 'mine-supply' ? '补给' : '探索'
+      deg.textContent = `${hit.username ? `属主 ${hit.username} · ` : ''}${srcLabel}`
+      user.appendChild(deg)
+      block.appendChild(user)
+      cnListEl.appendChild(block)
+    }
+    cnPageEl.textContent = total > 0 ? `第 ${cnPage + 1}/${pages} 页` : ''
+    cnTotalEl.textContent = total > 0 ? `共 ${total} 个中文相册` : ''
+    cnPrevBtn.disabled = cnPage <= 0
+    cnNextBtn.disabled = cnPage >= pages - 1
+  }
+
+  root.querySelector('#fh-sr-cn-all')?.addEventListener('click', () => {
+    cnAll = Object.values(fhAlbumIndex.entries)
+      .filter((e) => /[\u4e00-\u9fff]/.test(e.name))
+      .sort((a, b) => b.collectedAt - a.collectedAt)
+      .map((e) => ({ name: e.name, url: e.url, username: e.username, source: e.source }))
+    cnPage = 0
+    renderCnPage()
+  })
+  cnPrevBtn.addEventListener('click', () => {
+    if (cnPage > 0) {
+      cnPage--
+      renderCnPage()
+    }
+  })
+  cnNextBtn.addEventListener('click', () => {
+    const pages = Math.max(1, Math.ceil(cnAll.length / SEARCH_PAGE_SIZE))
+    if (cnPage < pages - 1) {
+      cnPage++
+      renderCnPage()
     }
   })
 

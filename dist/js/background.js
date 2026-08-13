@@ -3541,13 +3541,65 @@
       }
       case "FH_EXPLORE_MINE": {
         await fhAlbumIndexReady;
-        const MINE_BATCH = 5;
+        const MINE_BATCH = 10;
+        const SUPPLY_PAGES = 2;
         let round = 0;
+        let supplyPage = 1;
         let done = false;
+        for (const seedUser of message.seedUsers ?? []) {
+          const u = seedUser.trim().toLowerCase();
+          if (!u) continue;
+          try {
+            const info = await freeimage.collectAlbumsForUser(u);
+            let cn = 0;
+            for (const a of info.albums) {
+              const aid = a.url.match(/\.([a-zA-Z0-9]+)$/)?.[1] ?? a.url;
+              if (!fhAlbumIndex.entries[aid]) {
+                fhAlbumIndex.entries[aid] = {
+                  id: aid,
+                  name: a.name,
+                  url: a.url,
+                  username: u,
+                  source: "mine-seed",
+                  collectedAt: Date.now(),
+                  mined: true
+                  // 已深挖（来源即属主本人，无需再挖）
+                };
+                if (isChineseAlbum(a.name)) cn++;
+              }
+            }
+            logger7.info("freeimage", "\u624B\u52A8\u79CD\u5B50\u7528\u6237\u5165\u5E93", { user: u, albums: info.albumCount, chinese: cn });
+          } catch (err) {
+            logger7.warn("freeimage", "\u624B\u52A8\u79CD\u5B50\u7528\u6237\u5931\u8D25", { user: u, error: String(err) });
+          }
+        }
         while (round < message.rounds && !done) {
           round++;
+          let supplyCn = 0;
+          for (let i = 0; i < SUPPLY_PAGES; i++) {
+            try {
+              const html = await freeimage.fetchHtml(`https://freeimage.host/explore/recent/?list=albums&sort=date_desc&page=${supplyPage}`);
+              for (const a of parseExploreAlbums(html)) {
+                const aid = a.url.match(/\.([a-zA-Z0-9]+)$/)?.[1] ?? a.id;
+                if (!isChineseAlbum(a.name)) continue;
+                if (!fhAlbumIndex.entries[aid]) {
+                  fhAlbumIndex.entries[aid] = {
+                    id: aid,
+                    name: a.name,
+                    url: a.url,
+                    source: "mine-supply",
+                    collectedAt: Date.now()
+                  };
+                  supplyCn++;
+                }
+              }
+              supplyPage++;
+            } catch (err) {
+              logger7.warn("freeimage", "\u6DF1\u6316\u63A2\u7D22\u8865\u7ED9\u5931\u8D25\uFF08\u8DF3\u8FC7\uFF09", { page: supplyPage, error: String(err) });
+            }
+          }
           const candidates = Object.values(fhAlbumIndex.entries).filter((e) => !e.mined && isChineseAlbum(e.name)).slice(0, MINE_BATCH);
-          if (candidates.length === 0) {
+          if (candidates.length === 0 && supplyCn === 0) {
             done = true;
             break;
           }
@@ -3561,17 +3613,16 @@
                 let ownerCn = 0;
                 for (const a of info.albums) {
                   const aid = a.url.match(/\.([a-zA-Z0-9]+)$/)?.[1] ?? a.url;
-                  const entry = {
-                    id: aid,
-                    name: a.name,
-                    url: a.url,
-                    username: owner.username,
-                    source: "mine",
-                    collectedAt: Date.now()
-                  };
                   const existing = fhAlbumIndex.entries[aid];
                   if (!existing) {
-                    fhAlbumIndex.entries[aid] = entry;
+                    fhAlbumIndex.entries[aid] = {
+                      id: aid,
+                      name: a.name,
+                      url: a.url,
+                      username: owner.username,
+                      source: "mine",
+                      collectedAt: Date.now()
+                    };
                     if (isChineseAlbum(a.name)) ownerCn++;
                   } else if (!existing.username) {
                     fhAlbumIndex.entries[aid] = { ...existing, username: owner.username };

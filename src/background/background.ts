@@ -22,7 +22,7 @@ import { ImgbbService } from './imgbb-service'
 import { BuonduaService } from './buondua-service'
 import { FreeimageService } from './freeimage-service'
 import { FhDiffuseEngine } from './freeimage-diffuse'
-import { extractOwner, isChineseAlbum, parseExploreUsers } from '../lib/freeimage-parse'
+import { extractOwner, isChineseAlbum, parseExploreAlbums, parseExploreUsers } from '../lib/freeimage-parse'
 import { emptyFhProducerDb, loadFhProducerDb } from '../lib/freeimage-types'
 import type { FhProducerDb } from '../lib/freeimage-types'
 import { emptyFhAlbumIndexDb, loadFhAlbumIndexDb } from '../lib/freeimage-types'
@@ -1216,18 +1216,73 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       return { ok: true }
     }
 
-    // 中文深挖：索引内未深挖的中文相册 → 属主 → 属主相册（中文聚集地）→ 递归入索引
+    // 中文深挖：每轮 = 探索补给（最新流新页采集中文种子）+ 深挖种子（属主 → 属主相册）
+    // 修复 v2：补给多页推进 + 手动种子用户（已知中文用户一次到位，如 jzqgoodlife 72+ 相册）
     case 'FH_EXPLORE_MINE': {
       await fhAlbumIndexReady
-      const MINE_BATCH = 5 // 每轮最多深挖的种子数
+      const MINE_BATCH = 10 // 每轮深挖种子数
+      const SUPPLY_PAGES = 2 // 每轮探索补给页数
       let round = 0
+      let supplyPage = 1
       let done = false
+      // 0. 手动种子用户：一次抓其全部相册（中文用户聚集地，如 jzqgoodlife）
+      for (const seedUser of message.seedUsers ?? []) {
+        const u = seedUser.trim().toLowerCase()
+        if (!u) continue
+        try {
+          const info = await freeimage.collectAlbumsForUser(u)
+          let cn = 0
+          for (const a of info.albums) {
+            const aid = a.url.match(/\.([a-zA-Z0-9]+)$/)?.[1] ?? a.url
+            if (!fhAlbumIndex.entries[aid]) {
+              fhAlbumIndex.entries[aid] = {
+                id: aid,
+                name: a.name,
+                url: a.url,
+                username: u,
+                source: 'mine-seed',
+                collectedAt: Date.now(),
+                mined: true, // 已深挖（来源即属主本人，无需再挖）
+              }
+              if (isChineseAlbum(a.name)) cn++
+            }
+          }
+          logger.info('freeimage', '手动种子用户入库', { user: u, albums: info.albumCount, chinese: cn })
+        } catch (err) {
+          logger.warn('freeimage', '手动种子用户失败', { user: u, error: String(err) })
+        }
+      }
       while (round < message.rounds && !done) {
         round++
+        // 1. 探索补给：采 SUPPLY_PAGES 页最新流相册，中文相册入索引（新种子）
+        let supplyCn = 0
+        for (let i = 0; i < SUPPLY_PAGES; i++) {
+          try {
+            const html = await freeimage.fetchHtml(`https://freeimage.host/explore/recent/?list=albums&sort=date_desc&page=${supplyPage}`)
+            for (const a of parseExploreAlbums(html)) {
+              const aid = a.url.match(/\.([a-zA-Z0-9]+)$/)?.[1] ?? a.id
+              if (!isChineseAlbum(a.name)) continue
+              if (!fhAlbumIndex.entries[aid]) {
+                fhAlbumIndex.entries[aid] = {
+                  id: aid,
+                  name: a.name,
+                  url: a.url,
+                  source: 'mine-supply',
+                  collectedAt: Date.now(),
+                }
+                supplyCn++
+              }
+            }
+            supplyPage++
+          } catch (err) {
+            logger.warn('freeimage', '深挖探索补给失败（跳过）', { page: supplyPage, error: String(err) })
+          }
+        }
+        // 2. 深挖未深挖的中文种子
         const candidates = Object.values(fhAlbumIndex.entries)
           .filter((e) => !e.mined && isChineseAlbum(e.name))
           .slice(0, MINE_BATCH)
-        if (candidates.length === 0) {
+        if (candidates.length === 0 && supplyCn === 0) {
           done = true
           break
         }
@@ -1243,17 +1298,16 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
               let ownerCn = 0
               for (const a of info.albums) {
                 const aid = a.url.match(/\.([a-zA-Z0-9]+)$/)?.[1] ?? a.url
-                const entry: import('../lib/freeimage-types').FhAlbumIndexEntry = {
-                  id: aid,
-                  name: a.name,
-                  url: a.url,
-                  username: owner.username,
-                  source: 'mine',
-                  collectedAt: Date.now(),
-                }
                 const existing = fhAlbumIndex.entries[aid]
                 if (!existing) {
-                  fhAlbumIndex.entries[aid] = entry
+                  fhAlbumIndex.entries[aid] = {
+                    id: aid,
+                    name: a.name,
+                    url: a.url,
+                    username: owner.username,
+                    source: 'mine',
+                    collectedAt: Date.now(),
+                  }
                   if (isChineseAlbum(a.name)) ownerCn++
                 } else if (!existing.username) {
                   fhAlbumIndex.entries[aid] = { ...existing, username: owner.username }

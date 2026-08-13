@@ -115,7 +115,7 @@ export type Message =
   // ---- freeimage 探索检索（FP-007 场景 D v8/v9：批次会话 + 仅中文 + 中文深挖） ----
   | { type: 'FH_EXPLORE_SEARCH_START'; srcTabId: number; mode: FhExploreMode; list: FhExploreType; rounds: number; intervalMs: number; chineseOnly?: boolean }
   | { type: 'FH_EXPLORE_SEARCH_NEXT'; srcTabId: number; rounds: number; intervalMs: number; chineseOnly?: boolean }
-  | { type: 'FH_EXPLORE_MINE'; srcTabId: number; rounds: number; intervalMs: number }
+  | { type: 'FH_EXPLORE_MINE'; srcTabId: number; rounds: number; intervalMs: number; seedUsers?: string[] }
   | { type: 'FH_EXPLORE_STOP' }
   // ---- freeimage 相册索引库（场景 D 记录/合并/导入导出） ----
   | { type: 'FH_ALBUM_INDEX_GET' }

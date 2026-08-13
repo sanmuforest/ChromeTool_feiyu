@@ -5133,7 +5133,11 @@
             <span class="row-label">\u6DF1\u6316\u8F6E\u6570</span>
             <input id="fh-sr-mine-rounds" class="num-input" value="5" type="number" min="1" max="50">
             <button id="fh-sr-mine" class="btn primary">\u4E2D\u6587\u6DF1\u6316</button>
-            <span class="status-text">\u79CD\u5B50\u2192\u5C5E\u4E3B\u2192\u5C5E\u4E3B\u4E2D\u6587\u76F8\u518C\uFF08\u9012\u5F52\uFF0C\u4EC5\u6587\u5B57\uFF09</span>
+            <span class="status-text">\u63A2\u7D22\u8865\u7ED9+\u5C5E\u4E3B\u6DF1\u6316\uFF08\u9012\u5F52\uFF09</span>
+          </div>
+          <div class="row">
+            <input id="fh-sr-mine-seeds" class="text-input" placeholder="\u624B\u52A8\u79CD\u5B50\u7528\u6237\u540D\uFF0C\u9017\u53F7\u5206\u9694\uFF08\u5982 jzqgoodlife\uFF0C\u4E00\u6B21\u6293\u5176\u5168\u90E8\u4E2D\u6587\u76F8\u518C\uFF09">
+            <button id="fh-sr-mine-seed-add" class="btn">\u52A0\u5165\u79CD\u5B50\u5E76\u6DF1\u6316</button>
           </div>
           <div class="row">
             <span class="row-label">\u8FDB\u5EA6</span>
@@ -5166,6 +5170,17 @@
             <span id="fh-sr-total" class="status-text"></span>
           </div>
           <div class="fh-hit-list" id="fh-sr-hits"></div>
+        </div>
+        <div class="diffuse-section">
+          <div class="section-title">\u2463 \u4E2D\u6587\u76F8\u518C\u603B\u89C8\uFF08\u8BB0\u5F55\u5E93\u5168\u90E8\u4E2D\u6587\u76F8\u518C\uFF0C\u542B\u6DF1\u6316\u7ED3\u679C\uFF09</div>
+          <div class="row">
+            <button id="fh-sr-cn-all" class="btn primary">\u663E\u793A\u5168\u90E8\u4E2D\u6587\u76F8\u518C</button>
+            <button id="fh-cn-prev" class="btn" disabled>\u4E0A\u4E00\u9875</button>
+            <span id="fh-cn-page" class="status-text"></span>
+            <button id="fh-cn-next" class="btn" disabled>\u4E0B\u4E00\u9875</button>
+            <span id="fh-cn-total" class="status-text"></span>
+          </div>
+          <div class="fh-hit-list" id="fh-sr-cn-list"></div>
         </div>
       </div>
 
@@ -5589,7 +5604,7 @@
       void sendMessage({ type: "FH_EXPLORE_STOP" });
       logSr("\u5DF2\u8BF7\u6C42\u7EC8\u6B62\u2026");
     });
-    root.querySelector("#fh-sr-mine")?.addEventListener("click", async () => {
+    async function runMine(seedUsers) {
       if (searchBusy) return;
       if (!await ensureHostPermission()) {
         setStatus(srHit, "\u9700\u8981\u6388\u6743\u8BBF\u95EE freeimage \u540E\u624D\u80FD\u6DF1\u6316", true);
@@ -5600,12 +5615,21 @@
       srLog.innerHTML = "";
       updateProgress(0);
       setSearchBusy(true);
-      logSr(`\u4E2D\u6587\u6DF1\u6316\uFF1A${rounds} \u8F6E\uFF08\u79CD\u5B50\u2192\u5C5E\u4E3B\u2192\u5C5E\u4E3B\u4E2D\u6587\u76F8\u518C\uFF09\u2026`);
-      const res = await sendMessage({ type: "FH_EXPLORE_MINE", srcTabId: srcTabId2, rounds, intervalMs: 200 });
+      logSr(`\u4E2D\u6587\u6DF1\u6316\uFF1A${rounds} \u8F6E\uFF08\u6BCF\u8F6E\u63A2\u7D22\u8865\u7ED9 + \u5C5E\u4E3B\u6DF1\u6316\uFF09${seedUsers?.length ? `\uFF0C\u79CD\u5B50\u7528\u6237\uFF1A${seedUsers.join(", ")}` : ""}\u2026`);
+      const res = await sendMessage({ type: "FH_EXPLORE_MINE", srcTabId: srcTabId2, rounds, intervalMs: 200, seedUsers });
       if (!res.ok) {
         setSearchBusy(false);
         logSr(`\u6DF1\u6316\u542F\u52A8\u5931\u8D25\uFF1A${res.error}`);
       }
+    }
+    root.querySelector("#fh-sr-mine")?.addEventListener("click", () => void runMine());
+    root.querySelector("#fh-sr-mine-seed-add")?.addEventListener("click", () => {
+      const seeds = root.querySelector("#fh-sr-mine-seeds").value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+      if (seeds.length === 0) {
+        setStatus(srHit, "\u8BF7\u8F93\u5165\u79CD\u5B50\u7528\u6237\u540D", true);
+        return;
+      }
+      void runMine(seeds);
     });
     function searchModeLabel(mode) {
       return mode === "recent" ? "\u6700\u65B0" : mode === "popular" ? "\u70ED\u95E8" : "\u6700\u591A\u559C\u6B22";
@@ -5674,6 +5698,63 @@
       if (searchPage < pages - 1) {
         searchPage++;
         renderSearchPage();
+      }
+    });
+    const cnListEl = root.querySelector("#fh-sr-cn-list");
+    const cnPageEl = root.querySelector("#fh-cn-page");
+    const cnTotalEl = root.querySelector("#fh-cn-total");
+    const cnPrevBtn = root.querySelector("#fh-cn-prev");
+    const cnNextBtn = root.querySelector("#fh-cn-next");
+    let cnAll = [];
+    let cnPage = 0;
+    function renderCnPage() {
+      const total = cnAll.length;
+      const pages = Math.max(1, Math.ceil(total / SEARCH_PAGE_SIZE));
+      if (cnPage >= pages) cnPage = pages - 1;
+      const slice = cnAll.slice(cnPage * SEARCH_PAGE_SIZE, (cnPage + 1) * SEARCH_PAGE_SIZE);
+      cnListEl.innerHTML = "";
+      if (total === 0) {
+        cnListEl.innerHTML = '<div class="empty-tip">\u6682\u65E0\u4E2D\u6587\u76F8\u518C\uFF08\u5148\u63A2\u7D22\u91C7\u96C6 / \u4E2D\u6587\u6DF1\u6316\uFF09\u3002</div>';
+      }
+      for (const hit of slice) {
+        const block = document.createElement("div");
+        block.className = "search-hit";
+        const user = document.createElement("div");
+        user.className = "search-user";
+        const a = document.createElement("a");
+        a.href = hit.url;
+        a.target = "_blank";
+        a.textContent = hit.name;
+        user.appendChild(a);
+        const deg = document.createElement("span");
+        deg.className = "user-degree";
+        const srcLabel = hit.source === "mine" ? "\u6DF1\u6316" : hit.source === "mine-supply" ? "\u8865\u7ED9" : "\u63A2\u7D22";
+        deg.textContent = `${hit.username ? `\u5C5E\u4E3B ${hit.username} \xB7 ` : ""}${srcLabel}`;
+        user.appendChild(deg);
+        block.appendChild(user);
+        cnListEl.appendChild(block);
+      }
+      cnPageEl.textContent = total > 0 ? `\u7B2C ${cnPage + 1}/${pages} \u9875` : "";
+      cnTotalEl.textContent = total > 0 ? `\u5171 ${total} \u4E2A\u4E2D\u6587\u76F8\u518C` : "";
+      cnPrevBtn.disabled = cnPage <= 0;
+      cnNextBtn.disabled = cnPage >= pages - 1;
+    }
+    root.querySelector("#fh-sr-cn-all")?.addEventListener("click", () => {
+      cnAll = Object.values(fhAlbumIndex.entries).filter((e) => /[\u4e00-\u9fff]/.test(e.name)).sort((a, b) => b.collectedAt - a.collectedAt).map((e) => ({ name: e.name, url: e.url, username: e.username, source: e.source }));
+      cnPage = 0;
+      renderCnPage();
+    });
+    cnPrevBtn.addEventListener("click", () => {
+      if (cnPage > 0) {
+        cnPage--;
+        renderCnPage();
+      }
+    });
+    cnNextBtn.addEventListener("click", () => {
+      const pages = Math.max(1, Math.ceil(cnAll.length / SEARCH_PAGE_SIZE));
+      if (cnPage < pages - 1) {
+        cnPage++;
+        renderCnPage();
       }
     });
     async function refreshIndex() {
@@ -6404,7 +6485,7 @@
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260813174629" : "dev";
+  var BUILD_TIME = true ? "20260813175639" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
