@@ -95,17 +95,37 @@ export class ImgbbService {
     return { images, name }
   }
 
-  /** 用户主页/相册页：按页抓取图片 */
+  /** 用户主页/相册页：按页抓取图片
+   * imgbb 无尽滚动：裸 ?page=N 不可靠（每页返回累计内容），必须跟随 seek 游标逐页翻
+   * 因 seek 为连续游标无法直接跳页，pageFrom>1 时仍从首页跟随翻页，仅收集 pageFrom~pageTo 区间增量
+   * 去重键：原图 URL（对齐 fetchAlbumImages） */
   async fetchGalleryPages(url: string, pageFrom: number, pageTo: number): Promise<ImgbbImage[]> {
+    const base = url.split('?')[0]
+    let currentUrl = base
+    const seen = new Set<string>()
     const all: ImgbbImage[] = []
-    for (let page = pageFrom; page <= pageTo; page++) {
-      const pageUrl = `${url}${url.includes('?') ? '&' : '?'}page=${page}`
-      const html = await this.fetchHtml(pageUrl)
+    let page = 1
+    while (currentUrl && page <= pageTo) {
+      const html = await this.fetchHtml(currentUrl)
       const images = parseImageItems(html)
-      all.push(...images)
-      if (images.length === 0) break // 没有更多页
+      if (page >= pageFrom) {
+        for (const img of images) {
+          if (!seen.has(img.originalUrl)) {
+            seen.add(img.originalUrl)
+            all.push(img)
+          }
+        }
+      } else {
+        // 前导页（page < pageFrom）：仅记录已见去重键，用于推进 seek 游标
+        for (const img of images) seen.add(img.originalUrl)
+      }
+      if (images.length === 0) break // 没有更多图片
+      const next = parseAlbumNextPage(html, base)
+      if (!next || next === currentUrl) break // 无下一页
+      currentUrl = next
+      page++
     }
-    logger.info('imgbb', '用户主页分页抓取完成', { url, pageFrom, pageTo, count: all.length })
+    logger.info('imgbb', '用户主页分页抓取完成', { url, pageFrom, pageTo, count: all.length, pages: page })
     return all
   }
 
