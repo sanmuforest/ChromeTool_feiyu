@@ -98,8 +98,9 @@ export interface FhAlbumIndexEntry {
   url: string // 相册地址（点击跳转）
   username?: string // 属主用户名（可选补充）
   imageCount?: number // 图片数（可选）
-  source: string // 来源：模式/类型（如 recent-albums）
+  source: string // 来源：模式/类型（如 recent-albums）/mine（深挖）
   collectedAt: number // 采集时间
+  mined?: boolean // 是否已做过属主深挖（中文深挖用）
 }
 
 /** 相册索引库（导出/导入用） */
@@ -131,6 +132,7 @@ export function loadFhAlbumIndexDb(raw: unknown): FhAlbumIndexDb {
         imageCount: typeof en.imageCount === 'number' ? en.imageCount : undefined,
         source: String(en.source ?? ''),
         collectedAt: typeof en.collectedAt === 'number' ? en.collectedAt : Date.now(),
+        mined: en.mined === true ? true : undefined,
       }
     }
   }

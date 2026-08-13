@@ -22,7 +22,7 @@ import { ImgbbService } from './imgbb-service'
 import { BuonduaService } from './buondua-service'
 import { FreeimageService } from './freeimage-service'
 import { FhDiffuseEngine } from './freeimage-diffuse'
-import { parseExploreUsers } from '../lib/freeimage-parse'
+import { extractOwner, isChineseAlbum, parseExploreUsers } from '../lib/freeimage-parse'
 import { emptyFhProducerDb, loadFhProducerDb } from '../lib/freeimage-types'
 import type { FhProducerDb } from '../lib/freeimage-types'
 import { emptyFhAlbumIndexDb, loadFhAlbumIndexDb } from '../lib/freeimage-types'
@@ -187,11 +187,14 @@ async function runSearchBatch(
   list: import('../lib/messages').FhExploreType,
   rounds: number,
   intervalMs: number,
+  chineseOnly?: boolean,
 ): Promise<void> {
   await fhAlbumIndexReady
   const onRound = async (progress: import('../lib/messages').ExploreSearchProgress): Promise<void> => {
     let added = 0
     for (const e of progress.newEntries) {
+      // 仅中文模式：非中文相册跳过（无用信息过滤）
+      if (chineseOnly && !isChineseAlbum(e.name)) continue
       const existing = fhAlbumIndex.entries[e.id]
       if (!existing) {
         fhAlbumIndex.entries[e.id] = e
@@ -1195,11 +1198,11 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       return { ok: true, fhImported: { before, after } }
     }
 
-    // ---- freeimage 探索检索（FP-007 场景 D v8：批次会话，每批自动保存） ----
+    // ---- freeimage 探索检索（FP-007 场景 D v8/v9：批次会话 + 仅中文 + 中文深挖） ----
     case 'FH_EXPLORE_SEARCH_START': {
       freeimage.startSearch(message.mode, message.list)
-      logger.info('freeimage', '探索检索开始新会话', { mode: message.mode, list: message.list, rounds: message.rounds })
-      await runSearchBatch(message.srcTabId, message.mode, message.list, message.rounds, message.intervalMs)
+      logger.info('freeimage', '探索检索开始新会话', { mode: message.mode, list: message.list, rounds: message.rounds, chineseOnly: message.chineseOnly })
+      await runSearchBatch(message.srcTabId, message.mode, message.list, message.rounds, message.intervalMs, message.chineseOnly)
       return { ok: true }
     }
 
@@ -1209,7 +1212,98 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
         return { ok: false, error: '无活动检索会话（请先开始检索）' }
       }
       logger.info('freeimage', '探索检索下一批', { mode: info.mode, list: info.list, rounds: message.rounds })
-      await runSearchBatch(message.srcTabId, info.mode, info.list, message.rounds, message.intervalMs)
+      await runSearchBatch(message.srcTabId, info.mode, info.list, message.rounds, message.intervalMs, message.chineseOnly)
+      return { ok: true }
+    }
+
+    // 中文深挖：索引内未深挖的中文相册 → 属主 → 属主相册（中文聚集地）→ 递归入索引
+    case 'FH_EXPLORE_MINE': {
+      await fhAlbumIndexReady
+      const MINE_BATCH = 5 // 每轮最多深挖的种子数
+      let round = 0
+      let done = false
+      while (round < message.rounds && !done) {
+        round++
+        const candidates = Object.values(fhAlbumIndex.entries)
+          .filter((e) => !e.mined && isChineseAlbum(e.name))
+          .slice(0, MINE_BATCH)
+        if (candidates.length === 0) {
+          done = true
+          break
+        }
+        const newEntries: import('../lib/freeimage-types').FhAlbumIndexEntry[] = []
+        for (const c of candidates) {
+          try {
+            // 属主提取（相册页 user-link）
+            const html = await freeimage.fetchHtml(c.url)
+            const owner = extractOwner(html)
+            if (owner) {
+              // 属主全部相册（中文聚集地）
+              const info = await freeimage.collectAlbumsForUser(owner.username)
+              let ownerCn = 0
+              for (const a of info.albums) {
+                const aid = a.url.match(/\.([a-zA-Z0-9]+)$/)?.[1] ?? a.url
+                const entry: import('../lib/freeimage-types').FhAlbumIndexEntry = {
+                  id: aid,
+                  name: a.name,
+                  url: a.url,
+                  username: owner.username,
+                  source: 'mine',
+                  collectedAt: Date.now(),
+                }
+                const existing = fhAlbumIndex.entries[aid]
+                if (!existing) {
+                  fhAlbumIndex.entries[aid] = entry
+                  if (isChineseAlbum(a.name)) ownerCn++
+                } else if (!existing.username) {
+                  fhAlbumIndex.entries[aid] = { ...existing, username: owner.username }
+                }
+              }
+              logger.info('freeimage', '中文深挖：属主相册', { seed: c.name, owner: owner.username, albums: info.albumCount, chinese: ownerCn })
+            }
+          } catch (err) {
+            logger.warn('freeimage', '深挖种子失败（跳过）', { seed: c.name, error: String(err) })
+          }
+          // 标记已深挖
+          fhAlbumIndex.entries[c.id] = { ...fhAlbumIndex.entries[c.id], mined: true }
+        }
+        fhAlbumIndex.updatedAt = Date.now()
+        await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex)
+        const total = Object.keys(fhAlbumIndex.entries).length
+        await pushFhResult(
+          message.srcTabId,
+          'explore-mine',
+          {
+            round,
+            pageFrom: 0,
+            pageTo: 0,
+            added: newEntries.length,
+            total,
+            newEntries,
+            mode: 'recent',
+            type: 'albums',
+          },
+          round >= message.rounds,
+        )
+        await new Promise((r) => setTimeout(r, message.intervalMs))
+      }
+      if (done) {
+        await pushFhResult(
+          message.srcTabId,
+          'explore-mine',
+          {
+            round,
+            pageFrom: 0,
+            pageTo: 0,
+            added: 0,
+            total: Object.keys(fhAlbumIndex.entries).length,
+            newEntries: [],
+            mode: 'recent',
+            type: 'albums',
+          },
+          true,
+        )
+      }
       return { ok: true }
     }
 

@@ -213,6 +213,13 @@ export function parseExploreNextPage(html: string, baseUrl: string): string | nu
   }
 }
 
+// ---------- 中文相册识别（FP-007 中文筛选） ----------
+
+/** 中文相册判断（相册名含 CJK 字符） */
+export function isChineseAlbum(name: string): boolean {
+  return /[\u4e00-\u9fff]/.test(name)
+}
+
 // ---------- 关键词过滤（场景 D：相册名检索） ----------
 
 /** 相册名/图片名关键词过滤（本地零请求，大小写不敏感；支持多关键词，全部命中 AND） */

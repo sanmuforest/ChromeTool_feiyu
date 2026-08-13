@@ -112,9 +112,10 @@ export type Message =
   | { type: 'FH_FETCH_EXPLORE'; srcTabId: number; pageFrom: number; pageTo: number }
   | { type: 'FH_EXTRACT_OWNER'; srcTabId: number; imageViewerUrls: string[]; samplePerPage: number; intervalMs: number }
   | { type: 'FH_SCAN_PRODUCERS'; srcTabId: number; usernames: string[]; intervalMs: number }
-  // ---- freeimage 探索检索（FP-007 场景 D v8）：批次会话，每批自动保存到记录库 ----
-  | { type: 'FH_EXPLORE_SEARCH_START'; srcTabId: number; mode: FhExploreMode; list: FhExploreType; rounds: number; intervalMs: number }
-  | { type: 'FH_EXPLORE_SEARCH_NEXT'; srcTabId: number; rounds: number; intervalMs: number }
+  // ---- freeimage 探索检索（FP-007 场景 D v8/v9：批次会话 + 仅中文 + 中文深挖） ----
+  | { type: 'FH_EXPLORE_SEARCH_START'; srcTabId: number; mode: FhExploreMode; list: FhExploreType; rounds: number; intervalMs: number; chineseOnly?: boolean }
+  | { type: 'FH_EXPLORE_SEARCH_NEXT'; srcTabId: number; rounds: number; intervalMs: number; chineseOnly?: boolean }
+  | { type: 'FH_EXPLORE_MINE'; srcTabId: number; rounds: number; intervalMs: number }
   | { type: 'FH_EXPLORE_STOP' }
   // ---- freeimage 相册索引库（场景 D 记录/合并/导入导出） ----
   | { type: 'FH_ALBUM_INDEX_GET' }
@@ -148,7 +149,7 @@ export type Message =
 
 export type ImgResultKind = 'album-images' | 'gallery' | 'gallery-range' | 'albums' | 'following'
 
-export type FhResultKind = 'user' | 'album' | 'albums' | 'explore' | 'owners' | 'scan' | 'explore-search' | 'index-saved' | 'following'
+export type FhResultKind = 'user' | 'album' | 'albums' | 'explore' | 'owners' | 'scan' | 'explore-search' | 'index-saved' | 'following' | 'explore-mine'
 
 /** 探索页模式（路径）+ 类型（query list） */
 export type FhExploreMode = 'recent' | 'popular' | 'trending'

@@ -155,6 +155,13 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
             <button id="fh-sr-stop" class="btn danger" disabled>终止</button>
           </div>
           <div class="row">
+            <label class="radio-label"><input type="checkbox" id="fh-sr-cn-only"> 仅中文相册（过滤无用信息）</label>
+            <span class="row-label">深挖轮数</span>
+            <input id="fh-sr-mine-rounds" class="num-input" value="5" type="number" min="1" max="50">
+            <button id="fh-sr-mine" class="btn primary">中文深挖</button>
+            <span class="status-text">种子→属主→属主中文相册（递归，仅文字）</span>
+          </div>
+          <div class="row">
             <span class="row-label">进度</span>
             <div class="progress-bar thin" style="flex:1"><div id="fh-sr-fill" class="progress-fill" style="width:0%"></div></div>
             <span id="fh-sr-progress" class="progress-text">未开始</span>
@@ -514,7 +521,9 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
   }
 
   function renderIndexStats(): void {
-    srStats.textContent = `已记录 ${Object.keys(fhAlbumIndex.entries).length} 条（已保存到记录库）`
+    const total = Object.keys(fhAlbumIndex.entries).length
+    const cn = Object.values(fhAlbumIndex.entries).filter((e) => /[\u4e00-\u9fff]/.test(e.name)).length
+    srStats.textContent = `已记录 ${total} 条（中文 ${cn} 条，已保存到记录库）`
   }
 
   function setSearchBusy(busy: boolean): void {
@@ -603,10 +612,11 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
     }
     const rounds = Math.max(1, Math.min(200, Number((root.querySelector('#fh-sr-rounds') as HTMLInputElement).value) || 5))
     searchRounds = rounds
+    const cnOnly = (root.querySelector('#fh-sr-cn-only') as HTMLInputElement).checked
     srLog.innerHTML = ''
     updateProgress(0)
     setSearchBusy(true)
-    logSr(`开始新会话：${searchModeLabel(searchMode)} - ${searchTypeLabel(searchType)}，每批 ${rounds} 轮，结果自动保存`)
+    logSr(`开始新会话：${searchModeLabel(searchMode)} - ${searchTypeLabel(searchType)}，每批 ${rounds} 轮${cnOnly ? '（仅中文）' : ''}，结果自动保存`)
     const res = await sendMessage({
       type: 'FH_EXPLORE_SEARCH_START',
       srcTabId,
@@ -614,6 +624,7 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
       list: searchType as 'albums' | 'images' | 'users',
       rounds,
       intervalMs: 150,
+      chineseOnly: cnOnly || undefined,
     })
     if (!res.ok) {
       setSearchBusy(false)
@@ -625,10 +636,11 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
     if (searchBusy) return
     const rounds = Math.max(1, Math.min(200, Number((root.querySelector('#fh-sr-rounds') as HTMLInputElement).value) || 5))
     searchRounds = rounds
+    const cnOnly = (root.querySelector('#fh-sr-cn-only') as HTMLInputElement).checked
     updateProgress(0)
     setSearchBusy(true)
-    logSr(`下一批：继续 ${rounds} 轮（结果自动保存）…`)
-    const res = await sendMessage({ type: 'FH_EXPLORE_SEARCH_NEXT', srcTabId, rounds, intervalMs: 150 })
+    logSr(`下一批：继续 ${rounds} 轮${cnOnly ? '（仅中文）' : ''}（结果自动保存）…`)
+    const res = await sendMessage({ type: 'FH_EXPLORE_SEARCH_NEXT', srcTabId, rounds, intervalMs: 150, chineseOnly: cnOnly || undefined })
     if (!res.ok) {
       setSearchBusy(false)
       logSr(`下一批失败：${res.error}`)
@@ -638,6 +650,26 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
   btnStop.addEventListener('click', () => {
     void sendMessage({ type: 'FH_EXPLORE_STOP' })
     logSr('已请求终止…')
+  })
+
+  // 中文深挖：种子（未深挖的中文相册）→ 属主 → 属主中文相册递归入索引
+  root.querySelector('#fh-sr-mine')?.addEventListener('click', async () => {
+    if (searchBusy) return
+    if (!(await ensureHostPermission())) {
+      setStatus(srHit, '需要授权访问 freeimage 后才能深挖', true)
+      return
+    }
+    const rounds = Math.max(1, Math.min(50, Number((root.querySelector('#fh-sr-mine-rounds') as HTMLInputElement).value) || 5))
+    searchRounds = rounds
+    srLog.innerHTML = ''
+    updateProgress(0)
+    setSearchBusy(true)
+    logSr(`中文深挖：${rounds} 轮（种子→属主→属主中文相册）…`)
+    const res = await sendMessage({ type: 'FH_EXPLORE_MINE', srcTabId, rounds, intervalMs: 200 })
+    if (!res.ok) {
+      setSearchBusy(false)
+      logSr(`深挖启动失败：${res.error}`)
+    }
   })
 
   function searchModeLabel(mode: string): string {
@@ -1369,6 +1401,20 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
               logSr(`  → ${e.name}${e.username ? `（${e.username}）` : ''}`)
             }
             if (p.newEntries.length > 8) logSr(`  …等共 ${p.newEntries.length} 条`)
+            void refreshIndex()
+          }
+          break
+        }
+        case 'explore-mine': {
+          const p = data as ExploreSearchProgress
+          if (done) {
+            setSearchBusy(false)
+            updateProgress(searchRounds)
+            logSr(error ? `深挖失败：${error}` : `中文深挖完成：记录库共 ${p.total} 条（可再检索）`)
+            void refreshIndex()
+          } else {
+            updateProgress(p.round)
+            logSr(`深挖第 ${p.round} 轮：${p.added} 个种子，索引累计 ${p.total} 条（已保存）`)
             void refreshIndex()
           }
           break

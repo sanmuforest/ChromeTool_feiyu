@@ -5129,6 +5129,13 @@
             <button id="fh-sr-stop" class="btn danger" disabled>\u7EC8\u6B62</button>
           </div>
           <div class="row">
+            <label class="radio-label"><input type="checkbox" id="fh-sr-cn-only"> \u4EC5\u4E2D\u6587\u76F8\u518C\uFF08\u8FC7\u6EE4\u65E0\u7528\u4FE1\u606F\uFF09</label>
+            <span class="row-label">\u6DF1\u6316\u8F6E\u6570</span>
+            <input id="fh-sr-mine-rounds" class="num-input" value="5" type="number" min="1" max="50">
+            <button id="fh-sr-mine" class="btn primary">\u4E2D\u6587\u6DF1\u6316</button>
+            <span class="status-text">\u79CD\u5B50\u2192\u5C5E\u4E3B\u2192\u5C5E\u4E3B\u4E2D\u6587\u76F8\u518C\uFF08\u9012\u5F52\uFF0C\u4EC5\u6587\u5B57\uFF09</span>
+          </div>
+          <div class="row">
             <span class="row-label">\u8FDB\u5EA6</span>
             <div class="progress-bar thin" style="flex:1"><div id="fh-sr-fill" class="progress-fill" style="width:0%"></div></div>
             <span id="fh-sr-progress" class="progress-text">\u672A\u5F00\u59CB</span>
@@ -5462,7 +5469,9 @@
       srLog.scrollTop = srLog.scrollHeight;
     }
     function renderIndexStats() {
-      srStats.textContent = `\u5DF2\u8BB0\u5F55 ${Object.keys(fhAlbumIndex.entries).length} \u6761\uFF08\u5DF2\u4FDD\u5B58\u5230\u8BB0\u5F55\u5E93\uFF09`;
+      const total = Object.keys(fhAlbumIndex.entries).length;
+      const cn = Object.values(fhAlbumIndex.entries).filter((e) => /[\u4e00-\u9fff]/.test(e.name)).length;
+      srStats.textContent = `\u5DF2\u8BB0\u5F55 ${total} \u6761\uFF08\u4E2D\u6587 ${cn} \u6761\uFF0C\u5DF2\u4FDD\u5B58\u5230\u8BB0\u5F55\u5E93\uFF09`;
     }
     function setSearchBusy(busy) {
       searchBusy = busy;
@@ -5543,17 +5552,19 @@
       }
       const rounds = Math.max(1, Math.min(200, Number(root.querySelector("#fh-sr-rounds").value) || 5));
       searchRounds = rounds;
+      const cnOnly = root.querySelector("#fh-sr-cn-only").checked;
       srLog.innerHTML = "";
       updateProgress(0);
       setSearchBusy(true);
-      logSr(`\u5F00\u59CB\u65B0\u4F1A\u8BDD\uFF1A${searchModeLabel(searchMode)} - ${searchTypeLabel(searchType)}\uFF0C\u6BCF\u6279 ${rounds} \u8F6E\uFF0C\u7ED3\u679C\u81EA\u52A8\u4FDD\u5B58`);
+      logSr(`\u5F00\u59CB\u65B0\u4F1A\u8BDD\uFF1A${searchModeLabel(searchMode)} - ${searchTypeLabel(searchType)}\uFF0C\u6BCF\u6279 ${rounds} \u8F6E${cnOnly ? "\uFF08\u4EC5\u4E2D\u6587\uFF09" : ""}\uFF0C\u7ED3\u679C\u81EA\u52A8\u4FDD\u5B58`);
       const res = await sendMessage({
         type: "FH_EXPLORE_SEARCH_START",
         srcTabId: srcTabId2,
         mode: searchMode,
         list: searchType,
         rounds,
-        intervalMs: 150
+        intervalMs: 150,
+        chineseOnly: cnOnly || void 0
       });
       if (!res.ok) {
         setSearchBusy(false);
@@ -5564,10 +5575,11 @@
       if (searchBusy) return;
       const rounds = Math.max(1, Math.min(200, Number(root.querySelector("#fh-sr-rounds").value) || 5));
       searchRounds = rounds;
+      const cnOnly = root.querySelector("#fh-sr-cn-only").checked;
       updateProgress(0);
       setSearchBusy(true);
-      logSr(`\u4E0B\u4E00\u6279\uFF1A\u7EE7\u7EED ${rounds} \u8F6E\uFF08\u7ED3\u679C\u81EA\u52A8\u4FDD\u5B58\uFF09\u2026`);
-      const res = await sendMessage({ type: "FH_EXPLORE_SEARCH_NEXT", srcTabId: srcTabId2, rounds, intervalMs: 150 });
+      logSr(`\u4E0B\u4E00\u6279\uFF1A\u7EE7\u7EED ${rounds} \u8F6E${cnOnly ? "\uFF08\u4EC5\u4E2D\u6587\uFF09" : ""}\uFF08\u7ED3\u679C\u81EA\u52A8\u4FDD\u5B58\uFF09\u2026`);
+      const res = await sendMessage({ type: "FH_EXPLORE_SEARCH_NEXT", srcTabId: srcTabId2, rounds, intervalMs: 150, chineseOnly: cnOnly || void 0 });
       if (!res.ok) {
         setSearchBusy(false);
         logSr(`\u4E0B\u4E00\u6279\u5931\u8D25\uFF1A${res.error}`);
@@ -5576,6 +5588,24 @@
     btnStop.addEventListener("click", () => {
       void sendMessage({ type: "FH_EXPLORE_STOP" });
       logSr("\u5DF2\u8BF7\u6C42\u7EC8\u6B62\u2026");
+    });
+    root.querySelector("#fh-sr-mine")?.addEventListener("click", async () => {
+      if (searchBusy) return;
+      if (!await ensureHostPermission()) {
+        setStatus(srHit, "\u9700\u8981\u6388\u6743\u8BBF\u95EE freeimage \u540E\u624D\u80FD\u6DF1\u6316", true);
+        return;
+      }
+      const rounds = Math.max(1, Math.min(50, Number(root.querySelector("#fh-sr-mine-rounds").value) || 5));
+      searchRounds = rounds;
+      srLog.innerHTML = "";
+      updateProgress(0);
+      setSearchBusy(true);
+      logSr(`\u4E2D\u6587\u6DF1\u6316\uFF1A${rounds} \u8F6E\uFF08\u79CD\u5B50\u2192\u5C5E\u4E3B\u2192\u5C5E\u4E3B\u4E2D\u6587\u76F8\u518C\uFF09\u2026`);
+      const res = await sendMessage({ type: "FH_EXPLORE_MINE", srcTabId: srcTabId2, rounds, intervalMs: 200 });
+      if (!res.ok) {
+        setSearchBusy(false);
+        logSr(`\u6DF1\u6316\u542F\u52A8\u5931\u8D25\uFF1A${res.error}`);
+      }
     });
     function searchModeLabel(mode) {
       return mode === "recent" ? "\u6700\u65B0" : mode === "popular" ? "\u70ED\u95E8" : "\u6700\u591A\u559C\u6B22";
@@ -6262,6 +6292,20 @@
             }
             break;
           }
+          case "explore-mine": {
+            const p = data;
+            if (done) {
+              setSearchBusy(false);
+              updateProgress(searchRounds);
+              logSr(error ? `\u6DF1\u6316\u5931\u8D25\uFF1A${error}` : `\u4E2D\u6587\u6DF1\u6316\u5B8C\u6210\uFF1A\u8BB0\u5F55\u5E93\u5171 ${p.total} \u6761\uFF08\u53EF\u518D\u68C0\u7D22\uFF09`);
+              void refreshIndex();
+            } else {
+              updateProgress(p.round);
+              logSr(`\u6DF1\u6316\u7B2C ${p.round} \u8F6E\uFF1A${p.added} \u4E2A\u79CD\u5B50\uFF0C\u7D22\u5F15\u7D2F\u8BA1 ${p.total} \u6761\uFF08\u5DF2\u4FDD\u5B58\uFF09`);
+              void refreshIndex();
+            }
+            break;
+          }
           case "explore": {
             const images = data;
             exploreImages.push(...images);
@@ -6360,7 +6404,7 @@
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260813172511" : "dev";
+  var BUILD_TIME = true ? "20260813174629" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

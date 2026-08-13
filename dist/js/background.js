@@ -1974,6 +1974,9 @@
       return null;
     }
   }
+  function isChineseAlbum(name) {
+    return /[\u4e00-\u9fff]/.test(name);
+  }
 
   // src/background/freeimage-service.ts
   var logger5 = initLogger("background");
@@ -2534,7 +2537,8 @@
           username: typeof en.username === "string" ? en.username : void 0,
           imageCount: typeof en.imageCount === "number" ? en.imageCount : void 0,
           source: String(en.source ?? ""),
-          collectedAt: typeof en.collectedAt === "number" ? en.collectedAt : Date.now()
+          collectedAt: typeof en.collectedAt === "number" ? en.collectedAt : Date.now(),
+          mined: en.mined === true ? true : void 0
         };
       }
     }
@@ -2629,11 +2633,12 @@
     if (!session) return;
     await sendToTab(session.grabTabId, { type: "FH_RESULT", kind, data, done, error });
   }
-  async function runSearchBatch(srcTabId, mode, list, rounds, intervalMs) {
+  async function runSearchBatch(srcTabId, mode, list, rounds, intervalMs, chineseOnly) {
     await fhAlbumIndexReady;
     const onRound = async (progress) => {
       let added = 0;
       for (const e of progress.newEntries) {
+        if (chineseOnly && !isChineseAlbum(e.name)) continue;
         const existing = fhAlbumIndex.entries[e.id];
         if (!existing) {
           fhAlbumIndex.entries[e.id] = e;
@@ -3521,8 +3526,8 @@
       }
       case "FH_EXPLORE_SEARCH_START": {
         freeimage.startSearch(message.mode, message.list);
-        logger7.info("freeimage", "\u63A2\u7D22\u68C0\u7D22\u5F00\u59CB\u65B0\u4F1A\u8BDD", { mode: message.mode, list: message.list, rounds: message.rounds });
-        await runSearchBatch(message.srcTabId, message.mode, message.list, message.rounds, message.intervalMs);
+        logger7.info("freeimage", "\u63A2\u7D22\u68C0\u7D22\u5F00\u59CB\u65B0\u4F1A\u8BDD", { mode: message.mode, list: message.list, rounds: message.rounds, chineseOnly: message.chineseOnly });
+        await runSearchBatch(message.srcTabId, message.mode, message.list, message.rounds, message.intervalMs, message.chineseOnly);
         return { ok: true };
       }
       case "FH_EXPLORE_SEARCH_NEXT": {
@@ -3531,7 +3536,91 @@
           return { ok: false, error: "\u65E0\u6D3B\u52A8\u68C0\u7D22\u4F1A\u8BDD\uFF08\u8BF7\u5148\u5F00\u59CB\u68C0\u7D22\uFF09" };
         }
         logger7.info("freeimage", "\u63A2\u7D22\u68C0\u7D22\u4E0B\u4E00\u6279", { mode: info.mode, list: info.list, rounds: message.rounds });
-        await runSearchBatch(message.srcTabId, info.mode, info.list, message.rounds, message.intervalMs);
+        await runSearchBatch(message.srcTabId, info.mode, info.list, message.rounds, message.intervalMs, message.chineseOnly);
+        return { ok: true };
+      }
+      case "FH_EXPLORE_MINE": {
+        await fhAlbumIndexReady;
+        const MINE_BATCH = 5;
+        let round = 0;
+        let done = false;
+        while (round < message.rounds && !done) {
+          round++;
+          const candidates = Object.values(fhAlbumIndex.entries).filter((e) => !e.mined && isChineseAlbum(e.name)).slice(0, MINE_BATCH);
+          if (candidates.length === 0) {
+            done = true;
+            break;
+          }
+          const newEntries = [];
+          for (const c of candidates) {
+            try {
+              const html = await freeimage.fetchHtml(c.url);
+              const owner = extractOwner(html);
+              if (owner) {
+                const info = await freeimage.collectAlbumsForUser(owner.username);
+                let ownerCn = 0;
+                for (const a of info.albums) {
+                  const aid = a.url.match(/\.([a-zA-Z0-9]+)$/)?.[1] ?? a.url;
+                  const entry = {
+                    id: aid,
+                    name: a.name,
+                    url: a.url,
+                    username: owner.username,
+                    source: "mine",
+                    collectedAt: Date.now()
+                  };
+                  const existing = fhAlbumIndex.entries[aid];
+                  if (!existing) {
+                    fhAlbumIndex.entries[aid] = entry;
+                    if (isChineseAlbum(a.name)) ownerCn++;
+                  } else if (!existing.username) {
+                    fhAlbumIndex.entries[aid] = { ...existing, username: owner.username };
+                  }
+                }
+                logger7.info("freeimage", "\u4E2D\u6587\u6DF1\u6316\uFF1A\u5C5E\u4E3B\u76F8\u518C", { seed: c.name, owner: owner.username, albums: info.albumCount, chinese: ownerCn });
+              }
+            } catch (err) {
+              logger7.warn("freeimage", "\u6DF1\u6316\u79CD\u5B50\u5931\u8D25\uFF08\u8DF3\u8FC7\uFF09", { seed: c.name, error: String(err) });
+            }
+            fhAlbumIndex.entries[c.id] = { ...fhAlbumIndex.entries[c.id], mined: true };
+          }
+          fhAlbumIndex.updatedAt = Date.now();
+          await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex);
+          const total = Object.keys(fhAlbumIndex.entries).length;
+          await pushFhResult(
+            message.srcTabId,
+            "explore-mine",
+            {
+              round,
+              pageFrom: 0,
+              pageTo: 0,
+              added: newEntries.length,
+              total,
+              newEntries,
+              mode: "recent",
+              type: "albums"
+            },
+            round >= message.rounds
+          );
+          await new Promise((r) => setTimeout(r, message.intervalMs));
+        }
+        if (done) {
+          await pushFhResult(
+            message.srcTabId,
+            "explore-mine",
+            {
+              round,
+              pageFrom: 0,
+              pageTo: 0,
+              added: 0,
+              total: Object.keys(fhAlbumIndex.entries).length,
+              newEntries: [],
+              mode: "recent",
+              type: "albums"
+            },
+            true
+          );
+        }
         return { ok: true };
       }
       case "FH_EXPLORE_STOP": {
