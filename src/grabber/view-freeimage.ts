@@ -162,8 +162,9 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
             <span class="status-text">探索补给+属主深挖（递归）</span>
           </div>
           <div class="row">
-            <input id="fh-sr-mine-seeds" class="text-input" placeholder="手动种子用户名，逗号分隔（如 jzqgoodlife，一次抓其全部中文相册）">
+            <input id="fh-sr-mine-seeds" class="text-input" placeholder="手动种子用户名或主页 URL，逗号分隔（如 jzqgoodlife）">
             <button id="fh-sr-mine-seed-add" class="btn">加入种子并深挖</button>
+            <span class="status-text">可选：已知中文用户一次抓其全部相册</span>
           </div>
           <div class="row">
             <span class="row-label">进度</span>
@@ -198,7 +199,18 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
           <div class="fh-hit-list" id="fh-sr-hits"></div>
         </div>
         <div class="diffuse-section">
-          <div class="section-title">④ 中文相册总览（记录库全部中文相册，含深挖结果）</div>
+          <div class="section-title">④ 中文相册检索记录（独立数据表：探索/深挖自动收集中文相册）</div>
+          <div class="row">
+            <span id="fh-cn-stats" class="status-text">中文记录 0 条</span>
+            <button id="fh-cn-export" class="btn primary">导出 JSON</button>
+            <button id="fh-cn-import" class="btn">导入合并</button>
+            <input id="fh-cn-import-file" type="file" accept=".json" style="display:none">
+            <button id="fh-cn-clear" class="btn danger">清空</button>
+          </div>
+          <div class="row">
+            <input id="fh-cn-keywords" class="text-input" placeholder="中文关键词检索（匹配相册名/用户名）">
+            <button id="fh-cn-run" class="btn primary">检索</button>
+          </div>
           <div class="row">
             <button id="fh-sr-cn-all" class="btn primary">显示全部中文相册</button>
             <button id="fh-cn-prev" class="btn" disabled>上一页</button>
@@ -773,14 +785,24 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
     }
   })
 
-  // ---------- 中文相册总览（全部中文相册分页展示） ----------
+  // ---------- 中文相册检索记录（独立表 fh_cn_album_index） ----------
   const cnListEl = root.querySelector('#fh-sr-cn-list') as HTMLElement
   const cnPageEl = root.querySelector('#fh-cn-page') as HTMLElement
   const cnTotalEl = root.querySelector('#fh-cn-total') as HTMLElement
   const cnPrevBtn = root.querySelector('#fh-cn-prev') as HTMLButtonElement
   const cnNextBtn = root.querySelector('#fh-cn-next') as HTMLButtonElement
+  const cnStatsEl = root.querySelector('#fh-cn-stats') as HTMLElement
+  let fhCnAlbumIndex: FhAlbumIndexDb = emptyFhAlbumIndexDb()
   let cnAll: { name: string; url: string; username?: string; source: string }[] = []
   let cnPage = 0
+
+  async function refreshCnIndex(): Promise<void> {
+    const res = await sendMessage<{ ok: true; fhIndex: FhAlbumIndexDb } | { ok: false; error: string }>({ type: 'FH_CN_INDEX_GET' })
+    if (res.ok) {
+      fhCnAlbumIndex = res.fhIndex
+      cnStatsEl.textContent = `中文记录 ${Object.keys(fhCnAlbumIndex.entries).length} 条（独立数据表）`
+    }
+  }
 
   function renderCnPage(): void {
     const total = cnAll.length
@@ -789,7 +811,7 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
     const slice = cnAll.slice(cnPage * SEARCH_PAGE_SIZE, (cnPage + 1) * SEARCH_PAGE_SIZE)
     cnListEl.innerHTML = ''
     if (total === 0) {
-      cnListEl.innerHTML = '<div class="empty-tip">暂无中文相册（先探索采集 / 中文深挖）。</div>'
+      cnListEl.innerHTML = '<div class="empty-tip">暂无中文相册（先探索检索 / 中文深挖自动收集）。</div>'
     }
     for (const hit of slice) {
       const block = document.createElement('div')
@@ -803,7 +825,7 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
       user.appendChild(a)
       const deg = document.createElement('span')
       deg.className = 'user-degree'
-      const srcLabel = hit.source === 'mine' ? '深挖' : hit.source === 'mine-supply' ? '补给' : '探索'
+      const srcLabel = hit.source === 'mine' ? '深挖' : hit.source === 'mine-supply' ? '探索补给' : hit.source === 'mine-seed' ? '手动种子' : '探索'
       deg.textContent = `${hit.username ? `属主 ${hit.username} · ` : ''}${srcLabel}`
       user.appendChild(deg)
       block.appendChild(user)
@@ -815,9 +837,10 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
     cnNextBtn.disabled = cnPage >= pages - 1
   }
 
-  root.querySelector('#fh-sr-cn-all')?.addEventListener('click', () => {
-    cnAll = Object.values(fhAlbumIndex.entries)
-      .filter((e) => /[\u4e00-\u9fff]/.test(e.name))
+  // 显示全部中文相册（读独立中文表）
+  root.querySelector('#fh-sr-cn-all')?.addEventListener('click', async () => {
+    await refreshCnIndex()
+    cnAll = Object.values(fhCnAlbumIndex.entries)
       .sort((a, b) => b.collectedAt - a.collectedAt)
       .map((e) => ({ name: e.name, url: e.url, username: e.username, source: e.source }))
     cnPage = 0
@@ -834,6 +857,68 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
     if (cnPage < pages - 1) {
       cnPage++
       renderCnPage()
+    }
+  })
+
+  // 中文关键词检索（读独立中文表）
+  root.querySelector('#fh-cn-run')?.addEventListener('click', async () => {
+    const kw = (root.querySelector('#fh-cn-keywords') as HTMLInputElement).value
+    const keywords = kw.split(/[,，]/).map((k) => k.trim()).filter(Boolean)
+    if (keywords.length === 0) {
+      cnListEl.innerHTML = '<div class="empty-tip">请输入中文关键词。</div>'
+      return
+    }
+    await refreshCnIndex()
+    const all = Object.values(fhCnAlbumIndex.entries).map((e) => ({ name: e.name, url: e.url, username: e.username }))
+    cnAll = matchAlbumKeywords(all, keywords).map((h) => ({ name: h.name, url: h.url, username: h.username, source: '' }))
+    cnPage = 0
+    renderCnPage()
+  })
+
+  // 中文表导出 / 导入 / 清空
+  root.querySelector('#fh-cn-export')?.addEventListener('click', async () => {
+    const res = await sendMessage<{ ok: true; json: string } | { ok: false; error: string }>({ type: 'FH_CN_INDEX_EXPORT' })
+    if (!res.ok) {
+      setStatus(cnStatsEl, `导出失败：${res.error}`, true)
+      return
+    }
+    const blob = new Blob([res.json], { type: 'application/json' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'freeimage-cn-albums.json'
+    a.click()
+    URL.revokeObjectURL(a.href)
+    setStatus(cnStatsEl, '已导出 freeimage-cn-albums.json')
+  })
+  root.querySelector('#fh-cn-import')?.addEventListener('click', () => {
+    ;(root.querySelector('#fh-cn-import-file') as HTMLInputElement).click()
+  })
+  root.querySelector('#fh-cn-import-file')?.addEventListener('change', async (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const db = JSON.parse(text)
+      const res = await sendMessage<{ ok: true; fhIndexImported: { before: number; after: number } } | { ok: false; error: string }>({
+        type: 'FH_CN_INDEX_IMPORT',
+        db,
+      })
+      if (res.ok) {
+        setStatus(cnStatsEl, `导入合并：${res.fhIndexImported.before} → ${res.fhIndexImported.after} 条`)
+        await refreshCnIndex()
+      } else setStatus(cnStatsEl, `导入失败：${res.error}`, true)
+    } catch (err) {
+      setStatus(cnStatsEl, `导入失败：${String(err)}`, true)
+    } finally {
+      ;(e.target as HTMLInputElement).value = ''
+    }
+  })
+  root.querySelector('#fh-cn-clear')?.addEventListener('click', async () => {
+    if (!confirm('确认清空中文相册记录表？')) return
+    const res = await sendMessage({ type: 'FH_CN_INDEX_CLEAR' })
+    if (res.ok) {
+      await refreshCnIndex()
+      cnListEl.innerHTML = ''
     }
   })
 
@@ -1486,6 +1571,7 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
               logSr(`已到最后一页：记录库共保存 ${p.total} 条（会话结束）`)
             }
             void refreshIndex()
+            void refreshCnIndex()
           } else {
             updateProgress(p.round)
             logSr(`第 ${p.round} 轮：抓取第 ${p.pageFrom}~${p.pageTo} 页，新增 ${p.added} 条，累计 ${p.total} 条（已保存）`)
@@ -1494,6 +1580,7 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
             }
             if (p.newEntries.length > 8) logSr(`  …等共 ${p.newEntries.length} 条`)
             void refreshIndex()
+            void refreshCnIndex()
           }
           break
         }
@@ -1502,12 +1589,14 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
           if (done) {
             setSearchBusy(false)
             updateProgress(searchRounds)
-            logSr(error ? `深挖失败：${error}` : `中文深挖完成：记录库共 ${p.total} 条（可再检索）`)
+            logSr(error ? `深挖失败：${error}` : `中文深挖完成：记录库共 ${p.total} 条（已同步中文表）`)
             void refreshIndex()
+            void refreshCnIndex()
           } else {
             updateProgress(p.round)
             logSr(`深挖第 ${p.round} 轮：${p.added} 个种子，索引累计 ${p.total} 条（已保存）`)
             void refreshIndex()
+            void refreshCnIndex()
           }
           break
         }
@@ -1605,6 +1694,7 @@ export function initFreeimageView(root: HTMLElement, srcTabId: number, _sourceUr
 
   // 初始加载
   void refreshIndex()
+  void refreshCnIndex()
   void refreshProducerDb()
 
   return handle

@@ -205,6 +205,8 @@ async function runSearchBatch(
     }
     fhAlbumIndex.updatedAt = Date.now()
     await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex)
+    // 中文相册自动同步到独立中文表（中文相册检索记录）
+    await syncCnAlbumIndex()
     const total = Object.keys(fhAlbumIndex.entries).length
     await pushFhResult(srcTabId, 'explore-search', { ...progress, added, total }, false)
   }
@@ -258,6 +260,34 @@ const fhAlbumIndexReady = (async (): Promise<void> => {
   fhAlbumIndex = loadFhAlbumIndexDb(raw)
   logger.info('freeimage', '相册索引库已恢复', { total: Object.keys(fhAlbumIndex.entries).length })
 })()
+
+// ---------- 中文相册检索记录表（FP-007 v10：独立存储，中文过滤自动收集） ----------
+
+let fhCnAlbumIndex: FhAlbumIndexDb = emptyFhAlbumIndexDb()
+const FH_CN_INDEX_KEY = 'fh_cn_album_index'
+/** 中文表就绪 */
+const fhCnIndexReady = (async (): Promise<void> => {
+  const raw = await storageGet<unknown>(FH_CN_INDEX_KEY)
+  fhCnAlbumIndex = loadFhAlbumIndexDb(raw)
+  logger.info('freeimage', '中文相册记录表已恢复', { total: Object.keys(fhCnAlbumIndex.entries).length })
+})()
+
+/** 中文相册同步入中文表（去重合并；深挖/种子结果也走这里） */
+async function syncCnAlbumIndex(): Promise<void> {
+  // 从全量表扫描中文相册同步（增量：中文表没有的补入）
+  let added = 0
+  for (const [id, e] of Object.entries(fhAlbumIndex.entries)) {
+    if (!isChineseAlbum(e.name)) continue
+    if (!fhCnAlbumIndex.entries[id]) {
+      fhCnAlbumIndex.entries[id] = { ...e }
+      added++
+    }
+  }
+  if (added > 0) {
+    fhCnAlbumIndex.updatedAt = Date.now()
+    await storageSet(FH_CN_INDEX_KEY, fhCnAlbumIndex)
+  }
+}
 
 // ---------- freeimage 扩散引擎 + 生产者库（FP-007 迁移 imgbb FP-005） ----------
 
@@ -1227,7 +1257,8 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       let done = false
       // 0. 手动种子用户：一次抓其全部相册（中文用户聚集地，如 jzqgoodlife）
       for (const seedUser of message.seedUsers ?? []) {
-        const u = seedUser.trim().toLowerCase()
+        // 支持用户名或完整主页 URL
+        const u = seedUser.trim().toLowerCase().replace(/^https?:\/\/freeimage\.host\//i, '').replace(/\/+$/, '')
         if (!u) continue
         try {
           const info = await freeimage.collectAlbumsForUser(u)
@@ -1341,6 +1372,8 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
         )
         await new Promise((r) => setTimeout(r, message.intervalMs))
       }
+      // 深挖完成：同步中文表
+      await syncCnAlbumIndex()
       if (done) {
         await pushFhResult(
           message.srcTabId,
@@ -1382,6 +1415,36 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex)
       logger.info('freeimage', '相册索引库已清空')
       return { ok: true, fhIndexImported: { before: 0, after: 0 } }
+    }
+
+    // ---- freeimage 中文相册检索记录表 CRUD ----
+    case 'FH_CN_INDEX_GET': {
+      await fhCnIndexReady
+      return { ok: true, fhIndex: fhCnAlbumIndex }
+    }
+    case 'FH_CN_INDEX_EXPORT': {
+      await fhCnIndexReady
+      return { ok: true, json: JSON.stringify(fhCnAlbumIndex, null, 1) }
+    }
+    case 'FH_CN_INDEX_CLEAR': {
+      await fhCnIndexReady
+      fhCnAlbumIndex = emptyFhAlbumIndexDb()
+      await storageSet(FH_CN_INDEX_KEY, fhCnAlbumIndex)
+      logger.info('freeimage', '中文相册记录表已清空')
+      return { ok: true, fhIndexImported: { before: 0, after: 0 } }
+    }
+    case 'FH_CN_INDEX_IMPORT': {
+      await fhCnIndexReady
+      const imported = loadFhAlbumIndexDb(message.db)
+      const before = Object.keys(fhCnAlbumIndex.entries).length
+      for (const [id, e] of Object.entries(imported.entries)) {
+        fhCnAlbumIndex.entries[id] = e
+      }
+      fhCnAlbumIndex.updatedAt = Date.now()
+      await storageSet(FH_CN_INDEX_KEY, fhCnAlbumIndex)
+      const after = Object.keys(fhCnAlbumIndex.entries).length
+      logger.info('freeimage', '中文相册记录表已导入合并', { before, after })
+      return { ok: true, fhIndexImported: { before, after } }
     }
     case 'FH_ALBUM_INDEX_IMPORT': {
       await fhAlbumIndexReady

@@ -5136,8 +5136,9 @@
             <span class="status-text">\u63A2\u7D22\u8865\u7ED9+\u5C5E\u4E3B\u6DF1\u6316\uFF08\u9012\u5F52\uFF09</span>
           </div>
           <div class="row">
-            <input id="fh-sr-mine-seeds" class="text-input" placeholder="\u624B\u52A8\u79CD\u5B50\u7528\u6237\u540D\uFF0C\u9017\u53F7\u5206\u9694\uFF08\u5982 jzqgoodlife\uFF0C\u4E00\u6B21\u6293\u5176\u5168\u90E8\u4E2D\u6587\u76F8\u518C\uFF09">
+            <input id="fh-sr-mine-seeds" class="text-input" placeholder="\u624B\u52A8\u79CD\u5B50\u7528\u6237\u540D\u6216\u4E3B\u9875 URL\uFF0C\u9017\u53F7\u5206\u9694\uFF08\u5982 jzqgoodlife\uFF09">
             <button id="fh-sr-mine-seed-add" class="btn">\u52A0\u5165\u79CD\u5B50\u5E76\u6DF1\u6316</button>
+            <span class="status-text">\u53EF\u9009\uFF1A\u5DF2\u77E5\u4E2D\u6587\u7528\u6237\u4E00\u6B21\u6293\u5176\u5168\u90E8\u76F8\u518C</span>
           </div>
           <div class="row">
             <span class="row-label">\u8FDB\u5EA6</span>
@@ -5172,7 +5173,18 @@
           <div class="fh-hit-list" id="fh-sr-hits"></div>
         </div>
         <div class="diffuse-section">
-          <div class="section-title">\u2463 \u4E2D\u6587\u76F8\u518C\u603B\u89C8\uFF08\u8BB0\u5F55\u5E93\u5168\u90E8\u4E2D\u6587\u76F8\u518C\uFF0C\u542B\u6DF1\u6316\u7ED3\u679C\uFF09</div>
+          <div class="section-title">\u2463 \u4E2D\u6587\u76F8\u518C\u68C0\u7D22\u8BB0\u5F55\uFF08\u72EC\u7ACB\u6570\u636E\u8868\uFF1A\u63A2\u7D22/\u6DF1\u6316\u81EA\u52A8\u6536\u96C6\u4E2D\u6587\u76F8\u518C\uFF09</div>
+          <div class="row">
+            <span id="fh-cn-stats" class="status-text">\u4E2D\u6587\u8BB0\u5F55 0 \u6761</span>
+            <button id="fh-cn-export" class="btn primary">\u5BFC\u51FA JSON</button>
+            <button id="fh-cn-import" class="btn">\u5BFC\u5165\u5408\u5E76</button>
+            <input id="fh-cn-import-file" type="file" accept=".json" style="display:none">
+            <button id="fh-cn-clear" class="btn danger">\u6E05\u7A7A</button>
+          </div>
+          <div class="row">
+            <input id="fh-cn-keywords" class="text-input" placeholder="\u4E2D\u6587\u5173\u952E\u8BCD\u68C0\u7D22\uFF08\u5339\u914D\u76F8\u518C\u540D/\u7528\u6237\u540D\uFF09">
+            <button id="fh-cn-run" class="btn primary">\u68C0\u7D22</button>
+          </div>
           <div class="row">
             <button id="fh-sr-cn-all" class="btn primary">\u663E\u793A\u5168\u90E8\u4E2D\u6587\u76F8\u518C</button>
             <button id="fh-cn-prev" class="btn" disabled>\u4E0A\u4E00\u9875</button>
@@ -5705,8 +5717,17 @@
     const cnTotalEl = root.querySelector("#fh-cn-total");
     const cnPrevBtn = root.querySelector("#fh-cn-prev");
     const cnNextBtn = root.querySelector("#fh-cn-next");
+    const cnStatsEl = root.querySelector("#fh-cn-stats");
+    let fhCnAlbumIndex = emptyFhAlbumIndexDb();
     let cnAll = [];
     let cnPage = 0;
+    async function refreshCnIndex() {
+      const res = await sendMessage({ type: "FH_CN_INDEX_GET" });
+      if (res.ok) {
+        fhCnAlbumIndex = res.fhIndex;
+        cnStatsEl.textContent = `\u4E2D\u6587\u8BB0\u5F55 ${Object.keys(fhCnAlbumIndex.entries).length} \u6761\uFF08\u72EC\u7ACB\u6570\u636E\u8868\uFF09`;
+      }
+    }
     function renderCnPage() {
       const total = cnAll.length;
       const pages = Math.max(1, Math.ceil(total / SEARCH_PAGE_SIZE));
@@ -5714,7 +5735,7 @@
       const slice = cnAll.slice(cnPage * SEARCH_PAGE_SIZE, (cnPage + 1) * SEARCH_PAGE_SIZE);
       cnListEl.innerHTML = "";
       if (total === 0) {
-        cnListEl.innerHTML = '<div class="empty-tip">\u6682\u65E0\u4E2D\u6587\u76F8\u518C\uFF08\u5148\u63A2\u7D22\u91C7\u96C6 / \u4E2D\u6587\u6DF1\u6316\uFF09\u3002</div>';
+        cnListEl.innerHTML = '<div class="empty-tip">\u6682\u65E0\u4E2D\u6587\u76F8\u518C\uFF08\u5148\u63A2\u7D22\u68C0\u7D22 / \u4E2D\u6587\u6DF1\u6316\u81EA\u52A8\u6536\u96C6\uFF09\u3002</div>';
       }
       for (const hit of slice) {
         const block = document.createElement("div");
@@ -5728,7 +5749,7 @@
         user.appendChild(a);
         const deg = document.createElement("span");
         deg.className = "user-degree";
-        const srcLabel = hit.source === "mine" ? "\u6DF1\u6316" : hit.source === "mine-supply" ? "\u8865\u7ED9" : "\u63A2\u7D22";
+        const srcLabel = hit.source === "mine" ? "\u6DF1\u6316" : hit.source === "mine-supply" ? "\u63A2\u7D22\u8865\u7ED9" : hit.source === "mine-seed" ? "\u624B\u52A8\u79CD\u5B50" : "\u63A2\u7D22";
         deg.textContent = `${hit.username ? `\u5C5E\u4E3B ${hit.username} \xB7 ` : ""}${srcLabel}`;
         user.appendChild(deg);
         block.appendChild(user);
@@ -5739,8 +5760,9 @@
       cnPrevBtn.disabled = cnPage <= 0;
       cnNextBtn.disabled = cnPage >= pages - 1;
     }
-    root.querySelector("#fh-sr-cn-all")?.addEventListener("click", () => {
-      cnAll = Object.values(fhAlbumIndex.entries).filter((e) => /[\u4e00-\u9fff]/.test(e.name)).sort((a, b) => b.collectedAt - a.collectedAt).map((e) => ({ name: e.name, url: e.url, username: e.username, source: e.source }));
+    root.querySelector("#fh-sr-cn-all")?.addEventListener("click", async () => {
+      await refreshCnIndex();
+      cnAll = Object.values(fhCnAlbumIndex.entries).sort((a, b) => b.collectedAt - a.collectedAt).map((e) => ({ name: e.name, url: e.url, username: e.username, source: e.source }));
       cnPage = 0;
       renderCnPage();
     });
@@ -5755,6 +5777,66 @@
       if (cnPage < pages - 1) {
         cnPage++;
         renderCnPage();
+      }
+    });
+    root.querySelector("#fh-cn-run")?.addEventListener("click", async () => {
+      const kw = root.querySelector("#fh-cn-keywords").value;
+      const keywords = kw.split(/[,，]/).map((k) => k.trim()).filter(Boolean);
+      if (keywords.length === 0) {
+        cnListEl.innerHTML = '<div class="empty-tip">\u8BF7\u8F93\u5165\u4E2D\u6587\u5173\u952E\u8BCD\u3002</div>';
+        return;
+      }
+      await refreshCnIndex();
+      const all = Object.values(fhCnAlbumIndex.entries).map((e) => ({ name: e.name, url: e.url, username: e.username }));
+      cnAll = matchAlbumKeywords(all, keywords).map((h) => ({ name: h.name, url: h.url, username: h.username, source: "" }));
+      cnPage = 0;
+      renderCnPage();
+    });
+    root.querySelector("#fh-cn-export")?.addEventListener("click", async () => {
+      const res = await sendMessage({ type: "FH_CN_INDEX_EXPORT" });
+      if (!res.ok) {
+        setStatus(cnStatsEl, `\u5BFC\u51FA\u5931\u8D25\uFF1A${res.error}`, true);
+        return;
+      }
+      const blob = new Blob([res.json], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "freeimage-cn-albums.json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+      setStatus(cnStatsEl, "\u5DF2\u5BFC\u51FA freeimage-cn-albums.json");
+    });
+    root.querySelector("#fh-cn-import")?.addEventListener("click", () => {
+      ;
+      root.querySelector("#fh-cn-import-file").click();
+    });
+    root.querySelector("#fh-cn-import-file")?.addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const db = JSON.parse(text);
+        const res = await sendMessage({
+          type: "FH_CN_INDEX_IMPORT",
+          db
+        });
+        if (res.ok) {
+          setStatus(cnStatsEl, `\u5BFC\u5165\u5408\u5E76\uFF1A${res.fhIndexImported.before} \u2192 ${res.fhIndexImported.after} \u6761`);
+          await refreshCnIndex();
+        } else setStatus(cnStatsEl, `\u5BFC\u5165\u5931\u8D25\uFF1A${res.error}`, true);
+      } catch (err) {
+        setStatus(cnStatsEl, `\u5BFC\u5165\u5931\u8D25\uFF1A${String(err)}`, true);
+      } finally {
+        ;
+        e.target.value = "";
+      }
+    });
+    root.querySelector("#fh-cn-clear")?.addEventListener("click", async () => {
+      if (!confirm("\u786E\u8BA4\u6E05\u7A7A\u4E2D\u6587\u76F8\u518C\u8BB0\u5F55\u8868\uFF1F")) return;
+      const res = await sendMessage({ type: "FH_CN_INDEX_CLEAR" });
+      if (res.ok) {
+        await refreshCnIndex();
+        cnListEl.innerHTML = "";
       }
     });
     async function refreshIndex() {
@@ -6362,6 +6444,7 @@
                 logSr(`\u5DF2\u5230\u6700\u540E\u4E00\u9875\uFF1A\u8BB0\u5F55\u5E93\u5171\u4FDD\u5B58 ${p.total} \u6761\uFF08\u4F1A\u8BDD\u7ED3\u675F\uFF09`);
               }
               void refreshIndex();
+              void refreshCnIndex();
             } else {
               updateProgress(p.round);
               logSr(`\u7B2C ${p.round} \u8F6E\uFF1A\u6293\u53D6\u7B2C ${p.pageFrom}~${p.pageTo} \u9875\uFF0C\u65B0\u589E ${p.added} \u6761\uFF0C\u7D2F\u8BA1 ${p.total} \u6761\uFF08\u5DF2\u4FDD\u5B58\uFF09`);
@@ -6370,6 +6453,7 @@
               }
               if (p.newEntries.length > 8) logSr(`  \u2026\u7B49\u5171 ${p.newEntries.length} \u6761`);
               void refreshIndex();
+              void refreshCnIndex();
             }
             break;
           }
@@ -6378,12 +6462,14 @@
             if (done) {
               setSearchBusy(false);
               updateProgress(searchRounds);
-              logSr(error ? `\u6DF1\u6316\u5931\u8D25\uFF1A${error}` : `\u4E2D\u6587\u6DF1\u6316\u5B8C\u6210\uFF1A\u8BB0\u5F55\u5E93\u5171 ${p.total} \u6761\uFF08\u53EF\u518D\u68C0\u7D22\uFF09`);
+              logSr(error ? `\u6DF1\u6316\u5931\u8D25\uFF1A${error}` : `\u4E2D\u6587\u6DF1\u6316\u5B8C\u6210\uFF1A\u8BB0\u5F55\u5E93\u5171 ${p.total} \u6761\uFF08\u5DF2\u540C\u6B65\u4E2D\u6587\u8868\uFF09`);
               void refreshIndex();
+              void refreshCnIndex();
             } else {
               updateProgress(p.round);
               logSr(`\u6DF1\u6316\u7B2C ${p.round} \u8F6E\uFF1A${p.added} \u4E2A\u79CD\u5B50\uFF0C\u7D22\u5F15\u7D2F\u8BA1 ${p.total} \u6761\uFF08\u5DF2\u4FDD\u5B58\uFF09`);
               void refreshIndex();
+              void refreshCnIndex();
             }
             break;
           }
@@ -6479,13 +6565,14 @@
       }
     };
     void refreshIndex();
+    void refreshCnIndex();
     void refreshProducerDb();
     return handle;
   }
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260813175639" : "dev";
+  var BUILD_TIME = true ? "20260813180641" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

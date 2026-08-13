@@ -2649,6 +2649,7 @@
       }
       fhAlbumIndex.updatedAt = Date.now();
       await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex);
+      await syncCnAlbumIndex();
       const total = Object.keys(fhAlbumIndex.entries).length;
       await pushFhResult(srcTabId, "explore-search", { ...progress, added, total }, false);
     };
@@ -2698,6 +2699,27 @@
     fhAlbumIndex = loadFhAlbumIndexDb(raw);
     logger7.info("freeimage", "\u76F8\u518C\u7D22\u5F15\u5E93\u5DF2\u6062\u590D", { total: Object.keys(fhAlbumIndex.entries).length });
   })();
+  var fhCnAlbumIndex = emptyFhAlbumIndexDb();
+  var FH_CN_INDEX_KEY = "fh_cn_album_index";
+  var fhCnIndexReady = (async () => {
+    const raw = await storageGet(FH_CN_INDEX_KEY);
+    fhCnAlbumIndex = loadFhAlbumIndexDb(raw);
+    logger7.info("freeimage", "\u4E2D\u6587\u76F8\u518C\u8BB0\u5F55\u8868\u5DF2\u6062\u590D", { total: Object.keys(fhCnAlbumIndex.entries).length });
+  })();
+  async function syncCnAlbumIndex() {
+    let added = 0;
+    for (const [id, e] of Object.entries(fhAlbumIndex.entries)) {
+      if (!isChineseAlbum(e.name)) continue;
+      if (!fhCnAlbumIndex.entries[id]) {
+        fhCnAlbumIndex.entries[id] = { ...e };
+        added++;
+      }
+    }
+    if (added > 0) {
+      fhCnAlbumIndex.updatedAt = Date.now();
+      await storageSet(FH_CN_INDEX_KEY, fhCnAlbumIndex);
+    }
+  }
   var fhDiffuse = new FhDiffuseEngine();
   var fhDiffuseDb = emptyDb();
   var FH_DIFFUSE_DB_KEY = "fh_diffuse_db";
@@ -3547,7 +3569,7 @@
         let supplyPage = 1;
         let done = false;
         for (const seedUser of message.seedUsers ?? []) {
-          const u = seedUser.trim().toLowerCase();
+          const u = seedUser.trim().toLowerCase().replace(/^https?:\/\/freeimage\.host\//i, "").replace(/\/+$/, "");
           if (!u) continue;
           try {
             const info = await freeimage.collectAlbumsForUser(u);
@@ -3655,6 +3677,7 @@
           );
           await new Promise((r) => setTimeout(r, message.intervalMs));
         }
+        await syncCnAlbumIndex();
         if (done) {
           await pushFhResult(
             message.srcTabId,
@@ -3693,6 +3716,34 @@
         await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex);
         logger7.info("freeimage", "\u76F8\u518C\u7D22\u5F15\u5E93\u5DF2\u6E05\u7A7A");
         return { ok: true, fhIndexImported: { before: 0, after: 0 } };
+      }
+      case "FH_CN_INDEX_GET": {
+        await fhCnIndexReady;
+        return { ok: true, fhIndex: fhCnAlbumIndex };
+      }
+      case "FH_CN_INDEX_EXPORT": {
+        await fhCnIndexReady;
+        return { ok: true, json: JSON.stringify(fhCnAlbumIndex, null, 1) };
+      }
+      case "FH_CN_INDEX_CLEAR": {
+        await fhCnIndexReady;
+        fhCnAlbumIndex = emptyFhAlbumIndexDb();
+        await storageSet(FH_CN_INDEX_KEY, fhCnAlbumIndex);
+        logger7.info("freeimage", "\u4E2D\u6587\u76F8\u518C\u8BB0\u5F55\u8868\u5DF2\u6E05\u7A7A");
+        return { ok: true, fhIndexImported: { before: 0, after: 0 } };
+      }
+      case "FH_CN_INDEX_IMPORT": {
+        await fhCnIndexReady;
+        const imported = loadFhAlbumIndexDb(message.db);
+        const before = Object.keys(fhCnAlbumIndex.entries).length;
+        for (const [id, e] of Object.entries(imported.entries)) {
+          fhCnAlbumIndex.entries[id] = e;
+        }
+        fhCnAlbumIndex.updatedAt = Date.now();
+        await storageSet(FH_CN_INDEX_KEY, fhCnAlbumIndex);
+        const after = Object.keys(fhCnAlbumIndex.entries).length;
+        logger7.info("freeimage", "\u4E2D\u6587\u76F8\u518C\u8BB0\u5F55\u8868\u5DF2\u5BFC\u5165\u5408\u5E76", { before, after });
+        return { ok: true, fhIndexImported: { before, after } };
       }
       case "FH_ALBUM_INDEX_IMPORT": {
         await fhAlbumIndexReady;

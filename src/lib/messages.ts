@@ -122,6 +122,11 @@ export type Message =
   | { type: 'FH_ALBUM_INDEX_EXPORT' }
   | { type: 'FH_ALBUM_INDEX_IMPORT'; db: unknown }
   | { type: 'FH_ALBUM_INDEX_CLEAR' }
+  // ---- freeimage 中文相册检索记录表（独立存储，中文过滤自动收集） ----
+  | { type: 'FH_CN_INDEX_GET' }
+  | { type: 'FH_CN_INDEX_EXPORT' }
+  | { type: 'FH_CN_INDEX_IMPORT'; db: unknown }
+  | { type: 'FH_CN_INDEX_CLEAR' }
   // ---- freeimage 关注墙（FP-007 迁移 imgbb 关注墙） ----
   | { type: 'FH_FETCH_FOLLOWING'; srcTabId: number; username: string; side: 'following' | 'followers' | 'both' }
   // ---- freeimage 扩散检索（FP-007 迁移 imgbb FP-005：BFS + 入度 + 生产者库） ----
