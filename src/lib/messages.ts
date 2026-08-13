@@ -27,8 +27,6 @@ import type {
   SearchBatchResult,
 } from './types'
 import type { ProducerDb } from './producer-db'
-import type { FhAlbum, FhImage, FhOwner, FhProducerDb, FhProducerStatus } from './freeimage-types'
-import type { FhAlbumIndexEntry } from './freeimage-types'
 
 export type Message =
   // ---- 日志（FP-001，复用）----
@@ -101,87 +99,22 @@ export type Message =
   | { type: 'BD_FETCH_ALBUM'; srcTabId: number; url: string }
   | { type: 'BD_SCAN_LINKS'; srcTabId: number; url: string; kind: 'recommended' | 'popular' }
   | { type: 'BD_FETCH_ALBUMS'; srcTabId: number; targets: BuonduaTarget[] }
+  // ---- 多页图站聚合搜索（FP-010）：grabber → bg ----
+  | { type: 'BD_SEARCH'; srcTabId: number; query: string; sites: string[]; pagesPerSite: number }
   // ---- buondua 适配器：bg → grabber 推送 ----
-  | { type: 'BD_RESULT'; kind: BuonduaResultKind; data: BuonduaImage[] | BuonduaLinkItem[] | BuonduaBatchItem; done: boolean; error?: string }
+  | { type: 'BD_RESULT'; kind: BuonduaResultKind; data: BuonduaImage[] | BuonduaLinkItem[] | BuonduaBatchItem | SearchSiteResult; done: boolean; error?: string }
   // ---- 多页站点：bg → content 页面内 fetch（带 Cookie 穿透反爬，hitxhot 等） ----
   | { type: 'BD_FETCH_HTML'; url: string }
-  // ---- freeimage 适配器（FP-007）：grabber → bg ----
-  | { type: 'FH_FETCH_USER'; srcTabId: number; url: string; pageFrom: number; pageTo: number }
-  | { type: 'FH_FETCH_ALBUM'; srcTabId: number; albumUrl: string }
-  | { type: 'FH_FETCH_ALBUMS'; srcTabId: number; username: string; sort: string; page: number }
-  | { type: 'FH_FETCH_EXPLORE'; srcTabId: number; pageFrom: number; pageTo: number }
-  | { type: 'FH_EXTRACT_OWNER'; srcTabId: number; imageViewerUrls: string[]; samplePerPage: number; intervalMs: number }
-  | { type: 'FH_SCAN_PRODUCERS'; srcTabId: number; usernames: string[]; intervalMs: number }
-  // ---- freeimage 探索检索（FP-007 场景 D v8/v9：批次会话 + 仅中文 + 中文深挖） ----
-  | { type: 'FH_EXPLORE_SEARCH_START'; srcTabId: number; mode: FhExploreMode; list: FhExploreType; rounds: number; intervalMs: number; chineseOnly?: boolean }
-  | { type: 'FH_EXPLORE_SEARCH_NEXT'; srcTabId: number; rounds: number; intervalMs: number; chineseOnly?: boolean }
-  | { type: 'FH_EXPLORE_MINE'; srcTabId: number; rounds: number; intervalMs: number; seedUsers?: string[] }
-  | { type: 'FH_EXPLORE_STOP' }
-  // ---- freeimage 相册索引库（场景 D 记录/合并/导入导出） ----
-  | { type: 'FH_ALBUM_INDEX_GET' }
-  | { type: 'FH_ALBUM_INDEX_EXPORT' }
-  | { type: 'FH_ALBUM_INDEX_IMPORT'; db: unknown }
-  | { type: 'FH_ALBUM_INDEX_CLEAR' }
-  // ---- freeimage 中文相册检索记录表（独立存储，中文过滤自动收集） ----
-  | { type: 'FH_CN_INDEX_GET' }
-  | { type: 'FH_CN_INDEX_EXPORT' }
-  | { type: 'FH_CN_INDEX_IMPORT'; db: unknown }
-  | { type: 'FH_CN_INDEX_CLEAR' }
-  // ---- freeimage 关注墙（FP-007 迁移 imgbb 关注墙） ----
-  | { type: 'FH_FETCH_FOLLOWING'; srcTabId: number; username: string; side: 'following' | 'followers' | 'both' }
-  // ---- freeimage 扩散检索（FP-007 迁移 imgbb FP-005：BFS + 入度 + 生产者库） ----
-  | { type: 'FH_DIFFUSE_START'; srcTabId: number; startUser: string }
-  | { type: 'FH_DIFFUSE_BATCH'; srcTabId: number; batchSize: number; concurrency: number; intervalMs: number }
-  | { type: 'FH_DIFFUSE_PROGRESS' }
-  | { type: 'FH_DIFFUSE_DB_GET'; w1?: number; topN?: number }
-  | { type: 'FH_DIFFUSE_DB_SAVE'; source: string }
-  | { type: 'FH_DIFFUSE_DB_CLEAR' }
-  | { type: 'FH_DIFFUSE_DB_EXPORT' }
-  | { type: 'FH_DIFFUSE_DB_IMPORT'; db: unknown }
-  | { type: 'FH_DIFFUSE_DB_RESET_CONFIRM' }
-  | { type: 'FH_DIFFUSE_SCORE_BATCH'; srcTabId: number; batchSize: number; concurrency: number; intervalMs: number; order?: 'inDegree' | 'newest' | 'score'; w1?: number; w2?: number }
-  | { type: 'FH_DIFFUSE_SCORE_STOP' }
-  | { type: 'FH_DIFFUSE_SEARCH_START'; keywords: string[]; fromPct: number; toPct: number; w1: number; w2: number }
-  // ---- freeimage 扩散：bg → grabber 推送 ----
-  | { type: 'FH_DIFFUSE_SCORE_PROGRESS_FWD'; done: number; total: number; username: string; albumCount: number; truncated?: boolean; failed: number; cancelled?: boolean }
-  | { type: 'FH_PRODUCER_GET' }
-  | { type: 'FH_PRODUCER_SAVE'; username: string; status: FhProducerStatus; reason?: string }
-  | { type: 'FH_PRODUCER_CLEAR'; username: string }
-  | { type: 'FH_PRODUCER_EXPORT' }
-  | { type: 'FH_PRODUCER_IMPORT'; db: unknown }
-  // ---- freeimage 适配器：bg → grabber 推送 ----
-  | { type: 'FH_RESULT'; kind: FhResultKind; data: FhImage[] | FhAlbum[] | FhOwner[] | ScanAlbumEntry[] | ExploreSearchProgress; done: boolean; error?: string }
 
 export type ImgResultKind = 'album-images' | 'gallery' | 'gallery-range' | 'albums' | 'following'
 
-export type FhResultKind = 'user' | 'album' | 'albums' | 'explore' | 'owners' | 'scan' | 'explore-search' | 'index-saved' | 'following' | 'explore-mine'
+export type BuonduaResultKind = 'album' | 'scan' | 'batch-item' | 'search' | 'search-site'
 
-/** 探索页模式（路径）+ 类型（query list） */
-export type FhExploreMode = 'recent' | 'popular' | 'trending'
-export type FhExploreType = 'albums' | 'images' | 'users'
-
-/** 场景 D 相册名采集扫描结果 */
-export interface ScanAlbumEntry {
-  username: string
-  albums: { name: string; url: string }[]
-  albumCount: number
-  truncated: boolean
+/** 聚合搜索单站结果（BD_RESULT kind=search-site 的 data） */
+export interface SearchSiteResult {
+  siteId: string
+  items: BuonduaLinkItem[]
 }
-
-/** 探索检索每轮进度推送（仅文字信息） */
-export interface ExploreSearchProgress {
-  round: number
-  pageFrom: number
-  pageTo: number
-  added: number // 本轮新增条目数
-  total: number // 索引库累计
-  newEntries: FhAlbumIndexEntry[]
-  mode: FhExploreMode
-  type: FhExploreType
-  more?: boolean // 批次结束时：是否还有下一页（可继续下一批）
-}
-
-export type BuonduaResultKind = 'album' | 'scan' | 'batch-item'
 
 /** 批量抓取单个相册完成推送 */
 export interface BuonduaBatchItem {
@@ -224,12 +157,6 @@ export type MessageResponse =
       config?: { repo: string; branch: string; configured: boolean }
       github?: { message: string; total?: number }
       json?: string
-      // ---- FP-007 freeimage ----
-      fh?: FhProducerDb
-      fhImported?: { before: number; after: number }
-      // ---- FP-007 场景 D 相册索引库 ----
-      fhIndex?: import('./freeimage-types').FhAlbumIndexDb
-      fhIndexImported?: { before: number; after: number }
     }
   | { ok: false; error: string }
 

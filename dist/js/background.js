@@ -569,14 +569,14 @@
       let failed = 0;
       let newUsers = 0;
       const inDegreeDelta = {};
-      const sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const worker = async () => {
         while (true) {
           const idx = cursor++;
           if (idx >= batch.length) return;
           const user = batch[idx];
           this.totalRequests++;
-          await sleep2(intervalMs);
+          await sleep(intervalMs);
           const tReq = Date.now();
           try {
             const html = await this.fetchFollowingPage(user);
@@ -1364,17 +1364,36 @@
       logger3.info("imgbb", "\u76F8\u518C\u5168\u91CF\u6293\u53D6\u5B8C\u6210", { url: albumUrl, pages: page + 1, count: images.length, name });
       return { images, name };
     }
-    /** 用户主页/相册页：按页抓取图片 */
+    /** 用户主页/相册页：按页抓取图片
+     * imgbb 无尽滚动：裸 ?page=N 不可靠（每页返回累计内容），必须跟随 seek 游标逐页翻
+     * 因 seek 为连续游标无法直接跳页，pageFrom>1 时仍从首页跟随翻页，仅收集 pageFrom~pageTo 区间增量
+     * 去重键：原图 URL（对齐 fetchAlbumImages） */
     async fetchGalleryPages(url, pageFrom, pageTo) {
+      const base = url.split("?")[0];
+      let currentUrl = base;
+      const seen = /* @__PURE__ */ new Set();
       const all = [];
-      for (let page = pageFrom; page <= pageTo; page++) {
-        const pageUrl = `${url}${url.includes("?") ? "&" : "?"}page=${page}`;
-        const html = await this.fetchHtml(pageUrl);
+      let page = 1;
+      while (currentUrl && page <= pageTo) {
+        const html = await this.fetchHtml(currentUrl);
         const images = parseImageItems(html);
-        all.push(...images);
+        if (page >= pageFrom) {
+          for (const img of images) {
+            if (!seen.has(img.originalUrl)) {
+              seen.add(img.originalUrl);
+              all.push(img);
+            }
+          }
+        } else {
+          for (const img of images) seen.add(img.originalUrl);
+        }
         if (images.length === 0) break;
+        const next = parseAlbumNextPage(html, base);
+        if (!next || next === currentUrl) break;
+        currentUrl = next;
+        page++;
       }
-      logger3.info("imgbb", "\u7528\u6237\u4E3B\u9875\u5206\u9875\u6293\u53D6\u5B8C\u6210", { url, pageFrom, pageTo, count: all.length });
+      logger3.info("imgbb", "\u7528\u6237\u4E3B\u9875\u5206\u9875\u6293\u53D6\u5B8C\u6210", { url, pageFrom, pageTo, count: all.length, pages: page });
       return all;
     }
     /** 相册列表：抓某页相册 */
@@ -1559,7 +1578,9 @@
           return url;
         }
       },
-      cleanTitle: (title) => title.replace(/\s*[-–—]\s*\(\s*Page\s+\d+\s*\/\s*\d+\s*\)\s*$/i, "").trim()
+      cleanTitle: (title) => title.replace(/\s*[-–—]\s*\(\s*Page\s+\d+\s*\/\s*\d+\s*\)\s*$/i, "").trim(),
+      // buondua 站点当前不可达且搜索入口未验证，暂不支持聚合搜索
+      searchUrl: () => null
     },
     {
       id: "rrwsh",
@@ -1578,7 +1599,10 @@
           return url;
         }
       },
-      cleanTitle: (title) => title.replace(/\s*[-–—]\s*Page\s+\d+\s+of\s+\d+\s*[-–—]\s*[^-]*$/i, "").replace(/\s*[-–—]\s*4KHD\s*$/i, "").trim()
+      cleanTitle: (title) => title.replace(/\s*[-–—]\s*Page\s+\d+\s+of\s+\d+\s*[-–—]\s*[^-]*$/i, "").replace(/\s*[-–—]\s*4KHD\s*$/i, "").trim(),
+      // rrwsh 为 4khd 镜像：4khd.com 相册页被反爬网关拦截（302 → y5gx.uuss.uk/4khd.php，实测 2026-08-13），
+      // 搜索结果打不开，暂不支持聚合搜索
+      searchUrl: () => null
     },
     {
       id: "hitxhot",
@@ -1597,7 +1621,74 @@
           return url;
         }
       },
-      cleanTitle: (title) => title.replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim()
+      cleanTitle: (title) => title.replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
+      // hitxhot 无搜索入口（?s= 返回首页，实测 2026-08-13），不支持聚合搜索
+      searchUrl: () => null
+    },
+    {
+      id: "kaizty",
+      hosts: ["kaizty.com"],
+      containerOpen: /<div[^>]*class="[^"]*contentme[^"]*"[^>]*>/,
+      // 与 hitxhot 同模板：标题含 "| Page X/Y"（组2 = 总页数）
+      pagePattern: /\|\s*(?:Page\s+\d+\s*\/\s*(\d+)|第\s*\d+\s*\/\s*(\d+)\s*页)/i,
+      pageUrl: (base, page) => `${base}?page=${page}`,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          return u.href;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.replace(/^Kaizty Photos:\s*/i, "").replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
+      // kaizty 无搜索入口（同 hitxhot 模板），不支持聚合搜索
+      searchUrl: () => null
+    },
+    {
+      id: "jrants",
+      hosts: ["jrants.com"],
+      containerOpen: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/,
+      // WP 多页文章：标题无 Page 标记（h1 不分页），总页数靠分页链接兜底（见 parseGalleryMaxPage 兜底3）
+      pagePattern: /(?!)0/,
+      pageUrl: (base, page) => page <= 1 ? base : `${base}/${page}`,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          const path = u.pathname.replace(/\/\d+$/, "");
+          return `${u.origin}${path}`;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.trim(),
+      // WP 标准搜索（?s= + paged）
+      searchUrl: (q, page) => `https://jrants.com/?s=${encodeURIComponent(q)}${page > 1 ? `&paged=${page}` : ""}`
+    },
+    {
+      id: "pixibb",
+      hosts: ["pixibb.com"],
+      containerOpen: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/,
+      // WP 多页文章（magezix 主题）：标题无 Page 标记，总页数靠分页链接兜底（post-page-numbers，尾斜杠 /N/）
+      pagePattern: /(?!)0/,
+      pageUrl: (base, page) => page <= 1 ? base : `${base.replace(/\/?$/, "/")}${page}/`,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          const path = u.pathname.replace(/\/\d+\/$/, "").replace(/\/\d+$/, "");
+          return `${u.origin}${path}`;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.trim(),
+      // WP 标准搜索（?s= + paged）；主内容子域 sexy
+      searchUrl: (q, page) => `https://sexy.pixibb.com/?s=${encodeURIComponent(q)}${page > 1 ? `&paged=${page}` : ""}`
     }
   ];
   function matchGallerySite(url) {
@@ -1627,7 +1718,7 @@
     return html.slice(i);
   }
   var IMG_EXT = /\.(jpe?g|png|webp|gif|bmp)(\?|$)/i;
-  var IMG_HOST = /(buondua\.com|wp\.com)/i;
+  var IMG_HOST = /(buondua\.com|wp\.com|jrants\.com|pixibb\.com|thismore\.fun)/i;
   function parseGalleryImages(html, _baseUrl, site) {
     const block = extractContainerBlock(html, site.containerOpen);
     if (!block) return [];
@@ -1636,7 +1727,19 @@
     const collect = (u) => {
       if (!u || !/^https?:\/\//i.test(u)) return;
       if (/\.(js|css|svg|ico)(\?|$)/i.test(u)) return;
-      if (!IMG_EXT.test(u) && !IMG_HOST.test(u)) return;
+      let host = "";
+      try {
+        host = new URL(u).hostname;
+      } catch {
+        return;
+      }
+      if (!IMG_EXT.test(u) && !IMG_HOST.test(host)) return;
+      if (/\.html?($|[\/?#])/i.test(u)) return;
+      try {
+        if (/\/\d+\/?$/.test(new URL(u).pathname)) return;
+      } catch {
+        return;
+      }
       if (seen.has(u)) return;
       seen.add(u);
       urls.push(u);
@@ -1673,6 +1776,11 @@
     while ((mm = re2.exec(html)) !== null) {
       max = Math.max(max, Number(mm[1]) || 1);
     }
+    const re3 = /<a[^>]*href="([^"]*)"[^>]*class="[^"]*page-numbers[^"]*"[^>]*>/g;
+    while ((mm = re3.exec(html)) !== null) {
+      const n = Number(mm[1].match(/(\d+)\/?$/)?.[1] || 0);
+      if (n > 0) max = Math.max(max, n);
+    }
     return max;
   }
   function parseGalleryPageTitle(html, site) {
@@ -1687,7 +1795,178 @@
       const title = html.match(/<title>([^<]+)<\/title>/);
       if (title) raw = title[1].trim();
     }
+    if (!raw) {
+      const h2s = [...html.matchAll(/<h2[^>]*>([^<]{16,})<\/h2>/g)];
+      if (h2s.length > 0) raw = h2s[0][1].trim();
+    }
     return site.cleanTitle(raw);
+  }
+  function parseKaiztyPostLinks(html, _baseUrl) {
+    const items = [];
+    const seen = /* @__PURE__ */ new Set();
+    const re = /<a[^>]*href="([^"]*\/photos\/[A-Za-z0-9+/=_-]+\.html)"[^>]*>/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      const url = m[1];
+      const abs = /^https?:\/\//i.test(url) ? url : `https:${url}`;
+      if (seen.has(abs)) continue;
+      seen.add(abs);
+      let title = (m[0].match(/title="([^"]*)"/)?.[1] || "").trim();
+      if (!title) {
+        title = m[0].replace(/<[^>]*>/g, "").trim();
+      }
+      if (!title) {
+        const block = html.slice(m.index, m.index + 600);
+        const tm = block.match(/>([^<>]{6,})</);
+        if (tm) title = tm[1].trim();
+      }
+      const countMatch = title.match(/Page\s+(\d+)\s*\/\s*(\d+)/i);
+      items.push({ url: abs, title: title || abs, coverUrl: "", imageCount: void 0 });
+    }
+    return items;
+  }
+  function parseSitePostLinks(html, baseUrl, hosts) {
+    const byUrl = /* @__PURE__ */ new Map();
+    const re = /<a[^>]*href="([^"]*)"[^>]*>/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      try {
+        const u = new URL(m[1], baseUrl);
+        const host = u.hostname.replace(/^www\./, "");
+        const hostOk = hosts.some((h) => host === h || host.endsWith(`.${h}`));
+        if (!hostOk) continue;
+        const path = u.pathname;
+        if (path === "/" || path === "/index.php") continue;
+        if (/^\/?(tag|category|search|author|page|pages|wp-|feed|comments|premium|videos|albums|home\d?|signup|login|recovery)\//i.test(path)) continue;
+        if (/\/\d+\/?$/.test(path)) continue;
+        const url = u.origin + path;
+        let title = (m[0].match(/title="([^"]*)"/)?.[1] || "").trim();
+        if (!title) {
+          title = m[0].replace(/<[^>]*>/g, "").trim();
+        }
+        if (!title) {
+          const tm = html.slice(m.index, m.index + 600).match(/>([^<>]{2,})</);
+          if (tm) {
+            const t = tm[1].trim();
+            if (t.length >= 2 && t.length < 200 && !/^[.#@]/.test(t) && !/[{;}]/.test(t)) title = t;
+          }
+        }
+        const existing = byUrl.get(url);
+        if (existing) {
+          if (existing.title === url && title && title !== url) {
+            byUrl.set(url, { ...existing, title });
+          }
+          continue;
+        }
+        byUrl.set(url, { url, title: title || url, coverUrl: "", imageCount: void 0 });
+      } catch {
+      }
+    }
+    return [...byUrl.values()];
+  }
+
+  // src/lib/jrants-parse.ts
+  function parseJrantsPostLinks(html, _baseUrl, opts = {}) {
+    const { onlyRecommended = false, excludeUrls } = opts;
+    const items = [];
+    const seen = /* @__PURE__ */ new Set();
+    const collect = (block) => {
+      const re = /<a[^>]*href="(https?:\/\/jrants\.com\/20\d+\.html)"[^>]*>/g;
+      let m;
+      while ((m = re.exec(block)) !== null) {
+        const url = m[1];
+        if (seen.has(url)) continue;
+        seen.add(url);
+        if (excludeUrls?.has(url)) continue;
+        let title = (m[0].match(/title="([^"]*)"/)?.[1] || "").trim();
+        if (!title) {
+          title = m[0].replace(/<[^>]*>/g, "").trim();
+        }
+        if (!title) {
+          const tm = block.slice(m.index, m.index + 600).match(/>([^<>]{2,})</);
+          if (tm) title = tm[1].trim();
+        }
+        const around = block.slice(Math.max(0, m.index - 2e3), m.index + 2e3);
+        const coverMatch = around.match(/src="(https?:\/\/(?:m2\.)?jrants\.com\/[^"]*)"/);
+        const countMatch = title.match(/\((\d+)\s*P\)/i) ?? title.match(/\[(\d+)\s*P\]/i) ?? title.match(/(?:^|\s)(\d+)\s*P\b/i);
+        items.push({
+          url,
+          title: title || url,
+          coverUrl: coverMatch ? coverMatch[1] : "",
+          imageCount: countMatch ? Number(countMatch[1]) : void 0
+        });
+      }
+    };
+    if (onlyRecommended) {
+      const blockRe = /<article class="\s*wp-show-posts-single[^"]*"[^>]*>([\s\S]*?)<\/article>/g;
+      let bm;
+      while ((bm = blockRe.exec(html)) !== null) collect(bm[1]);
+    } else {
+      collect(html);
+    }
+    return items;
+  }
+
+  // src/lib/pixibb-parse.ts
+  function parsePixibbPostLinks(html, _baseUrl, opts = {}) {
+    const { onlyRecommended = false, excludeUrls } = opts;
+    const items = [];
+    const seen = /* @__PURE__ */ new Set();
+    const collect = (block) => {
+      const re = /<a[^>]*href="(https:\/\/[a-z0-9-]+\.pixibb\.com\/[a-z0-9-]+-\d+-photos-\d+-videos\/)"[^>]*>/g;
+      let m;
+      while ((m = re.exec(block)) !== null) {
+        const url = m[1];
+        if (seen.has(url)) continue;
+        seen.add(url);
+        if (excludeUrls?.has(url)) continue;
+        let title = (m[0].match(/title="([^"]*)"/)?.[1] || "").trim();
+        if (!title) {
+          title = m[0].replace(/<[^>]*>/g, "").trim();
+        }
+        if (!title) {
+          const tm2 = block.slice(m.index, m.index + 3e3).match(/<h[234][^>]*class="[^"]*post-title[^"]*"[^>]*>\s*<a[^>]*>([^<]+)<\/a>/);
+          if (tm2) title = tm2[1].trim();
+        }
+        if (!title) {
+          const tm = block.slice(m.index, m.index + 600).match(/>([^<>]{2,})</);
+          if (tm) title = tm[1].trim();
+        }
+        const around = block.slice(Math.max(0, m.index - 2e3), m.index + 2e3);
+        const coverMatch = around.match(/src="(https:\/\/[a-z0-9]+\.pixibb\.com\/[^"]*)"/);
+        const countMatch = title.match(/\((\d+)\s*photos?/i);
+        items.push({
+          url,
+          title: title || url,
+          coverUrl: coverMatch ? coverMatch[1] : "",
+          imageCount: countMatch ? Number(countMatch[1]) : void 0
+        });
+      }
+    };
+    if (onlyRecommended) {
+      const re = /<h2[^>]*class="[^"]*post-title[^"]*"[^>]*>\s*<a[^>]*href="(https:\/\/[a-z0-9-]+\.pixibb\.com\/[a-z0-9-]+-\d+-photos-\d+-videos\/)"[^>]*>([^<]+)<\/a>/g;
+      let m;
+      while ((m = re.exec(html)) !== null) {
+        const url = m[1];
+        const title = m[2].trim();
+        if (seen.has(url)) continue;
+        seen.add(url);
+        if (excludeUrls?.has(url)) continue;
+        const before = html.slice(Math.max(0, m.index - 2e3), m.index);
+        const coverMatch = before.match(/src="(https:\/\/[a-z0-9]+\.pixibb\.com\/[^"]*)"/);
+        const countMatch = title.match(/\((\d+)\s*photos?/i);
+        items.push({
+          url,
+          title: title || url,
+          coverUrl: coverMatch ? coverMatch[1] : "",
+          imageCount: countMatch ? Number(countMatch[1]) : void 0
+        });
+      }
+      return items;
+    } else {
+      collect(html);
+    }
+    return items;
   }
 
   // src/background/buondua-service.ts
@@ -1777,18 +2056,35 @@
       });
       return { images, pages: all, title };
     }
-    /** 解析推荐/其他相册链接（其他 = 全页帖子链接 - 推荐区） */
+    /** 解析推荐/其他相册链接（按站点路由：buondua 用 buondua-parse，jrants 用 jrants-parse） */
     async scanLinks(url, kind) {
       const html = await this.fetchHtml(url);
       const base = url;
+      const site = matchGallerySite(url);
       let items;
-      if (kind === "recommended") {
+      if (site?.id === "jrants") {
+        const rec = parseJrantsPostLinks(html, base, { onlyRecommended: true });
+        if (kind === "recommended") {
+          items = rec;
+        } else {
+          const recUrls = new Set(rec.map((i) => i.url));
+          items = parseJrantsPostLinks(html, base, { excludeUrls: recUrls });
+        }
+      } else if (site?.id === "pixibb") {
+        const rec = parsePixibbPostLinks(html, base, { onlyRecommended: true });
+        if (kind === "recommended") {
+          items = rec;
+        } else {
+          const recUrls = new Set(rec.map((i) => i.url));
+          items = parsePixibbPostLinks(html, base, { excludeUrls: recUrls });
+        }
+      } else if (kind === "recommended") {
         items = parseRecommendedLinks(html, base);
       } else {
         const recUrls = new Set(parseRecommendedLinks(html, base).map((i) => i.url));
         items = parseAllPostLinks(html, base, recUrls);
       }
-      logger4.info("buondua", "\u94FE\u63A5\u626B\u63CF\u5B8C\u6210", { kind, count: items.length });
+      logger4.info("buondua", "\u94FE\u63A5\u626B\u63CF\u5B8C\u6210", { kind, count: items.length, site: site?.id ?? "buondua" });
       return items;
     }
     /** 批量抓取：targets 逐个全子页抓取（并发受限），返回每个目标的图片 */
@@ -1810,6 +2106,45 @@
       };
       await Promise.all(Array.from({ length: Math.min(CONCURRENCY2, targets.length) }, () => worker()));
     }
+    /** 聚合搜索：多站点逐页搜索 → 按站点路由解析 → 合并去重
+     *  onSite：每站完成后回调（推送该站结果，增量展示）；返回全部合并去重结果 */
+    async searchSites(query, sites, pagesPerSite, onSite) {
+      const mergedMap = /* @__PURE__ */ new Map();
+      for (const siteId of sites) {
+        const site = GALLERY_SITES.find((s) => s.id === siteId);
+        if (!site || !site.searchUrl) {
+          await onSite(siteId, [], "\u8BE5\u7AD9\u4E0D\u652F\u6301\u641C\u7D22");
+          continue;
+        }
+        const items = [];
+        let error;
+        try {
+          for (let page = 1; page <= pagesPerSite; page++) {
+            const url = site.searchUrl(query, page);
+            if (!url) break;
+            const html = await this.fetchHtml(url);
+            if (isBlockedPage(html)) {
+              error = "\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A\uFF08\u9650\u6D41\uFF09\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5";
+              logger4.warn("buondua", "\u7AD9\u70B9\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A", { site: siteId });
+              break;
+            }
+            const parsed = parseLinksForSite(siteId, html, url);
+            items.push(...parsed);
+            if (parsed.length === 0) break;
+          }
+        } catch (err) {
+          error = String(err);
+          logger4.warn("buondua", "\u7AD9\u70B9\u641C\u7D22\u5931\u8D25", { site: siteId, error });
+        }
+        const unique = dedupeLinks2(items);
+        for (const item of unique) {
+          if (!mergedMap.has(item.url)) mergedMap.set(item.url, item);
+        }
+        await onSite(siteId, unique, error);
+      }
+      logger4.info("buondua", "\u805A\u5408\u641C\u7D22\u5B8C\u6210", { query, sites: sites.length, merged: mergedMap.size });
+      return [...mergedMap.values()];
+    }
     /** 相册文件夹名：ID-buondua-{相册名}-{时间戳} */
     buildFolderName(title, url) {
       const name = extractBuonduaAlbumName(title, url);
@@ -1819,734 +2154,27 @@
       return `ID-buondua-${name}-${ts}`;
     }
   };
-
-  // src/lib/freeimage-parse.ts
-  function extractAttr3(tag, name) {
-    const m = tag.match(new RegExp(`${name}="([^"]*)"`)) ?? tag.match(new RegExp(`${name}='([^']*)'`));
-    return m ? m[1] : null;
+  function parseLinksForSite(siteId, html, base) {
+    if (siteId === "jrants") return parseJrantsPostLinks(html, base, {});
+    if (siteId === "pixibb") return parsePixibbPostLinks(html, base, {});
+    if (siteId === "kaizty") return parseKaiztyPostLinks(html, base);
+    const site = GALLERY_SITES.find((s) => s.id === siteId);
+    return parseSitePostLinks(html, base, site?.hosts ?? [siteId]);
   }
-  function parseDataObject2(raw) {
-    if (!raw) return null;
-    try {
-      return JSON.parse(decodeURIComponent(raw));
-    } catch {
-      return null;
-    }
+  function isBlockedPage(html) {
+    return /search request blocked|正在进行安全验证|just a moment|cf-chl|cloudflare|turnstile|attention required/i.test(html);
   }
-  function objUrl2(obj) {
-    if (obj && typeof obj === "object" && "url" in obj) {
-      return String(obj.url);
-    }
-    return "";
-  }
-  function listItemTags2(html, type) {
-    const re = new RegExp(`<div class="list-item[^"]*"[^>]*data-type="${type}"[^>]*>`, "g");
-    const result = [];
-    let m;
-    while ((m = re.exec(html)) !== null) {
-      result.push({ tag: m[0], end: re.lastIndex });
-    }
-    return result;
-  }
-  function blockAfter2(html, start) {
-    const next = html.slice(start).search(/<div class="list-item(?:\s|")/);
-    return next === -1 ? html.slice(start, start + 6e3) : html.slice(start, start + next);
-  }
-  function parseImageItems2(html) {
-    const items = [];
-    for (const { tag } of listItemTags2(html, "image")) {
-      const obj = parseDataObject2(extractAttr3(tag, "data-object"));
-      if (!obj) continue;
-      const imgObj = obj.image ?? obj;
-      if (!imgObj) continue;
-      const originalUrl = objUrl2(imgObj);
-      if (!originalUrl) continue;
-      items.push({
-        id: String(obj.id_encoded ?? extractAttr3(tag, "data-id") ?? ""),
-        filename: String(imgObj.filename ?? ""),
-        // 原始上传文件名（关键词筛选数据源）：obj.name/title → 兜底 hash 文件名
-        name: String(obj.name ?? obj.title ?? imgObj.name ?? imgObj.filename ?? ""),
-        originalUrl,
-        mediumUrl: objUrl2(obj.medium) || originalUrl,
-        thumbUrl: objUrl2(obj.thumb) || objUrl2(obj.medium) || originalUrl,
-        width: obj.width ? Number(obj.width) : void 0,
-        height: obj.height ? Number(obj.height) : void 0,
-        viewerUrl: String(obj.url_viewer ?? "")
-      });
-    }
-    return items;
-  }
-  function parseAlbumItems2(html) {
-    const items = [];
-    for (const { tag, end } of listItemTags2(html, "album")) {
-      const id = extractAttr3(tag, "data-id");
-      if (!id) continue;
-      const name = extractAttr3(tag, "data-name") ?? id;
-      const block = blockAfter2(html, end);
-      const linkMatch = block.match(/href="(https?:\/\/freeimage\.host\/a\/[^"]*)"/);
-      const coverMatch = block.match(/src="(https?:\/\/iili\.io\/[^"]*\.(?:md\.)?(?:jpg|png|webp|gif|jpeg))"/);
-      const thumbMatch = block.match(/background-image: url\((https?:\/\/iili\.io\/[^)]*\.th\.(?:jpg|png|webp|gif|jpeg))\)/);
-      items.push({
-        id,
-        name,
-        url: linkMatch ? linkMatch[1] : `https://freeimage.host/a/${id}`,
-        coverUrl: coverMatch ? coverMatch[1] : "",
-        thumbUrl: thumbMatch ? thumbMatch[1] : coverMatch ? coverMatch[1] : "",
-        description: extractAttr3(tag, "data-description") ?? void 0
-      });
-    }
-    return items;
-  }
-  function extractOwner(html) {
-    const linkRe = /<a[^>]*class="user-link"[^>]*href="(https?:\/\/freeimage\.host\/([a-zA-Z0-9_-]{2,32}))"[^>]*>([^<]*)</i;
-    const m = html.match(linkRe);
-    if (!m) return null;
-    const url = m[1];
-    const username = m[2];
-    if (!username || /guest/i.test(username)) return null;
-    const avatarMatch = html.match(/<img[^>]*class="user-image"[^>]*src="(https?:\/\/freeimage\.host\/content\/images\/users\/[^"]*)"/);
-    return { username, url, avatarUrl: avatarMatch ? avatarMatch[1] : "" };
-  }
-  function parseExploreAlbums(html) {
-    const items = [];
-    for (const { end } of listItemTags2(html, "album")) {
-      const block = blockAfter2(html, end);
-      const linkMatch = block.match(/href="(https?:\/\/freeimage\.host\/a\/[^"]*)"/);
-      const nameMatch = block.match(/list-item-desc-title-link"[^>]*>([^<]*)</);
-      const coverMatch = block.match(/src="(https?:\/\/iili\.io\/[^"]*\.(?:md\.)?(?:jpg|png|webp|gif|jpeg))"/);
-      const countMatch = block.match(/(\d+)\s*(?:images|张图片|张)/i);
-      if (!linkMatch) continue;
-      const id = linkMatch[1].match(/\.([a-zA-Z0-9]+)$/)?.[1] ?? linkMatch[1].match(/([a-zA-Z0-9]+)$/)?.[1] ?? "";
-      const name = (nameMatch ? nameMatch[1].trim() : "") || id;
-      items.push({
-        id,
-        name,
-        url: linkMatch[1],
-        coverUrl: coverMatch ? coverMatch[1] : "",
-        thumbUrl: "",
-        description: countMatch ? `${countMatch[1]} \u5F20` : void 0
-      });
-    }
-    return items;
-  }
-  function parseExploreUsers(html) {
-    const items = [];
-    for (const { end } of listItemTags2(html, "user")) {
-      const block = blockAfter2(html, end);
-      const linkMatch = block.match(/href="(https?:\/\/freeimage\.host\/([a-zA-Z0-9_-]{2,32}))"/);
-      const avatarMatch = block.match(/src="(https?:\/\/freeimage\.host\/content\/images\/users\/[^"]*)"/);
-      if (!linkMatch || !linkMatch[2]) continue;
-      const username = linkMatch[2];
-      if (/explore|login|upload|api|signup|donate|help|about|tos|privacy|plugin|sharex|contact|report/i.test(username)) continue;
-      items.push({
-        username,
-        url: linkMatch[1],
-        avatarUrl: avatarMatch ? avatarMatch[1] : ""
-      });
-    }
-    return items;
-  }
-  function extractAlbumName(html) {
-    const og = html.match(/<meta property="og:title" content="([^"]*)"/);
-    if (og && og[1].trim()) return og[1].trim();
-    const title = html.match(/<title>([^<]+)<\/title>/);
-    if (!title) return null;
-    return title[1].replace(/\s*[-—–]\s*Freeimage\.host\s*$/i, "").replace(/\s*[-—–]\s*Page\s*\d+\s*$/i, "").trim() || null;
-  }
-  function parseExploreNextPage(html, baseUrl) {
-    const re = /href="([^"]*\?[^"]*page=\d+[^"']*seek=[^"]*)"/g;
-    let best = null;
-    let bestPage = 0;
-    let m;
-    while ((m = re.exec(html)) !== null) {
-      const href = m[1];
-      const pageMatch = href.match(/page=(\d+)/);
-      const page = pageMatch ? Number(pageMatch[1]) : 0;
-      if (page > bestPage) {
-        bestPage = page;
-        best = href;
-      }
-    }
-    if (!best) return null;
-    try {
-      return new URL(best, baseUrl).href;
-    } catch {
-      return null;
-    }
-  }
-  function isChineseAlbum(name) {
-    return /[\u4e00-\u9fff]/.test(name);
-  }
-
-  // src/background/freeimage-service.ts
-  var logger5 = initLogger("background");
-  var FETCH_TIMEOUT_MS5 = 2e4;
-  var FETCH_ATTEMPTS2 = 2;
-  var MAX_ALBUM_PAGES = 50;
-  var MAX_ALBUM_LIST_PAGES = 10;
-  var SORT_BY_MODE = {
-    recent: "date_desc",
-    popular: "views_desc",
-    trending: "likes_desc"
-  };
-  function indexKeyOf(type, rawId) {
-    return type === "albums" ? rawId : `${type}:${rawId}`;
-  }
-  var FreeimageService = class {
-    constructor() {
-      // ---------- 探索检索（场景 D v8：批次会话，仅文字信息，快） ----------
-      /** 检索会话（批次间保持游标） */
-      this.searchSession = null;
-    }
-    /** fetch 单个页面 HTML（UA + 超时 + 重试 1 次） */
-    async fetchHtml(url) {
-      let lastErr;
-      for (let attempt = 1; attempt <= FETCH_ATTEMPTS2; attempt++) {
-        try {
-          return await this.fetchOnce(url);
-        } catch (err) {
-          lastErr = err;
-          logger5.warn("freeimage", `\u9875\u9762\u6293\u53D6\u7B2C ${attempt} \u6B21\u5931\u8D25`, { url, error: String(err) });
-        }
-      }
-      throw lastErr;
-    }
-    async fetchOnce(url) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS5);
-      try {
-        const resp = await fetch(url, {
-          credentials: "include",
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            Referer: "https://freeimage.host/"
-          },
-          signal: controller.signal
-        });
-        if (!resp.ok) {
-          if (resp.status === 429) throw new Error("HTTP 429\uFF08\u9650\u6D41\uFF09");
-          throw new Error(`HTTP ${resp.status}\uFF08${url}\uFF09`);
-        }
-        return await resp.text();
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") {
-          throw new Error(`\u8BF7\u6C42\u8D85\u65F6\uFF08${url}\uFF09`);
-        }
-        throw err;
-      } finally {
-        clearTimeout(timer);
-      }
-    }
-    /** 提取用户主页 URL（输入用户名或完整 URL → 规范化） */
-    normalizeUserUrl(input) {
-      const trimmed = input.trim();
-      if (/^https?:\/\/freeimage\.host\//i.test(trimmed)) {
-        return trimmed.replace(/\/+$/, "");
-      }
-      return `https://freeimage.host/${trimmed.replace(/^\/+|\/+$/g, "")}`;
-    }
-    /** 用户主页分页抓取：{user}?list=images&sort=date_desc&page=N&ajax=1 */
-    async fetchUserPages(url, pageFrom, pageTo) {
-      const base = url.split("?")[0];
-      const all = [];
-      for (let page = pageFrom; page <= pageTo; page++) {
-        const pageUrl = `${base}?list=images&sort=date_desc&page=${page}&ajax=1`;
-        const html = await this.fetchHtml(pageUrl);
-        const images = parseImageItems2(html);
-        all.push(...images);
-        if (images.length === 0) break;
-      }
-      logger5.info("freeimage", "\u7528\u6237\u4E3B\u9875\u5206\u9875\u6293\u53D6\u5B8C\u6210", { url: base, pageFrom, pageTo, count: all.length });
-      return all;
-    }
-    /** 探索页分页抓取：/explore?ajax=1&list=images&sort=date-added-desc&page=N */
-    async fetchExplorePages(pageFrom, pageTo) {
-      const all = [];
-      for (let page = pageFrom; page <= pageTo; page++) {
-        const pageUrl = `https://freeimage.host/explore?ajax=1&list=images&sort=date-added-desc&page=${page}`;
-        const html = await this.fetchHtml(pageUrl);
-        const images = parseImageItems2(html);
-        all.push(...images);
-        if (images.length === 0) break;
-      }
-      logger5.info("freeimage", "\u63A2\u7D22\u9875\u5206\u9875\u6293\u53D6\u5B8C\u6210", { pageFrom, pageTo, count: all.length });
-      return all;
-    }
-    /** 相册列表分页：/{user}/albums?sort={sort}&page=N */
-    async fetchAlbumsPage(username, sort, page) {
-      const html = await this.fetchHtml(
-        `https://freeimage.host/${encodeURIComponent(username)}/albums?sort=${sort}&page=${page}`
-      );
-      const albums = parseAlbumItems2(html);
-      logger5.info("freeimage", "\u76F8\u518C\u5217\u8868\u6293\u53D6\u5B8C\u6210", { username, sort, page, count: albums.length });
-      return albums;
-    }
-    /** 相册全量抓取：首屏 + AJAX 翻页（6 图/页，去重终止） */
-    async fetchAlbumImages(albumUrl) {
-      const base = albumUrl.split("?")[0];
-      const firstHtml = await this.fetchHtml(base);
-      const name = extractAlbumName(firstHtml) ?? "";
-      const albumId = firstHtml.match(/albumid=([a-zA-Z0-9]+)/)?.[1] ?? firstHtml.match(/data-id="([a-zA-Z0-9]+)"[^>]*data-type="album"/)?.[1];
-      const seen = /* @__PURE__ */ new Map();
-      const addImages = (images2) => {
-        let added = 0;
-        for (const img of images2) {
-          if (!seen.has(img.originalUrl)) {
-            seen.set(img.originalUrl, img);
-            added++;
-          }
-        }
-        return added;
-      };
-      addImages(parseImageItems2(firstHtml));
-      if (albumId) {
-        for (let page = 2; page <= MAX_ALBUM_PAGES; page++) {
-          const pageUrl = `${base}?list=images&from=album&albumid=${albumId}&sort=date_desc&page=${page}&ajax=1`;
-          try {
-            const html = await this.fetchHtml(pageUrl);
-            const images2 = parseImageItems2(html);
-            const added = addImages(images2);
-            logger5.debug("freeimage", "\u76F8\u518C\u7FFB\u9875", { page, pageImages: images2.length, added, total: seen.size });
-            if (images2.length === 0 || added === 0) break;
-          } catch (err) {
-            logger5.warn("freeimage", "\u76F8\u518C\u7FFB\u9875\u5931\u8D25\uFF08\u622A\u65AD\uFF09", { page, error: String(err) });
-            break;
-          }
-        }
-      }
-      const images = [...seen.values()];
-      logger5.info("freeimage", "\u76F8\u518C\u5168\u91CF\u6293\u53D6\u5B8C\u6210", { albumUrl: base, name, count: images.length });
-      return { images, name };
-    }
-    /** 图片页属主提取（批量串行 + 间隔，匿名跳过），返回 {url → owner} 映射 */
-    async extractOwners(imageViewerUrls, samplePerPage, intervalMs) {
-      const sampled = samplePerPage > 0 ? imageViewerUrls.filter((_, i) => i % Math.ceil(Math.max(1, imageViewerUrls.length / Math.min(samplePerPage, imageViewerUrls.length))) === 0) : imageViewerUrls;
-      const results = [];
-      for (const viewerUrl of sampled.slice(0, 200)) {
-        try {
-          const html = await this.fetchHtml(viewerUrl);
-          const owner = extractOwner(html);
-          if (owner) {
-            results.push({ owner, imageUrl: viewerUrl });
-          }
-          await sleep(intervalMs);
-        } catch (err) {
-          logger5.warn("freeimage", "\u5C5E\u4E3B\u63D0\u53D6\u5931\u8D25\uFF08\u8DF3\u8FC7\uFF09", { url: viewerUrl, error: String(err) });
-        }
-      }
-      logger5.info("freeimage", "\u5C5E\u4E3B\u63D0\u53D6\u5B8C\u6210", { sampled: sampled.length, owners: results.length });
-      return results;
-    }
-    /** 候选用户相册名采集（L2 扩散）：抓相册列表 → 返回相册线索 */
-    async collectAlbumsForUser(username, maxPages = MAX_ALBUM_LIST_PAGES) {
-      const all = [];
-      const seen = /* @__PURE__ */ new Set();
-      let truncated = false;
-      for (let page = 1; page <= maxPages; page++) {
-        try {
-          const albums = await this.fetchAlbumsPage(username, "views_desc", page);
-          let added = 0;
-          for (const a of albums) {
-            if (!seen.has(a.id)) {
-              seen.add(a.id);
-              all.push(a);
-              added++;
-            }
-          }
-          if (albums.length === 0 || added === 0) break;
-        } catch (err) {
-          logger5.warn("freeimage", "\u7528\u6237\u76F8\u518C\u91C7\u96C6\u5931\u8D25", { username, page, error: String(err) });
-          truncated = true;
-          break;
-        }
-      }
-      return {
-        username,
-        albums: all.map((a) => ({ name: a.name, url: a.url })),
-        albumCount: all.length,
-        truncated
-      };
-    }
-    /** 开始新检索会话（重置游标到第 1 页） */
-    startSearch(mode, list) {
-      const sort = SORT_BY_MODE[mode];
-      this.searchSession = {
-        mode,
-        list,
-        currentUrl: `https://freeimage.host/explore/${mode}/?list=${list}&sort=${sort}&page=1`,
-        cancelled: false
-      };
-    }
-    /** 是否有活动检索会话 */
-    hasSearchSession() {
-      return this.searchSession !== null && !this.searchSession.cancelled;
-    }
-    /** 当前会话模式/类型（NEXT 批沿用） */
-    getSessionInfo() {
-      const s = this.searchSession;
-      if (!s || s.cancelled) return null;
-      return { mode: s.mode, list: s.list };
-    }
-    /** 请求停止探索检索 */
-    cancelExploreSearch() {
-      if (this.searchSession) this.searchSession.cancelled = true;
-    }
-    /**
-     * 跑一批（rounds 页）：跟 seek 游标逐页抓取，仅解析文字，每页 onRound 推送
-     * 返回是否有更多页（false = 已到最后一页，会话自动结束）
-     */
-    async runSearchBatch(rounds, intervalMs, onRound) {
-      const s = this.searchSession;
-      if (!s || s.cancelled) {
-        throw new Error("\u65E0\u6D3B\u52A8\u68C0\u7D22\u4F1A\u8BDD\uFF08\u8BF7\u5148\u5F00\u59CB\u68C0\u7D22\uFF09");
-      }
-      for (let round = 1; round <= rounds; round++) {
-        if (s.cancelled) break;
-        let html;
-        try {
-          html = await this.fetchHtml(s.currentUrl);
-        } catch (err) {
-          logger5.warn("freeimage", "\u63A2\u7D22\u68C0\u7D22\u6293\u9875\u5931\u8D25\uFF08\u622A\u65AD\uFF09", { url: s.currentUrl, error: String(err) });
-          s.cancelled = true;
-          return { more: false };
-        }
-        const newEntries = [];
-        if (s.list === "albums") {
-          for (const a of parseExploreAlbums(html)) {
-            newEntries.push({
-              id: indexKeyOf(s.list, a.id),
-              name: a.name,
-              url: a.url,
-              imageCount: a.description ? Number(a.description.replace(/[^0-9]/g, "")) || void 0 : void 0,
-              source: `${s.mode}-${s.list}`,
-              collectedAt: Date.now()
-            });
-          }
-        } else if (s.list === "users") {
-          for (const u of parseExploreUsers(html)) {
-            newEntries.push({
-              id: indexKeyOf(s.list, u.username),
-              name: u.username,
-              url: u.url,
-              username: u.username,
-              source: `${s.mode}-${s.list}`,
-              collectedAt: Date.now()
-            });
-          }
-        } else {
-          for (const img of parseImageItems2(html)) {
-            newEntries.push({
-              id: indexKeyOf(s.list, img.id),
-              name: img.name,
-              url: img.viewerUrl || img.originalUrl,
-              source: `${s.mode}-${s.list}`,
-              collectedAt: Date.now()
-            });
-          }
-        }
-        await onRound({
-          round,
-          pageFrom: round,
-          pageTo: round,
-          added: newEntries.length,
-          total: 0,
-          // 由调用方（background）回填索引库累计
-          newEntries,
-          mode: s.mode,
-          type: s.list
-        });
-        const next = parseExploreNextPage(html, s.currentUrl);
-        if (!next || next === s.currentUrl || newEntries.length === 0) {
-          s.cancelled = true;
-          return { more: false };
-        }
-        s.currentUrl = next;
-        if (intervalMs > 0) await sleep(intervalMs);
-      }
-      return { more: !s.cancelled };
-    }
-  };
-  function sleep(ms) {
-    return new Promise((r) => setTimeout(r, ms));
-  }
-
-  // src/background/freeimage-diffuse.ts
-  var logger6 = initLogger("background");
-  var FETCH_TIMEOUT_MS6 = 2e4;
-  var FhDiffuseEngine = class _FhDiffuseEngine {
-    constructor() {
-      this.queue = [];
-      this.queueSet = /* @__PURE__ */ new Set();
-      this.visited = /* @__PURE__ */ new Set();
-      this.inDegree = /* @__PURE__ */ new Map();
-      this.startUser = "";
-      this.started = false;
-      this.totalRequests = 0;
-      this.consecutive429 = 0;
-      this.inBatchProcessed = 0;
-      this.inBatchSize = 0;
-      this.inBatchFailed = 0;
-      this.recentLog = [];
-    }
-    static {
-      this.LOG_MAX = 200;
-    }
-    /** 序列化当前状态（storage.session 保存用） */
-    save() {
-      return {
-        queue: [...this.queue],
-        visited: [...this.visited],
-        inDegree: Object.fromEntries(this.inDegree),
-        startUser: this.startUser,
-        totalRequests: this.totalRequests,
-        consecutive429: this.consecutive429,
-        recentLog: [...this.recentLog]
-      };
-    }
-    /** 从持久化状态恢复（SW 重启后续跑） */
-    restore(state) {
-      this.queue = [...state.queue];
-      this.queueSet = new Set(state.queue);
-      this.visited = new Set(state.visited);
-      this.inDegree = new Map(Object.entries(state.inDegree ?? {}));
-      this.startUser = state.startUser;
-      this.started = true;
-      this.totalRequests = state.totalRequests ?? 0;
-      this.consecutive429 = state.consecutive429 ?? 0;
-      this.recentLog = [...state.recentLog ?? []];
-      this.inBatchProcessed = 0;
-      this.inBatchSize = 0;
-      this.inBatchFailed = 0;
-    }
-    /** 是否已有活动扩散（started 且有状态） */
-    isActive() {
-      return this.started;
-    }
-    log(text) {
-      this.recentLog.push(text);
-      if (this.recentLog.length > _FhDiffuseEngine.LOG_MAX) this.recentLog.shift();
-    }
-    /** 开始新扩散：重置状态机 */
-    start(startUser) {
-      const user = startUser.trim().toLowerCase();
-      this.queue = [user];
-      this.queueSet = /* @__PURE__ */ new Set([user]);
-      this.visited = /* @__PURE__ */ new Set();
-      this.inDegree = /* @__PURE__ */ new Map();
-      this.startUser = user;
-      this.started = true;
-      this.totalRequests = 0;
-      this.consecutive429 = 0;
-      this.inBatchProcessed = 0;
-      this.inBatchSize = 0;
-      this.inBatchFailed = 0;
-      this.recentLog = [];
-      this.log(`\u25B6 \u6269\u6563\u542F\u52A8\uFF1A\u8D77\u70B9 ${user}`);
-      logger6.info("diffuse", "freeimage \u6269\u6563\u5DF2\u542F\u52A8", { startUser: user });
-    }
-    /** 处理一批（取队列前 batchSize，批内并发 + 间隔） */
-    async processBatch(batchSize, concurrency, intervalMs) {
-      if (!this.started || this.queue.length === 0) {
-        return this.result(0, 0, true);
-      }
-      const batch = this.queue.splice(0, batchSize);
-      for (const u of batch) this.queueSet.delete(u);
-      this.inBatchProcessed = 0;
-      this.inBatchSize = batch.length;
-      this.inBatchFailed = 0;
-      const tStart = Date.now();
-      const requestTimes = [];
-      let cursor = 0;
-      let failed = 0;
-      let newUsers = 0;
-      const inDegreeDelta = {};
-      const sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
-      const worker = async () => {
-        while (true) {
-          const idx = cursor++;
-          if (idx >= batch.length) return;
-          const user = batch[idx];
-          this.totalRequests++;
-          await sleep2(intervalMs);
-          const tReq = Date.now();
-          try {
-            const html = await this.fetchFollowingPage(user);
-            const targets = parseExploreUsers(html);
-            for (const t of targets) {
-              const name = t.username.toLowerCase();
-              this.inDegree.set(name, (this.inDegree.get(name) ?? 0) + 1);
-              inDegreeDelta[name] = (inDegreeDelta[name] ?? 0) + 1;
-              if (!this.visited.has(name) && !this.queueSet.has(name)) {
-                this.queue.push(name);
-                this.queueSet.add(name);
-                newUsers++;
-              }
-            }
-            this.consecutive429 = 0;
-            this.log(`\u2713 ${user}\uFF1A\u53D1\u73B0 ${targets.length} \u4E2A\u5173\u6CE8\uFF08\u65B0 ${newUsers}\uFF09`);
-          } catch (err) {
-            failed++;
-            this.inBatchFailed++;
-            const msg = String(err);
-            if (msg.includes("429")) {
-              this.consecutive429++;
-              if (this.consecutive429 >= 3) {
-                logger6.warn("diffuse", "\u8FDE\u7EED 429\uFF0C\u5EFA\u8BAE\u6682\u505C 30s \u518D\u7EE7\u7EED", { count: this.consecutive429 });
-              }
-            }
-            this.log(`\u2717 ${user}\uFF1A\u5931\u8D25\uFF08${msg.slice(0, 60)}\uFF09`);
-            logger6.warn("diffuse", "\u7528\u6237\u5173\u6CE8\u9875\u6293\u53D6\u5931\u8D25\uFF08\u8DF3\u8FC7\uFF09", { user, error: msg });
-          } finally {
-            this.visited.add(user);
-            this.inBatchProcessed++;
-            requestTimes.push(Date.now() - tReq);
-          }
-        }
-      };
-      await Promise.all(Array.from({ length: Math.min(concurrency, batch.length) }, () => worker()));
-      const durationMs = Date.now() - tStart;
-      const avgRequestMs = requestTimes.length > 0 ? Math.round(requestTimes.reduce((a, b) => a + b, 0) / requestTimes.length) : 0;
-      const done = this.queue.length === 0;
-      const result = this.result(batch.length, failed, done);
-      result.newUsers = newUsers;
-      result.inDegreeDelta = inDegreeDelta;
-      result.durationMs = durationMs;
-      result.avgRequestMs = avgRequestMs;
-      logger6.info("diffuse", "freeimage \u6279\u6B21\u5B8C\u6210", {
-        processed: result.processed,
-        newUsers,
-        queueSize: result.queueSize,
-        failed,
-        durationMs,
-        avgRequestMs,
-        totalRequests: this.totalRequests
-      });
-      return result;
-    }
-    /** 会话快照（进度展示） */
-    snapshot() {
-      const top = [...this.inDegree.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([username, inDegree]) => ({ username, inDegree }));
-      const users = [...this.inDegree.entries()].sort((a, b) => b[1] - a[1]).slice(0, 200).map(([username, inDegree]) => ({ username, inDegree }));
-      return {
-        startUser: this.startUser,
-        queueSize: this.queue.length,
-        visitedTotal: this.visited.size,
-        inDegreeSize: this.inDegree.size,
-        totalRequests: this.totalRequests,
-        inBatchProcessed: this.inBatchProcessed,
-        inBatchSize: this.inBatchSize,
-        inBatchFailed: this.inBatchFailed,
-        consecutive429: this.consecutive429,
-        recentLog: [...this.recentLog],
-        users,
-        userTotal: this.inDegree.size,
-        top
-      };
-    }
-    get totalRequestCount() {
-      return this.totalRequests;
-    }
-    get is429Throttled() {
-      return this.consecutive429 >= 3;
-    }
-    result(processed, failed, done) {
-      return {
-        processed,
-        newUsers: 0,
-        queueSize: this.queue.length,
-        inDegreeDelta: {},
-        failed,
-        visitedTotal: this.visited.size,
-        done,
-        durationMs: 0,
-        avgRequestMs: 0
-      };
-    }
-    /** freeimage 关注页抓取（用户项，parseExploreUsers 解析） */
-    async fetchFollowingPage(username) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS6);
-      try {
-        const resp = await fetch(`https://freeimage.host/${encodeURIComponent(username)}/following`, {
-          credentials: "include",
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-            Referer: "https://freeimage.host/"
-          },
-          signal: controller.signal
-        });
-        if (!resp.ok) {
-          if (resp.status === 429) throw new Error("HTTP 429\uFF08\u9650\u6D41\uFF09");
-          throw new Error(`HTTP ${resp.status}\uFF08${username}\uFF09`);
-        }
-        return await resp.text();
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") {
-          throw new Error(`\u8BF7\u6C42\u8D85\u65F6\uFF08${username}\uFF09`);
-        }
-        throw err;
-      } finally {
-        clearTimeout(timer);
-      }
-    }
-  };
-
-  // src/lib/freeimage-types.ts
-  function emptyFhProducerDb() {
-    return { entries: {}, updatedAt: 0 };
-  }
-  function loadFhProducerDb(raw) {
-    if (!raw || typeof raw !== "object") return emptyFhProducerDb();
-    const r = raw;
-    const entries = {};
-    if (r.entries && typeof r.entries === "object") {
-      for (const [username, e] of Object.entries(r.entries)) {
-        if (!e || typeof e !== "object") continue;
-        const en = e;
-        entries[username] = {
-          username: String(en.username ?? username),
-          status: en.status === "target" || en.status === "excluded" ? en.status : null,
-          reason: typeof en.reason === "string" ? en.reason : void 0,
-          avatarUrl: typeof en.avatarUrl === "string" ? en.avatarUrl : void 0,
-          albums: Array.isArray(en.albums) ? en.albums.slice(0, 500) : void 0,
-          albumCount: typeof en.albumCount === "number" ? en.albumCount : void 0,
-          seenAt: typeof en.seenAt === "number" ? en.seenAt : Date.now(),
-          notedAt: typeof en.notedAt === "number" ? en.notedAt : void 0
-        };
-      }
-    }
-    return { entries, updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : Date.now() };
-  }
-  function emptyFhAlbumIndexDb() {
-    return { entries: {}, updatedAt: 0 };
-  }
-  function loadFhAlbumIndexDb(raw) {
-    if (!raw || typeof raw !== "object") return emptyFhAlbumIndexDb();
-    const r = raw;
-    const entries = {};
-    if (r.entries && typeof r.entries === "object") {
-      for (const [id, e] of Object.entries(r.entries)) {
-        if (!e || typeof e !== "object") continue;
-        const en = e;
-        if (!en.name) continue;
-        entries[id] = {
-          id: String(en.id ?? id),
-          name: String(en.name),
-          url: String(en.url ?? ""),
-          username: typeof en.username === "string" ? en.username : void 0,
-          imageCount: typeof en.imageCount === "number" ? en.imageCount : void 0,
-          source: String(en.source ?? ""),
-          collectedAt: typeof en.collectedAt === "number" ? en.collectedAt : Date.now(),
-          mined: en.mined === true ? true : void 0
-        };
-      }
-    }
-    return { entries, updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : Date.now() };
+  function dedupeLinks2(items) {
+    const seen = /* @__PURE__ */ new Set();
+    return items.filter((i) => {
+      if (seen.has(i.url)) return false;
+      seen.add(i.url);
+      return true;
+    });
   }
 
   // src/background/background.ts
-  var logger7 = initLogger("background");
+  var logger5 = initLogger("background");
   var sessions = /* @__PURE__ */ new Map();
   function buildFolderName(title) {
     const cleanTitle = cleanPageTitle(title).replace(/[\\/:*?"<>|\n\r]/g, "_").trim().slice(0, 120) || "\u9875\u9762";
@@ -2600,7 +2228,7 @@
   var producerDbReady = (async () => {
     const raw = await storageGet(PRODUCER_DB_KEY);
     producerDb = loadDb(raw);
-    logger7.info("diffuse", "\u751F\u4EA7\u8005\u5E93\u5DF2\u6062\u590D", { total: Object.keys(producerDb.entries).length });
+    logger5.info("diffuse", "\u751F\u4EA7\u8005\u5E93\u5DF2\u6062\u590D", { total: Object.keys(producerDb.entries).length });
   })();
   var DIFFUSE_STATE_KEY = "diffuse_state";
   async function ensureDiffuseRestored() {
@@ -2609,7 +2237,7 @@
       const state = r[DIFFUSE_STATE_KEY];
       if (state && Array.isArray(state.queue) && !diffuse.isActive()) {
         diffuse.restore(state);
-        logger7.info("diffuse", "\u6269\u6563\u72B6\u6001\u5DF2\u4ECE session \u6062\u590D", { queueSize: state.queue.length, visited: state.visited.length });
+        logger5.info("diffuse", "\u6269\u6563\u72B6\u6001\u5DF2\u4ECE session \u6062\u590D", { queueSize: state.queue.length, visited: state.visited.length });
       }
     } catch {
     }
@@ -2619,172 +2247,6 @@
       await chrome.storage.session.set({ [DIFFUSE_STATE_KEY]: diffuse.save() });
     } catch {
     }
-  }
-  var freeimage = new FreeimageService();
-  var fhProducerDb = emptyFhProducerDb();
-  var FH_PRODUCER_DB_KEY = "fh_producer_db";
-  var fhProducerDbReady = (async () => {
-    const raw = await storageGet(FH_PRODUCER_DB_KEY);
-    fhProducerDb = loadFhProducerDb(raw);
-    logger7.info("freeimage", "\u7C7B\u7FA4\u6807\u6CE8\u5E93\u5DF2\u6062\u590D", { total: Object.keys(fhProducerDb.entries).length });
-  })();
-  async function pushFhResult(srcTabId, kind, data, done, error) {
-    const session = sessions.get(srcTabId);
-    if (!session) return;
-    await sendToTab(session.grabTabId, { type: "FH_RESULT", kind, data, done, error });
-  }
-  async function runSearchBatch(srcTabId, mode, list, rounds, intervalMs, chineseOnly) {
-    await fhAlbumIndexReady;
-    const onRound = async (progress) => {
-      let added = 0;
-      for (const e of progress.newEntries) {
-        if (chineseOnly && !isChineseAlbum(e.name)) continue;
-        const existing = fhAlbumIndex.entries[e.id];
-        if (!existing) {
-          fhAlbumIndex.entries[e.id] = e;
-          added++;
-        } else {
-          fhAlbumIndex.entries[e.id] = { ...existing, ...e, name: existing.name, collectedAt: existing.collectedAt };
-        }
-      }
-      fhAlbumIndex.updatedAt = Date.now();
-      await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex);
-      await syncCnAlbumIndex();
-      const total = Object.keys(fhAlbumIndex.entries).length;
-      await pushFhResult(srcTabId, "explore-search", { ...progress, added, total }, false);
-    };
-    try {
-      const { more } = await freeimage.runSearchBatch(rounds, intervalMs, onRound);
-      await pushFhResult(
-        srcTabId,
-        "explore-search",
-        {
-          round: rounds,
-          pageFrom: 0,
-          pageTo: 0,
-          added: 0,
-          total: Object.keys(fhAlbumIndex.entries).length,
-          newEntries: [],
-          mode,
-          type: list,
-          more
-        },
-        true
-      );
-    } catch (err) {
-      logger7.error("freeimage", "\u63A2\u7D22\u68C0\u7D22\u6279\u6B21\u5931\u8D25", String(err));
-      await pushFhResult(
-        srcTabId,
-        "explore-search",
-        {
-          round: 0,
-          pageFrom: 0,
-          pageTo: 0,
-          added: 0,
-          total: Object.keys(fhAlbumIndex.entries).length,
-          newEntries: [],
-          mode,
-          type: list,
-          more: false
-        },
-        true,
-        String(err)
-      );
-    }
-  }
-  var fhAlbumIndex = emptyFhAlbumIndexDb();
-  var FH_ALBUM_INDEX_KEY = "fh_album_index";
-  var fhAlbumIndexReady = (async () => {
-    const raw = await storageGet(FH_ALBUM_INDEX_KEY);
-    fhAlbumIndex = loadFhAlbumIndexDb(raw);
-    logger7.info("freeimage", "\u76F8\u518C\u7D22\u5F15\u5E93\u5DF2\u6062\u590D", { total: Object.keys(fhAlbumIndex.entries).length });
-  })();
-  var fhCnAlbumIndex = emptyFhAlbumIndexDb();
-  var FH_CN_INDEX_KEY = "fh_cn_album_index";
-  var fhCnIndexReady = (async () => {
-    const raw = await storageGet(FH_CN_INDEX_KEY);
-    fhCnAlbumIndex = loadFhAlbumIndexDb(raw);
-    logger7.info("freeimage", "\u4E2D\u6587\u76F8\u518C\u8BB0\u5F55\u8868\u5DF2\u6062\u590D", { total: Object.keys(fhCnAlbumIndex.entries).length });
-  })();
-  async function syncCnAlbumIndex() {
-    let added = 0;
-    for (const [id, e] of Object.entries(fhAlbumIndex.entries)) {
-      if (!isChineseAlbum(e.name)) continue;
-      if (!fhCnAlbumIndex.entries[id]) {
-        fhCnAlbumIndex.entries[id] = { ...e };
-        added++;
-      }
-    }
-    if (added > 0) {
-      fhCnAlbumIndex.updatedAt = Date.now();
-      await storageSet(FH_CN_INDEX_KEY, fhCnAlbumIndex);
-    }
-  }
-  var fhDiffuse = new FhDiffuseEngine();
-  var fhDiffuseDb = emptyDb();
-  var FH_DIFFUSE_DB_KEY = "fh_diffuse_db";
-  var fhDiffuseDbReady = (async () => {
-    const raw = await storageGet(FH_DIFFUSE_DB_KEY);
-    fhDiffuseDb = loadDb(raw);
-    logger7.info("freeimage", "freeimage \u751F\u4EA7\u8005\u5E93\u5DF2\u6062\u590D", { total: Object.keys(fhDiffuseDb.entries).length });
-  })();
-  var FH_DIFFUSE_STATE_KEY = "fh_diffuse_state";
-  var fhScoreBatchCancelled = false;
-  async function ensureFhDiffuseRestored() {
-    try {
-      const r = await chrome.storage.session.get(FH_DIFFUSE_STATE_KEY);
-      const state = r[FH_DIFFUSE_STATE_KEY];
-      if (state && Array.isArray(state.queue) && !fhDiffuse.isActive()) {
-        fhDiffuse.restore(state);
-        logger7.info("freeimage", "\u6269\u6563\u72B6\u6001\u5DF2\u4ECE session \u6062\u590D", { queueSize: state.queue.length, visited: state.visited.length });
-      }
-    } catch {
-    }
-  }
-  async function saveFhDiffuseState() {
-    try {
-      await chrome.storage.session.set({ [FH_DIFFUSE_STATE_KEY]: fhDiffuse.save() });
-    } catch {
-    }
-  }
-  async function fhFetchUserAlbums(username, maxPages) {
-    const all = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (let page = 1; page <= maxPages; page++) {
-      try {
-        const albums = await freeimage.fetchAlbumsPage(username, "views_desc", page);
-        let added = 0;
-        for (const a of albums) {
-          if (!seen.has(a.id)) {
-            seen.add(a.id);
-            all.push(a);
-            added++;
-          }
-        }
-        if (albums.length === 0 || added === 0) break;
-      } catch (err) {
-        logger7.warn("freeimage", "\u7528\u6237\u76F8\u518C\u904D\u5386\u5931\u8D25\uFF08\u622A\u65AD\uFF09", { username, page, error: String(err) });
-        return { albums: all, truncated: true };
-      }
-    }
-    return { albums: all, truncated: false };
-  }
-  async function fetchFhFollowingUsers(username, side) {
-    const urls = [];
-    if (side === "following" || side === "both") {
-      urls.push(`https://freeimage.host/${encodeURIComponent(username)}/following`);
-    }
-    if (side === "followers" || side === "both") {
-      urls.push(`https://freeimage.host/${encodeURIComponent(username)}/followers`);
-    }
-    const htmls = await Promise.all(urls.map((u) => freeimage.fetchHtml(u)));
-    const users = htmls.flatMap((h) => parseExploreUsers(h));
-    const seen = /* @__PURE__ */ new Set();
-    return users.filter((u) => {
-      if (seen.has(u.username)) return false;
-      seen.add(u.username);
-      return true;
-    });
   }
   var buondua = new BuonduaService();
   async function pushImgbbResult(srcTabId, kind, data, done, error) {
@@ -2804,7 +2266,7 @@
   }
   chrome.action.onClicked.addListener(async (tab) => {
     if (!tab.id || !tab.url || !/^https?:\/\//.test(tab.url)) {
-      logger7.warn("action", "\u65E0\u6CD5\u6293\u53D6\u8BE5\u9875\u9762\uFF08\u975E http(s) \u9875\u9762\uFF09", { url: tab.url });
+      logger5.warn("action", "\u65E0\u6CD5\u6293\u53D6\u8BE5\u9875\u9762\uFF08\u975E http(s) \u9875\u9762\uFF09", { url: tab.url });
       return;
     }
     try {
@@ -2812,16 +2274,16 @@
         url: `grabber.html?srcTabId=${tab.id}`,
         index: (tab.index ?? 0) + 1
       });
-      logger7.info("action", "\u5DF2\u521B\u5EFA\u6293\u53D6\u9875", { srcTabId: tab.id, grabTabId: grabTab.id });
+      logger5.info("action", "\u5DF2\u521B\u5EFA\u6293\u53D6\u9875", { srcTabId: tab.id, grabTabId: grabTab.id });
     } catch (err) {
-      logger7.error("action", "\u521B\u5EFA\u6293\u53D6\u9875\u5931\u8D25", { error: String(err) });
+      logger5.error("action", "\u521B\u5EFA\u6293\u53D6\u9875\u5931\u8D25", { error: String(err) });
     }
   });
   chrome.tabs.onRemoved.addListener((tabId) => {
     const session = sessions.get(tabId);
     if (session) {
       sessions.delete(tabId);
-      logger7.info("session", "\u6E90\u7F51\u9875\u5173\u95ED\uFF0C\u6E05\u7406\u4F1A\u8BDD", { srcTabId: tabId });
+      logger5.info("session", "\u6E90\u7F51\u9875\u5173\u95ED\uFF0C\u6E05\u7406\u4F1A\u8BDD", { srcTabId: tabId });
       if (session.grabTabId && session.grabTabId !== tabId) {
         void sendToTab(session.grabTabId, { type: "GRAB_SESSION_END_FWD", srcTabId: tabId });
       }
@@ -2829,19 +2291,19 @@
     for (const [srcTabId, s] of sessions) {
       if (s.grabTabId === tabId) {
         sessions.delete(srcTabId);
-        logger7.info("session", "\u6293\u53D6\u9875\u5173\u95ED\uFF0C\u6E05\u7406\u4F1A\u8BDD", { srcTabId, grabTabId: tabId });
+        logger5.info("session", "\u6293\u53D6\u9875\u5173\u95ED\uFF0C\u6E05\u7406\u4F1A\u8BDD", { srcTabId, grabTabId: tabId });
       }
     }
   });
   chrome.runtime.onInstalled.addListener((details) => {
-    logger7.info("runtime", "\u63D2\u4EF6\u5DF2\u5B89\u88C5/\u66F4\u65B0", { reason: details.reason, version: chrome.runtime.getManifest().version });
+    logger5.info("runtime", "\u63D2\u4EF6\u5DF2\u5B89\u88C5/\u66F4\u65B0", { reason: details.reason, version: chrome.runtime.getManifest().version });
   });
   chrome.runtime.onStartup.addListener(() => {
-    logger7.info("runtime", "\u6D4F\u89C8\u5668\u542F\u52A8\uFF0CSW \u5524\u9192");
+    logger5.info("runtime", "\u6D4F\u89C8\u5668\u542F\u52A8\uFF0CSW \u5524\u9192");
   });
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     void handleMessage(message, sender).then(sendResponse).catch((err) => {
-      logger7.error("msg-handler", "\u6D88\u606F\u5904\u7406\u5931\u8D25", { type: message.type, error: String(err) });
+      logger5.error("msg-handler", "\u6D88\u606F\u5904\u7406\u5931\u8D25", { type: message.type, error: String(err) });
       sendResponse({ ok: false, error: String(err) });
     });
     return true;
@@ -2883,7 +2345,7 @@
           session.folderName = buildFolderName(session.title);
         }
         sessions.set(message.srcTabId, session);
-        logger7.info("session", "\u4F1A\u8BDD\u5DF2\u6CE8\u518C", { srcTabId: session.srcTabId, grabTabId: session.grabTabId, folderName: session.folderName });
+        logger5.info("session", "\u4F1A\u8BDD\u5DF2\u6CE8\u518C", { srcTabId: session.srcTabId, grabTabId: session.grabTabId, folderName: session.folderName });
         return { ok: true, session };
       }
       case "GRAB_PARSE_START": {
@@ -2898,10 +2360,10 @@
             files: ["js/content.js"]
           });
           await sendToTab(srcTabId, { type: "GRAB_PARSE_START" });
-          logger7.info("parse", "\u89E3\u6790\u5DF2\u542F\u52A8", { srcTabId });
+          logger5.info("parse", "\u89E3\u6790\u5DF2\u542F\u52A8", { srcTabId });
         } catch (err) {
           session.status = "error";
-          logger7.error("parse", "\u6CE8\u5165\u89E3\u6790\u5668\u5931\u8D25", { srcTabId, error: String(err) });
+          logger5.error("parse", "\u6CE8\u5165\u89E3\u6790\u5668\u5931\u8D25", { srcTabId, error: String(err) });
           await sendToTab(session.grabTabId, {
             type: "GRAB_PARSE_ERROR_FWD",
             srcTabId,
@@ -2918,7 +2380,7 @@
           session.status = "idle";
         }
         await sendToTab(srcTabId, { type: "GRAB_PARSE_CANCEL" });
-        logger7.info("parse", "\u8BF7\u6C42\u53D6\u6D88\u89E3\u6790", { srcTabId });
+        logger5.info("parse", "\u8BF7\u6C42\u53D6\u6D88\u89E3\u6790", { srcTabId });
         return { ok: true };
       }
       case "GRAB_LOAD_MORE": {
@@ -2928,7 +2390,7 @@
         if (!session) return { ok: false, error: "\u4F1A\u8BDD\u4E0D\u5B58\u5728" };
         session.status = "parsing";
         await sendToTab(srcTabId, { type: "GRAB_LOAD_MORE" });
-        logger7.info("parse", "\u8BF7\u6C42\u52A0\u8F7D\u4E0B\u4E00\u6279", { srcTabId });
+        logger5.info("parse", "\u8BF7\u6C42\u52A0\u8F7D\u4E0B\u4E00\u6279", { srcTabId });
         return { ok: true };
       }
       case "GRAB_PARSE_BATCH": {
@@ -2970,7 +2432,7 @@
       }
       case "GRAB_DOWNLOAD_START": {
         const job = downloadManager.start(message.srcTabId, message.folderName, message.items);
-        logger7.info("download", "\u4E0B\u8F7D\u4EFB\u52A1\u542F\u52A8", { jobId: job.id, total: job.total, folderName: job.folderName });
+        logger5.info("download", "\u4E0B\u8F7D\u4EFB\u52A1\u542F\u52A8", { jobId: job.id, total: job.total, folderName: job.folderName });
         return { ok: true, job };
       }
       case "GRAB_DOWNLOAD_CANCEL":
@@ -2992,9 +2454,9 @@
           if (message.srcTabId) {
             try {
               buf = await fetchImgbbViaSrcTab(message.srcTabId, message.url);
-              logger7.debug("download", "GRAB_FETCH_IMAGE \u6E90\u9875\u6CE8\u5165\u6293\u53D6\u5B8C\u6210", { bytes: buf.byteLength, url: message.url });
+              logger5.debug("download", "GRAB_FETCH_IMAGE \u6E90\u9875\u6CE8\u5165\u6293\u53D6\u5B8C\u6210", { bytes: buf.byteLength, url: message.url });
             } catch (err) {
-              logger7.warn("download", "GRAB_FETCH_IMAGE \u6E90\u9875\u6CE8\u5165\u5931\u8D25\uFF0C\u964D\u7EA7 background", { url: message.url, error: String(err) });
+              logger5.warn("download", "GRAB_FETCH_IMAGE \u6E90\u9875\u6CE8\u5165\u5931\u8D25\uFF0C\u964D\u7EA7 background", { url: message.url, error: String(err) });
               buf = await fetchImageBytes(message.url);
             }
           } else {
@@ -3002,7 +2464,7 @@
           }
           return { ok: true, data: arrayBufferToBase64(buf) };
         } catch (err) {
-          logger7.warn("download", "GRAB_FETCH_IMAGE \u6293\u53D6\u5931\u8D25", { url: message.url, error: String(err) });
+          logger5.warn("download", "GRAB_FETCH_IMAGE \u6293\u53D6\u5931\u8D25", { url: message.url, error: String(err) });
           return { ok: false, error: String(err) };
         }
       }
@@ -3016,10 +2478,10 @@
       case "IMG_RESOLVE_USER": {
         try {
           const username = await imgbb.resolveUsernameFromAlbum(message.albumUrl);
-          logger7.info("imgbb", "\u76F8\u518C\u7528\u6237\u540D\u89E3\u6790\u5B8C\u6210", { albumUrl: message.albumUrl, username });
+          logger5.info("imgbb", "\u76F8\u518C\u7528\u6237\u540D\u89E3\u6790\u5B8C\u6210", { albumUrl: message.albumUrl, username });
           return { ok: true, username };
         } catch (err) {
-          logger7.error("imgbb", "\u76F8\u518C\u7528\u6237\u540D\u89E3\u6790\u5931\u8D25", String(err));
+          logger5.error("imgbb", "\u76F8\u518C\u7528\u6237\u540D\u89E3\u6790\u5931\u8D25", String(err));
           return { ok: false, error: String(err) };
         }
       }
@@ -3029,7 +2491,7 @@
           await pushImgbbResult(message.srcTabId, "album-images", images, true);
           return { ok: true, name: name || void 0 };
         } catch (err) {
-          logger7.error("imgbb", "\u76F8\u518C\u6293\u53D6\u5931\u8D25", String(err));
+          logger5.error("imgbb", "\u76F8\u518C\u6293\u53D6\u5931\u8D25", String(err));
           await pushImgbbResult(message.srcTabId, "album-images", [], true, String(err));
           return { ok: false, error: String(err) };
         }
@@ -3039,7 +2501,7 @@
           const images = await imgbb.fetchGalleryPages(message.url, message.pageFrom, message.pageTo);
           await pushImgbbResult(message.srcTabId, "gallery", images, true);
         } catch (err) {
-          logger7.error("imgbb", "\u7528\u6237\u4E3B\u9875\u6293\u53D6\u5931\u8D25", String(err));
+          logger5.error("imgbb", "\u7528\u6237\u4E3B\u9875\u6293\u53D6\u5931\u8D25", String(err));
           await pushImgbbResult(message.srcTabId, "gallery", [], true, String(err));
         }
         return { ok: true };
@@ -3053,10 +2515,10 @@
             const n = Number(m[1]);
             return n >= message.from && n <= message.to;
           });
-          logger7.info("imgbb", "\u7F16\u53F7\u8303\u56F4\u6293\u53D6\u5B8C\u6210", { prefix: message.prefix, from: message.from, to: message.to, count: filtered.length, scanned: all.length });
+          logger5.info("imgbb", "\u7F16\u53F7\u8303\u56F4\u6293\u53D6\u5B8C\u6210", { prefix: message.prefix, from: message.from, to: message.to, count: filtered.length, scanned: all.length });
           await pushImgbbResult(message.srcTabId, "gallery-range", filtered, true);
         } catch (err) {
-          logger7.error("imgbb", "\u7F16\u53F7\u8303\u56F4\u6293\u53D6\u5931\u8D25", String(err));
+          logger5.error("imgbb", "\u7F16\u53F7\u8303\u56F4\u6293\u53D6\u5931\u8D25", String(err));
           await pushImgbbResult(message.srcTabId, "gallery-range", [], true, String(err));
         }
         return { ok: true };
@@ -3066,7 +2528,7 @@
           const albums = await imgbb.fetchAlbumsPage(message.username, message.page);
           await pushImgbbResult(message.srcTabId, "albums", albums, true);
         } catch (err) {
-          logger7.error("imgbb", "\u76F8\u518C\u5206\u6790\u5931\u8D25", String(err));
+          logger5.error("imgbb", "\u76F8\u518C\u5206\u6790\u5931\u8D25", String(err));
           await pushImgbbResult(message.srcTabId, "albums", [], true, String(err));
         }
         return { ok: true };
@@ -3089,7 +2551,7 @@
             done && results.length === 0 ? "\u65E0\u66F4\u591A\u6709\u6548\u7528\u6237" : void 0
           );
         } catch (err) {
-          logger7.error("imgbb", "\u5173\u6CE8\u5899\u5206\u6790\u5931\u8D25", String(err));
+          logger5.error("imgbb", "\u5173\u6CE8\u5899\u5206\u6790\u5931\u8D25", String(err));
           await pushImgbbResult(message.srcTabId, "following", [], true, String(err));
         }
         return { ok: true };
@@ -3103,7 +2565,7 @@
         await ensureDiffuseRestored();
         await producerDbReady;
         if (diffuse.is429Throttled) {
-          logger7.warn("diffuse", "\u8FDE\u7EED 429\uFF0C\u5DF2\u963B\u6B62\u7EE7\u7EED\u6269\u6563\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5");
+          logger5.warn("diffuse", "\u8FDE\u7EED 429\uFF0C\u5DF2\u963B\u6B62\u7EE7\u7EED\u6269\u6563\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5");
           return { ok: false, error: "\u8FDE\u7EED 429 \u9650\u6D41\uFF0C\u8BF7\u7B49\u5F85 30 \u79D2\u540E\u518D\u7EE7\u7EED" };
         }
         const result = await diffuse.processBatch(message.batchSize, message.concurrency, message.intervalMs);
@@ -3145,14 +2607,14 @@
         await producerDbReady;
         await storageSet(PRODUCER_DB_KEY, producerDb);
         const sum = dbSummary(producerDb);
-        logger7.info("diffuse", "\u751F\u4EA7\u8005\u5E93\u5DF2\u4FDD\u5B58", { total: sum.total, source: message.source });
+        logger5.info("diffuse", "\u751F\u4EA7\u8005\u5E93\u5DF2\u4FDD\u5B58", { total: sum.total, source: message.source });
         return { ok: true, total: sum.total, confirmed: sum.confirmed, producers: sum.producers, maxInDegree: sum.maxInDegree };
       }
       case "IMG_DB_CLEAR": {
         await producerDbReady;
         producerDb = emptyDb();
         await storageSet(PRODUCER_DB_KEY, producerDb);
-        logger7.info("diffuse", "\u751F\u4EA7\u8005\u5E93\u5DF2\u6E05\u7A7A");
+        logger5.info("diffuse", "\u751F\u4EA7\u8005\u5E93\u5DF2\u6E05\u7A7A");
         return { ok: true, total: 0 };
       }
       case "IMG_DB_EXPORT": {
@@ -3163,13 +2625,13 @@
         await producerDbReady;
         producerDb = resetConfirmations(producerDb);
         await storageSet(PRODUCER_DB_KEY, producerDb);
-        logger7.info("diffuse", "\u786E\u8BA4\u72B6\u6001\u5DF2\u91CD\u7F6E\uFF08\u4FDD\u7559\u5165\u5EA6\uFF09\uFF0C\u9700\u91CD\u65B0\u786E\u8BA4\u8BC4\u5206");
+        logger5.info("diffuse", "\u786E\u8BA4\u72B6\u6001\u5DF2\u91CD\u7F6E\uFF08\u4FDD\u7559\u5165\u5EA6\uFF09\uFF0C\u9700\u91CD\u65B0\u786E\u8BA4\u8BC4\u5206");
         return { ok: true, total: Object.keys(producerDb.entries).length };
       }
       case "IMG_TAG_GET": {
         await producerDbReady;
         const tags = computeTags(Object.values(producerDb.entries), message.topN ?? 100);
-        logger7.info("tag", "\u6807\u7B7E\u4E91\u7EDF\u8BA1\u5B8C\u6210", { tags: tags.length, topN: message.topN ?? 100 });
+        logger5.info("tag", "\u6807\u7B7E\u4E91\u7EDF\u8BA1\u5B8C\u6210", { tags: tags.length, topN: message.topN ?? 100 });
         return { ok: true, tags };
       }
       case "IMG_DB_IMPORT": {
@@ -3180,7 +2642,7 @@
         await storageSet(PRODUCER_DB_KEY, producerDb);
         const after = Object.keys(producerDb.entries).length;
         const sum = dbSummary(producerDb);
-        logger7.info("diffuse", "\u6570\u636E\u8868\u5DF2\u5BFC\u5165\u5408\u5E76", { before, after, imported: Object.keys(imported.entries).length });
+        logger5.info("diffuse", "\u6570\u636E\u8868\u5DF2\u5BFC\u5165\u5408\u5E76", { before, after, imported: Object.keys(imported.entries).length });
         return {
           ok: true,
           total: after,
@@ -3202,13 +2664,13 @@
         let failed = 0;
         let cursor = 0;
         const updated = {};
-        const sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         const worker = async () => {
           while (true) {
             const idx = cursor++;
             if (idx >= candidates.length) return;
             const c = candidates[idx];
-            await sleep2(message.intervalMs);
+            await sleep(message.intervalMs);
             try {
               const { albums: userAlbums, truncated } = await fetchUserAlbums(c.username, SCORE_MAX_PAGES);
               updated[c.username] = {
@@ -3235,7 +2697,7 @@
               }
             } catch (err) {
               failed++;
-              logger7.warn("score", "albums \u786E\u8BA4\u5931\u8D25\uFF08\u8DF3\u8FC7\uFF09", { user: c.username, error: String(err) });
+              logger5.warn("score", "albums \u786E\u8BA4\u5931\u8D25\uFF08\u8DF3\u8FC7\uFF09", { user: c.username, error: String(err) });
             }
             if (scoreBatchCancelled) return;
           }
@@ -3247,7 +2709,7 @@
         await storageSet(PRODUCER_DB_KEY, producerDb);
         const unconfirmed = unconfirmedCount(producerDb);
         const truncatedCount = Object.values(updated).filter((u) => u.albumsTruncated).length;
-        logger7.info("score", "\u786E\u8BA4\u6279\u6B21\u5B8C\u6210", { processed: Object.keys(updated).length, withAlbums, zeroAlbums, failed, unconfirmed, truncated: truncatedCount, cancelled: scoreBatchCancelled });
+        logger5.info("score", "\u786E\u8BA4\u6279\u6B21\u5B8C\u6210", { processed: Object.keys(updated).length, withAlbums, zeroAlbums, failed, unconfirmed, truncated: truncatedCount, cancelled: scoreBatchCancelled });
         return {
           ok: true,
           score: {
@@ -3263,7 +2725,7 @@
       }
       case "IMG_SCORE_STOP": {
         scoreBatchCancelled = true;
-        logger7.info("score", "\u786E\u8BA4\u5DF2\u8BF7\u6C42\u505C\u6B62");
+        logger5.info("score", "\u786E\u8BA4\u5DF2\u8BF7\u6C42\u505C\u6B62");
         return { ok: true };
       }
       case "IMG_SCORE_FULL": {
@@ -3271,7 +2733,7 @@
         const username = (message.username || "").toLowerCase();
         const entry = producerDb.entries[username];
         if (!entry) return { ok: false, error: "\u5E93\u4E2D\u65E0\u6B64\u7528\u6237" };
-        logger7.info("score", "\u5F7B\u5E95\u904D\u5386\u5F00\u59CB", { user: username, maxPages: SCORE_FULL_MAX_PAGES });
+        logger5.info("score", "\u5F7B\u5E95\u904D\u5386\u5F00\u59CB", { user: username, maxPages: SCORE_FULL_MAX_PAGES });
         try {
           const { albums: userAlbums, truncated } = await fetchUserAlbums(username, SCORE_FULL_MAX_PAGES);
           producerDb.entries[username] = {
@@ -3282,13 +2744,13 @@
             albums: userAlbums.map((a) => ({ name: a.name, url: a.url }))
           };
           await storageSet(PRODUCER_DB_KEY, producerDb);
-          logger7.info("score", "\u5F7B\u5E95\u904D\u5386\u5B8C\u6210", { user: username, albums: userAlbums.length, truncated });
+          logger5.info("score", "\u5F7B\u5E95\u904D\u5386\u5B8C\u6210", { user: username, albums: userAlbums.length, truncated });
           return {
             ok: true,
             full: { username, albumCount: userAlbums.length, truncated }
           };
         } catch (err) {
-          logger7.error("score", "\u5F7B\u5E95\u904D\u5386\u5931\u8D25", { user: username, error: String(err) });
+          logger5.error("score", "\u5F7B\u5E95\u904D\u5386\u5931\u8D25", { user: username, error: String(err) });
           return { ok: false, error: String(err) };
         }
       }
@@ -3299,7 +2761,7 @@
         const to = Math.min(scored.length, Math.floor(scored.length * message.toPct / 100));
         const keywords = message.keywords.map((k) => k.toLowerCase()).filter(Boolean);
         const matches = scored.slice(from, to).map((c) => ({ username: c.username, inDegree: c.inDegree, albums: matchAlbums(c, keywords) })).filter((m) => m.albums.length > 0);
-        logger7.info("search", "\u68C0\u7D22\u5B8C\u6210\uFF08\u5168\u91CF\uFF09", {
+        logger5.info("search", "\u68C0\u7D22\u5B8C\u6210\uFF08\u5168\u91CF\uFF09", {
           keywords,
           range: `0~${message.toPct}%`,
           candidates: to - from,
@@ -3325,7 +2787,7 @@
         const cfg = normalizeConfig({ repo: message.repo, token: message.token, branch: message.branch });
         if (!cfg) return { ok: false, error: "\u4ED3\u5E93\u4E0E token \u4E0D\u80FD\u4E3A\u7A7A" };
         await storageSet(GITHUB_CONFIG_KEY, cfg);
-        logger7.info("github", "\u540C\u6B65\u914D\u7F6E\u5DF2\u4FDD\u5B58", { repo: cfg.repo, branch: cfg.branch });
+        logger5.info("github", "\u540C\u6B65\u914D\u7F6E\u5DF2\u4FDD\u5B58", { repo: cfg.repo, branch: cfg.branch });
         return { ok: true };
       }
       case "IMG_GITHUB_PUSH": {
@@ -3335,10 +2797,10 @@
           if (!cfg) return { ok: false, error: "\u672A\u914D\u7F6E GitHub\uFF0C\u8BF7\u5148\u4FDD\u5B58\u4ED3\u5E93\u4E0E token" };
           const remote = await pullDb(cfg);
           const res = await pushDb(cfg, producerDb, remote.sha);
-          logger7.info("github", "\u751F\u4EA7\u8005\u5E93\u5DF2\u63A8\u9001", { repo: cfg.repo, total: Object.keys(producerDb.entries).length });
+          logger5.info("github", "\u751F\u4EA7\u8005\u5E93\u5DF2\u63A8\u9001", { repo: cfg.repo, total: Object.keys(producerDb.entries).length });
           return { ok: true, github: { message: `${res.message}\uFF08\u5E93 ${Object.keys(producerDb.entries).length} \u7528\u6237\uFF09` } };
         } catch (err) {
-          logger7.error("github", "\u63A8\u9001\u5931\u8D25", String(err));
+          logger5.error("github", "\u63A8\u9001\u5931\u8D25", String(err));
           return { ok: false, error: String(err) };
         }
       }
@@ -3351,11 +2813,11 @@
           if (remote.db) {
             producerDb = mergeDb(producerDb, remote.db);
             await storageSet(PRODUCER_DB_KEY, producerDb);
-            logger7.info("github", "\u751F\u4EA7\u8005\u5E93\u5DF2\u62C9\u53D6\u5408\u5E76", { total: Object.keys(producerDb.entries).length });
+            logger5.info("github", "\u751F\u4EA7\u8005\u5E93\u5DF2\u62C9\u53D6\u5408\u5E76", { total: Object.keys(producerDb.entries).length });
           }
           return { ok: true, github: { message: `${remote.message}\uFF08\u5E93 ${Object.keys(producerDb.entries).length} \u7528\u6237\uFF09` } };
         } catch (err) {
-          logger7.error("github", "\u62C9\u53D6\u5931\u8D25", String(err));
+          logger5.error("github", "\u62C9\u53D6\u5931\u8D25", String(err));
           return { ok: false, error: String(err) };
         }
       }
@@ -3363,10 +2825,10 @@
         try {
           const { images, pages, title } = await buondua.fetchAlbumAllPages(message.url);
           await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "album", data: images, done: true });
-          logger7.info("buondua", "\u5168\u5B50\u9875\u6293\u53D6\u5B8C\u6210", { url: message.url, pages: pages.length, count: images.length, title });
+          logger5.info("buondua", "\u5168\u5B50\u9875\u6293\u53D6\u5B8C\u6210", { url: message.url, pages: pages.length, count: images.length, title });
           return { ok: true, name: title || void 0 };
         } catch (err) {
-          logger7.warn("buondua", "\u540E\u53F0\u6293\u53D6\u5931\u8D25\uFF0C\u5C1D\u8BD5\u9875\u9762\u5185 fetch \u964D\u7EA7", String(err));
+          logger5.warn("buondua", "\u540E\u53F0\u6293\u53D6\u5931\u8D25\uFF0C\u5C1D\u8BD5\u9875\u9762\u5185 fetch \u964D\u7EA7", String(err));
           try {
             const contentFetch = async (u) => {
               const res = await sendToTabAndGet(
@@ -3378,10 +2840,10 @@
             };
             const { images, pages, title } = await buondua.fetchAlbumAllPages(message.url, contentFetch);
             await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "album", data: images, done: true });
-            logger7.info("buondua", "\u5168\u5B50\u9875\u6293\u53D6\u5B8C\u6210\uFF08\u9875\u9762\u5185 fetch \u964D\u7EA7\uFF09", { url: message.url, pages: pages.length, count: images.length, title });
+            logger5.info("buondua", "\u5168\u5B50\u9875\u6293\u53D6\u5B8C\u6210\uFF08\u9875\u9762\u5185 fetch \u964D\u7EA7\uFF09", { url: message.url, pages: pages.length, count: images.length, title });
             return { ok: true, name: title || void 0 };
           } catch (err2) {
-            logger7.error("buondua", "\u5168\u5B50\u9875\u6293\u53D6\u5931\u8D25\uFF08\u542B\u964D\u7EA7\uFF09", String(err2));
+            logger5.error("buondua", "\u5168\u5B50\u9875\u6293\u53D6\u5931\u8D25\uFF08\u542B\u964D\u7EA7\uFF09", String(err2));
             await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "album", data: [], done: true, error: String(err2) });
             return { ok: false, error: String(err2) };
           }
@@ -3391,10 +2853,39 @@
         try {
           const items = await buondua.scanLinks(message.url, message.kind);
           await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "scan", data: items, done: true });
-          logger7.info("buondua", "\u94FE\u63A5\u626B\u63CF\u5B8C\u6210", { kind: message.kind, count: items.length });
+          logger5.info("buondua", "\u94FE\u63A5\u626B\u63CF\u5B8C\u6210", { kind: message.kind, count: items.length });
         } catch (err) {
-          logger7.error("buondua", "\u94FE\u63A5\u626B\u63CF\u5931\u8D25", String(err));
+          logger5.error("buondua", "\u94FE\u63A5\u626B\u63CF\u5931\u8D25", String(err));
           await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "scan", data: [], done: true, error: String(err) });
+        }
+        return { ok: true };
+      }
+      case "BD_SEARCH": {
+        try {
+          await buondua.searchSites(
+            message.query,
+            message.sites,
+            message.pagesPerSite,
+            async (siteId, items, error) => {
+              await sendToTab(sessionOf(message.srcTabId), {
+                type: "BD_RESULT",
+                kind: "search-site",
+                data: { siteId, items },
+                done: false,
+                error
+              });
+            }
+          );
+          await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "search", data: [], done: true });
+        } catch (err) {
+          logger5.error("buondua", "\u805A\u5408\u641C\u7D22\u5931\u8D25", String(err));
+          await sendToTab(sessionOf(message.srcTabId), {
+            type: "BD_RESULT",
+            kind: "search-site",
+            data: [],
+            done: false,
+            error: String(err)
+          });
         }
         return { ok: true };
       }
@@ -3414,9 +2905,9 @@
               });
             }
           );
-          logger7.info("buondua", "\u6279\u91CF\u6293\u53D6\u5B8C\u6210", { total: targets.length });
+          logger5.info("buondua", "\u6279\u91CF\u6293\u53D6\u5B8C\u6210", { total: targets.length });
         } catch (err) {
-          logger7.error("buondua", "\u6279\u91CF\u6293\u53D6\u5931\u8D25", String(err));
+          logger5.error("buondua", "\u6279\u91CF\u6293\u53D6\u5931\u8D25", String(err));
           await sendToTab(sessionOf(message.srcTabId), {
             type: "BD_RESULT",
             kind: "batch-item",
@@ -3427,509 +2918,9 @@
         }
         return { ok: true };
       }
-      case "FH_FETCH_USER": {
-        try {
-          const images = await freeimage.fetchUserPages(message.url, message.pageFrom, message.pageTo);
-          await pushFhResult(message.srcTabId, "user", images, true);
-        } catch (err) {
-          logger7.error("freeimage", "\u7528\u6237\u4E3B\u9875\u6293\u53D6\u5931\u8D25", String(err));
-          await pushFhResult(message.srcTabId, "user", [], true, String(err));
-        }
-        return { ok: true };
-      }
-      case "FH_FETCH_ALBUM": {
-        try {
-          const { images, name } = await freeimage.fetchAlbumImages(message.albumUrl);
-          await pushFhResult(message.srcTabId, "album", images, true);
-          return { ok: true, name: name || void 0 };
-        } catch (err) {
-          logger7.error("freeimage", "\u76F8\u518C\u6293\u53D6\u5931\u8D25", String(err));
-          await pushFhResult(message.srcTabId, "album", [], true, String(err));
-          return { ok: false, error: String(err) };
-        }
-      }
-      case "FH_FETCH_ALBUMS": {
-        try {
-          const albums = await freeimage.fetchAlbumsPage(message.username, message.sort, message.page);
-          await pushFhResult(message.srcTabId, "albums", albums, true);
-        } catch (err) {
-          logger7.error("freeimage", "\u76F8\u518C\u5217\u8868\u6293\u53D6\u5931\u8D25", String(err));
-          await pushFhResult(message.srcTabId, "albums", [], true, String(err));
-        }
-        return { ok: true };
-      }
-      case "FH_FETCH_EXPLORE": {
-        try {
-          const images = await freeimage.fetchExplorePages(message.pageFrom, message.pageTo);
-          await pushFhResult(message.srcTabId, "explore", images, true);
-        } catch (err) {
-          logger7.error("freeimage", "\u63A2\u7D22\u9875\u6293\u53D6\u5931\u8D25", String(err));
-          await pushFhResult(message.srcTabId, "explore", [], true, String(err));
-        }
-        return { ok: true };
-      }
-      case "FH_EXTRACT_OWNER": {
-        try {
-          const results = await freeimage.extractOwners(message.imageViewerUrls, message.samplePerPage, message.intervalMs);
-          const owners = results.map((r) => r.owner);
-          await pushFhResult(message.srcTabId, "owners", owners, true);
-        } catch (err) {
-          logger7.error("freeimage", "\u5C5E\u4E3B\u63D0\u53D6\u5931\u8D25", String(err));
-          await pushFhResult(message.srcTabId, "owners", [], true, String(err));
-        }
-        return { ok: true };
-      }
-      case "FH_SCAN_PRODUCERS": {
-        try {
-          await fhProducerDbReady;
-          const entries = [];
-          for (const username of message.usernames) {
-            try {
-              const info = await freeimage.collectAlbumsForUser(username);
-              entries.push(info);
-            } catch (err) {
-              logger7.warn("freeimage", "\u76F8\u518C\u540D\u91C7\u96C6\u5931\u8D25\uFF08\u8DF3\u8FC7\uFF09", { username, error: String(err) });
-            }
-            await new Promise((r) => setTimeout(r, message.intervalMs));
-          }
-          await pushFhResult(message.srcTabId, "scan", entries, true);
-        } catch (err) {
-          logger7.error("freeimage", "\u76F8\u518C\u540D\u91C7\u96C6\u5931\u8D25", String(err));
-          await pushFhResult(message.srcTabId, "scan", [], true, String(err));
-        }
-        return { ok: true };
-      }
-      case "FH_PRODUCER_GET": {
-        await fhProducerDbReady;
-        return { ok: true, fh: fhProducerDb };
-      }
-      case "FH_PRODUCER_SAVE": {
-        await fhProducerDbReady;
-        const existing = fhProducerDb.entries[message.username] ?? {
-          username: message.username,
-          status: null,
-          seenAt: Date.now()
-        };
-        fhProducerDb.entries[message.username] = {
-          ...existing,
-          status: message.status,
-          reason: message.reason || void 0,
-          notedAt: Date.now()
-        };
-        fhProducerDb.updatedAt = Date.now();
-        await storageSet(FH_PRODUCER_DB_KEY, fhProducerDb);
-        logger7.info("freeimage", "\u6807\u6CE8\u5DF2\u4FDD\u5B58", { username: message.username, status: message.status });
-        return { ok: true };
-      }
-      case "FH_PRODUCER_CLEAR": {
-        await fhProducerDbReady;
-        delete fhProducerDb.entries[message.username];
-        fhProducerDb.updatedAt = Date.now();
-        await storageSet(FH_PRODUCER_DB_KEY, fhProducerDb);
-        logger7.info("freeimage", "\u6807\u6CE8\u5DF2\u6E05\u9664", { username: message.username });
-        return { ok: true };
-      }
-      case "FH_PRODUCER_EXPORT": {
-        await fhProducerDbReady;
-        return { ok: true, json: JSON.stringify(fhProducerDb, null, 1) };
-      }
-      case "FH_PRODUCER_IMPORT": {
-        await fhProducerDbReady;
-        const imported = loadFhProducerDb(message.db);
-        const before = Object.keys(fhProducerDb.entries).length;
-        for (const [username, e] of Object.entries(imported.entries)) {
-          fhProducerDb.entries[username] = e;
-        }
-        fhProducerDb.updatedAt = Date.now();
-        await storageSet(FH_PRODUCER_DB_KEY, fhProducerDb);
-        const after = Object.keys(fhProducerDb.entries).length;
-        logger7.info("freeimage", "\u6807\u6CE8\u5E93\u5DF2\u5BFC\u5165\u5408\u5E76", { before, after });
-        return { ok: true, fhImported: { before, after } };
-      }
-      case "FH_EXPLORE_SEARCH_START": {
-        freeimage.startSearch(message.mode, message.list);
-        logger7.info("freeimage", "\u63A2\u7D22\u68C0\u7D22\u5F00\u59CB\u65B0\u4F1A\u8BDD", { mode: message.mode, list: message.list, rounds: message.rounds, chineseOnly: message.chineseOnly });
-        await runSearchBatch(message.srcTabId, message.mode, message.list, message.rounds, message.intervalMs, message.chineseOnly);
-        return { ok: true };
-      }
-      case "FH_EXPLORE_SEARCH_NEXT": {
-        const info = freeimage.getSessionInfo();
-        if (!info) {
-          return { ok: false, error: "\u65E0\u6D3B\u52A8\u68C0\u7D22\u4F1A\u8BDD\uFF08\u8BF7\u5148\u5F00\u59CB\u68C0\u7D22\uFF09" };
-        }
-        logger7.info("freeimage", "\u63A2\u7D22\u68C0\u7D22\u4E0B\u4E00\u6279", { mode: info.mode, list: info.list, rounds: message.rounds });
-        await runSearchBatch(message.srcTabId, info.mode, info.list, message.rounds, message.intervalMs, message.chineseOnly);
-        return { ok: true };
-      }
-      case "FH_EXPLORE_MINE": {
-        await fhAlbumIndexReady;
-        const MINE_BATCH = 10;
-        const SUPPLY_PAGES = 2;
-        let round = 0;
-        let supplyPage = 1;
-        let done = false;
-        for (const seedUser of message.seedUsers ?? []) {
-          const u = seedUser.trim().toLowerCase().replace(/^https?:\/\/freeimage\.host\//i, "").replace(/\/+$/, "");
-          if (!u) continue;
-          try {
-            const info = await freeimage.collectAlbumsForUser(u);
-            let cn = 0;
-            for (const a of info.albums) {
-              const aid = a.url.match(/\.([a-zA-Z0-9]+)$/)?.[1] ?? a.url;
-              if (!fhAlbumIndex.entries[aid]) {
-                fhAlbumIndex.entries[aid] = {
-                  id: aid,
-                  name: a.name,
-                  url: a.url,
-                  username: u,
-                  source: "mine-seed",
-                  collectedAt: Date.now(),
-                  mined: true
-                  // 已深挖（来源即属主本人，无需再挖）
-                };
-                if (isChineseAlbum(a.name)) cn++;
-              }
-            }
-            logger7.info("freeimage", "\u624B\u52A8\u79CD\u5B50\u7528\u6237\u5165\u5E93", { user: u, albums: info.albumCount, chinese: cn });
-          } catch (err) {
-            logger7.warn("freeimage", "\u624B\u52A8\u79CD\u5B50\u7528\u6237\u5931\u8D25", { user: u, error: String(err) });
-          }
-        }
-        while (round < message.rounds && !done) {
-          round++;
-          let supplyCn = 0;
-          for (let i = 0; i < SUPPLY_PAGES; i++) {
-            try {
-              const html = await freeimage.fetchHtml(`https://freeimage.host/explore/recent/?list=albums&sort=date_desc&page=${supplyPage}`);
-              for (const a of parseExploreAlbums(html)) {
-                const aid = a.url.match(/\.([a-zA-Z0-9]+)$/)?.[1] ?? a.id;
-                if (!isChineseAlbum(a.name)) continue;
-                if (!fhAlbumIndex.entries[aid]) {
-                  fhAlbumIndex.entries[aid] = {
-                    id: aid,
-                    name: a.name,
-                    url: a.url,
-                    source: "mine-supply",
-                    collectedAt: Date.now()
-                  };
-                  supplyCn++;
-                }
-              }
-              supplyPage++;
-            } catch (err) {
-              logger7.warn("freeimage", "\u6DF1\u6316\u63A2\u7D22\u8865\u7ED9\u5931\u8D25\uFF08\u8DF3\u8FC7\uFF09", { page: supplyPage, error: String(err) });
-            }
-          }
-          const candidates = Object.values(fhAlbumIndex.entries).filter((e) => !e.mined && isChineseAlbum(e.name)).slice(0, MINE_BATCH);
-          if (candidates.length === 0 && supplyCn === 0) {
-            done = true;
-            break;
-          }
-          const newEntries = [];
-          for (const c of candidates) {
-            try {
-              const html = await freeimage.fetchHtml(c.url);
-              const owner = extractOwner(html);
-              if (owner) {
-                const info = await freeimage.collectAlbumsForUser(owner.username);
-                let ownerCn = 0;
-                for (const a of info.albums) {
-                  const aid = a.url.match(/\.([a-zA-Z0-9]+)$/)?.[1] ?? a.url;
-                  const existing = fhAlbumIndex.entries[aid];
-                  if (!existing) {
-                    fhAlbumIndex.entries[aid] = {
-                      id: aid,
-                      name: a.name,
-                      url: a.url,
-                      username: owner.username,
-                      source: "mine",
-                      collectedAt: Date.now()
-                    };
-                    if (isChineseAlbum(a.name)) ownerCn++;
-                  } else if (!existing.username) {
-                    fhAlbumIndex.entries[aid] = { ...existing, username: owner.username };
-                  }
-                }
-                logger7.info("freeimage", "\u4E2D\u6587\u6DF1\u6316\uFF1A\u5C5E\u4E3B\u76F8\u518C", { seed: c.name, owner: owner.username, albums: info.albumCount, chinese: ownerCn });
-              }
-            } catch (err) {
-              logger7.warn("freeimage", "\u6DF1\u6316\u79CD\u5B50\u5931\u8D25\uFF08\u8DF3\u8FC7\uFF09", { seed: c.name, error: String(err) });
-            }
-            fhAlbumIndex.entries[c.id] = { ...fhAlbumIndex.entries[c.id], mined: true };
-          }
-          fhAlbumIndex.updatedAt = Date.now();
-          await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex);
-          const total = Object.keys(fhAlbumIndex.entries).length;
-          await pushFhResult(
-            message.srcTabId,
-            "explore-mine",
-            {
-              round,
-              pageFrom: 0,
-              pageTo: 0,
-              added: newEntries.length,
-              total,
-              newEntries,
-              mode: "recent",
-              type: "albums"
-            },
-            round >= message.rounds
-          );
-          await new Promise((r) => setTimeout(r, message.intervalMs));
-        }
-        await syncCnAlbumIndex();
-        if (done) {
-          await pushFhResult(
-            message.srcTabId,
-            "explore-mine",
-            {
-              round,
-              pageFrom: 0,
-              pageTo: 0,
-              added: 0,
-              total: Object.keys(fhAlbumIndex.entries).length,
-              newEntries: [],
-              mode: "recent",
-              type: "albums"
-            },
-            true
-          );
-        }
-        return { ok: true };
-      }
-      case "FH_EXPLORE_STOP": {
-        freeimage.cancelExploreSearch();
-        logger7.info("freeimage", "\u63A2\u7D22\u68C0\u7D22\u5DF2\u8BF7\u6C42\u505C\u6B62");
-        return { ok: true };
-      }
-      case "FH_ALBUM_INDEX_GET": {
-        await fhAlbumIndexReady;
-        return { ok: true, fhIndex: fhAlbumIndex };
-      }
-      case "FH_ALBUM_INDEX_EXPORT": {
-        await fhAlbumIndexReady;
-        return { ok: true, json: JSON.stringify(fhAlbumIndex, null, 1) };
-      }
-      case "FH_ALBUM_INDEX_CLEAR": {
-        await fhAlbumIndexReady;
-        fhAlbumIndex = emptyFhAlbumIndexDb();
-        await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex);
-        logger7.info("freeimage", "\u76F8\u518C\u7D22\u5F15\u5E93\u5DF2\u6E05\u7A7A");
-        return { ok: true, fhIndexImported: { before: 0, after: 0 } };
-      }
-      case "FH_CN_INDEX_GET": {
-        await fhCnIndexReady;
-        return { ok: true, fhIndex: fhCnAlbumIndex };
-      }
-      case "FH_CN_INDEX_EXPORT": {
-        await fhCnIndexReady;
-        return { ok: true, json: JSON.stringify(fhCnAlbumIndex, null, 1) };
-      }
-      case "FH_CN_INDEX_CLEAR": {
-        await fhCnIndexReady;
-        fhCnAlbumIndex = emptyFhAlbumIndexDb();
-        await storageSet(FH_CN_INDEX_KEY, fhCnAlbumIndex);
-        logger7.info("freeimage", "\u4E2D\u6587\u76F8\u518C\u8BB0\u5F55\u8868\u5DF2\u6E05\u7A7A");
-        return { ok: true, fhIndexImported: { before: 0, after: 0 } };
-      }
-      case "FH_CN_INDEX_IMPORT": {
-        await fhCnIndexReady;
-        const imported = loadFhAlbumIndexDb(message.db);
-        const before = Object.keys(fhCnAlbumIndex.entries).length;
-        for (const [id, e] of Object.entries(imported.entries)) {
-          fhCnAlbumIndex.entries[id] = e;
-        }
-        fhCnAlbumIndex.updatedAt = Date.now();
-        await storageSet(FH_CN_INDEX_KEY, fhCnAlbumIndex);
-        const after = Object.keys(fhCnAlbumIndex.entries).length;
-        logger7.info("freeimage", "\u4E2D\u6587\u76F8\u518C\u8BB0\u5F55\u8868\u5DF2\u5BFC\u5165\u5408\u5E76", { before, after });
-        return { ok: true, fhIndexImported: { before, after } };
-      }
-      case "FH_ALBUM_INDEX_IMPORT": {
-        await fhAlbumIndexReady;
-        const imported = loadFhAlbumIndexDb(message.db);
-        const before = Object.keys(fhAlbumIndex.entries).length;
-        for (const [id, e] of Object.entries(imported.entries)) {
-          fhAlbumIndex.entries[id] = e;
-        }
-        fhAlbumIndex.updatedAt = Date.now();
-        await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex);
-        const after = Object.keys(fhAlbumIndex.entries).length;
-        logger7.info("freeimage", "\u76F8\u518C\u7D22\u5F15\u5E93\u5DF2\u5BFC\u5165\u5408\u5E76", { before, after });
-        return { ok: true, fhIndexImported: { before, after } };
-      }
-      case "FH_FETCH_FOLLOWING": {
-        try {
-          const users = await fetchFhFollowingUsers(message.username, message.side);
-          await pushFhResult(message.srcTabId, "following", users, true);
-        } catch (err) {
-          logger7.error("freeimage", "\u5173\u6CE8\u5899\u6293\u53D6\u5931\u8D25", String(err));
-          await pushFhResult(message.srcTabId, "following", [], true, String(err));
-        }
-        return { ok: true };
-      }
-      case "FH_DIFFUSE_START": {
-        fhDiffuse.start(message.startUser);
-        await saveFhDiffuseState();
-        return { ok: true, snapshot: fhDiffuse.snapshot() };
-      }
-      case "FH_DIFFUSE_BATCH": {
-        await ensureFhDiffuseRestored();
-        await fhDiffuseDbReady;
-        if (fhDiffuse.is429Throttled) {
-          logger7.warn("freeimage", "\u8FDE\u7EED 429\uFF0C\u5DF2\u963B\u6B62\u7EE7\u7EED\u6269\u6563\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5");
-          return { ok: false, error: "\u8FDE\u7EED 429 \u9650\u6D41\uFF0C\u8BF7\u7B49\u5F85 30 \u79D2\u540E\u518D\u7EE7\u7EED" };
-        }
-        const result = await fhDiffuse.processBatch(message.batchSize, message.concurrency, message.intervalMs);
-        await saveFhDiffuseState();
-        const snapshot = fhDiffuse.snapshot();
-        if (Object.keys(result.inDegreeDelta).length > 0) {
-          fhDiffuseDb = mergeInDegree(fhDiffuseDb, result.inDegreeDelta, snapshot.startUser);
-          await storageSet(FH_DIFFUSE_DB_KEY, fhDiffuseDb);
-        }
-        return { ok: true, result, snapshot };
-      }
-      case "FH_DIFFUSE_PROGRESS": {
-        await ensureFhDiffuseRestored();
-        return { ok: true, snapshot: fhDiffuse.snapshot() };
-      }
-      case "FH_DIFFUSE_DB_GET": {
-        await fhDiffuseDbReady;
-        const sum = dbSummary(fhDiffuseDb);
-        const dist = inDegreeDist(fhDiffuseDb);
-        const w1 = message.w1 ?? 0.6;
-        const topN = message.topN ?? 100;
-        return {
-          ok: true,
-          db: fhDiffuseDb,
-          total: sum.total,
-          confirmed: sum.confirmed,
-          producers: sum.producers,
-          maxInDegree: sum.maxInDegree,
-          dist,
-          rankScore: scoreTop(fhDiffuseDb, topN, w1, 1 - w1),
-          rankDegree: degreeTop(fhDiffuseDb, topN),
-          rankAlbum: albumTop(fhDiffuseDb, topN)
-        };
-      }
-      case "FH_DIFFUSE_DB_SAVE": {
-        await fhDiffuseDbReady;
-        await storageSet(FH_DIFFUSE_DB_KEY, fhDiffuseDb);
-        const sum = dbSummary(fhDiffuseDb);
-        logger7.info("freeimage", "freeimage \u751F\u4EA7\u8005\u5E93\u5DF2\u4FDD\u5B58", { total: sum.total, source: message.source });
-        return { ok: true, total: sum.total, confirmed: sum.confirmed, producers: sum.producers, maxInDegree: sum.maxInDegree };
-      }
-      case "FH_DIFFUSE_DB_CLEAR": {
-        await fhDiffuseDbReady;
-        fhDiffuseDb = emptyDb();
-        await storageSet(FH_DIFFUSE_DB_KEY, fhDiffuseDb);
-        logger7.info("freeimage", "freeimage \u751F\u4EA7\u8005\u5E93\u5DF2\u6E05\u7A7A");
-        return { ok: true, total: 0 };
-      }
-      case "FH_DIFFUSE_DB_EXPORT": {
-        await fhDiffuseDbReady;
-        return { ok: true, json: JSON.stringify(fhDiffuseDb, null, 1) };
-      }
-      case "FH_DIFFUSE_DB_IMPORT": {
-        await fhDiffuseDbReady;
-        const imported = loadDb(message.db);
-        const before = Object.keys(fhDiffuseDb.entries).length;
-        fhDiffuseDb = mergeDb(fhDiffuseDb, imported);
-        await storageSet(FH_DIFFUSE_DB_KEY, fhDiffuseDb);
-        const after = Object.keys(fhDiffuseDb.entries).length;
-        const sum = dbSummary(fhDiffuseDb);
-        logger7.info("freeimage", "freeimage \u751F\u4EA7\u8005\u5E93\u5DF2\u5BFC\u5165\u5408\u5E76", { before, after });
-        return { ok: true, total: after, confirmed: sum.confirmed, producers: sum.producers, maxInDegree: sum.maxInDegree, github: { message: `\u5BFC\u5165\u5408\u5E76\uFF1A${before} \u2192 ${after}` } };
-      }
-      case "FH_DIFFUSE_DB_RESET_CONFIRM": {
-        await fhDiffuseDbReady;
-        fhDiffuseDb = resetConfirmations(fhDiffuseDb);
-        await storageSet(FH_DIFFUSE_DB_KEY, fhDiffuseDb);
-        logger7.info("freeimage", "\u786E\u8BA4\u72B6\u6001\u5DF2\u91CD\u7F6E\uFF08\u4FDD\u7559\u5165\u5EA6\uFF09\uFF0C\u9700\u91CD\u65B0\u786E\u8BA4\u8BC4\u5206");
-        return { ok: true, total: Object.keys(fhDiffuseDb.entries).length };
-      }
-      case "FH_DIFFUSE_SCORE_BATCH": {
-        await fhDiffuseDbReady;
-        fhScoreBatchCancelled = false;
-        const candidates = unconfirmedCandidates(fhDiffuseDb, message.batchSize, message.order ?? "inDegree", message.w1, message.w2);
-        if (candidates.length === 0) {
-          return { ok: true, score: { processed: 0, withAlbums: 0, zeroAlbums: 0, failed: 0, done: true } };
-        }
-        let withAlbums = 0;
-        let zeroAlbums = 0;
-        let failed = 0;
-        let cursor = 0;
-        const updated = {};
-        const sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
-        const worker = async () => {
-          while (true) {
-            const idx = cursor++;
-            if (idx >= candidates.length) return;
-            const c = candidates[idx];
-            await sleep2(message.intervalMs);
-            try {
-              const { albums: userAlbums, truncated } = await fhFetchUserAlbums(c.username, 10);
-              updated[c.username] = {
-                ...c,
-                albumCount: userAlbums.length,
-                albumsChecked: true,
-                albumsTruncated: truncated || void 0,
-                albums: userAlbums.map((a) => ({ name: a.name, url: a.url }))
-              };
-              if (userAlbums.length > 0) withAlbums++;
-              else zeroAlbums++;
-              const session = sessions.get(message.srcTabId);
-              if (session) {
-                await sendToTab(session.grabTabId, {
-                  type: "FH_DIFFUSE_SCORE_PROGRESS_FWD",
-                  done: withAlbums + zeroAlbums + failed,
-                  total: candidates.length,
-                  username: c.username,
-                  albumCount: userAlbums.length,
-                  truncated: truncated || void 0,
-                  failed,
-                  cancelled: fhScoreBatchCancelled || void 0
-                });
-              }
-            } catch (err) {
-              failed++;
-              logger7.warn("freeimage", "albums \u786E\u8BA4\u5931\u8D25\uFF08\u8DF3\u8FC7\uFF09", { user: c.username, error: String(err) });
-            }
-            if (fhScoreBatchCancelled) return;
-          }
-        };
-        await Promise.all(Array.from({ length: Math.min(message.concurrency, candidates.length) }, () => worker()));
-        const entries = { ...fhDiffuseDb.entries };
-        for (const [u, e] of Object.entries(updated)) entries[u] = e;
-        fhDiffuseDb = { ...fhDiffuseDb, updatedAt: Date.now(), entries };
-        await storageSet(FH_DIFFUSE_DB_KEY, fhDiffuseDb);
-        const unconfirmed = unconfirmedCount(fhDiffuseDb);
-        logger7.info("freeimage", "freeimage \u786E\u8BA4\u6279\u6B21\u5B8C\u6210", { processed: Object.keys(updated).length, withAlbums, zeroAlbums, failed, unconfirmed, cancelled: fhScoreBatchCancelled });
-        return {
-          ok: true,
-          score: { processed: Object.keys(updated).length, withAlbums, zeroAlbums, failed, done: !fhScoreBatchCancelled && unconfirmed === 0 },
-          unconfirmed,
-          cancelled: fhScoreBatchCancelled || void 0
-        };
-      }
-      case "FH_DIFFUSE_SCORE_STOP": {
-        fhScoreBatchCancelled = true;
-        logger7.info("freeimage", "\u786E\u8BA4\u5DF2\u8BF7\u6C42\u505C\u6B62");
-        return { ok: true };
-      }
-      case "FH_DIFFUSE_SEARCH_START": {
-        await fhDiffuseDbReady;
-        const scored = confirmedScored(fhDiffuseDb, message.w1, message.w2);
-        const from = Math.min(scored.length, Math.floor(scored.length * message.fromPct / 100));
-        const to = Math.min(scored.length, Math.floor(scored.length * message.toPct / 100));
-        const keywords = message.keywords.map((k) => k.toLowerCase()).filter(Boolean);
-        const matches = scored.slice(from, to).map((c) => ({ username: c.username, inDegree: c.inDegree, albums: matchAlbums(c, keywords) })).filter((m) => m.albums.length > 0);
-        logger7.info("freeimage", "freeimage \u68C0\u7D22\u5B8C\u6210\uFF08\u5168\u91CF\uFF09", { keywords, range: `0~${message.toPct}%`, candidates: to - from, hits: matches.length });
-        return { ok: true, search: { total: matches.length, processed: matches.length, matches, done: true }, unconfirmed: unconfirmedCount(fhDiffuseDb) };
-      }
     }
     return { ok: false, error: "\u672A\u77E5\u6D88\u606F\u7C7B\u578B" };
   }
-  logger7.info("runtime", "background \u521D\u59CB\u5316\u5B8C\u6210");
+  logger5.info("runtime", "background \u521D\u59CB\u5316\u5B8C\u6210");
 })();
 //# sourceMappingURL=background.js.map

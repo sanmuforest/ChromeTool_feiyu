@@ -4460,6 +4460,158 @@
     return name.replace(/[\\/:*?"<>|\n\r]/g, "_").trim() || "album";
   }
 
+  // src/lib/gallery-sites.ts
+  var GALLERY_SITES = [
+    {
+      id: "buondua",
+      hosts: ["buondua.com"],
+      containerOpen: /<div[^>]*class="[^"]*article-fulltext[^"]*"[^>]*>/,
+      pagePattern: /\(\s*Page\s+\d+\s*\/\s*(\d+)\s*\)/i,
+      pageUrl: (base, page) => `${base}?page=${page}`,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          return u.href;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.replace(/\s*[-–—]\s*\(\s*Page\s+\d+\s*\/\s*\d+\s*\)\s*$/i, "").trim(),
+      // buondua 站点当前不可达且搜索入口未验证，暂不支持聚合搜索
+      searchUrl: () => null
+    },
+    {
+      id: "rrwsh",
+      hosts: ["rrwsh.uuss.uk", "4khd.com"],
+      containerOpen: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/,
+      pagePattern: /Page\s+\d+\s+of\s+(\d+)/i,
+      pageUrl: (base, page) => `${base}/${page}`,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          const path = u.pathname.replace(/\/\d+$/, "");
+          return `${u.origin}${path}`;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.replace(/\s*[-–—]\s*Page\s+\d+\s+of\s+\d+\s*[-–—]\s*[^-]*$/i, "").replace(/\s*[-–—]\s*4KHD\s*$/i, "").trim(),
+      // rrwsh 为 4khd 镜像：4khd.com 相册页被反爬网关拦截（302 → y5gx.uuss.uk/4khd.php，实测 2026-08-13），
+      // 搜索结果打不开，暂不支持聚合搜索
+      searchUrl: () => null
+    },
+    {
+      id: "hitxhot",
+      hosts: ["hitxhot.org"],
+      containerOpen: /<div[^>]*class="[^"]*contentme[^"]*"[^>]*>/,
+      // 兼容英文 "| Page 2/3" 与中文 "| 第1/6页"（组2 = 总页数）
+      pagePattern: /\|\s*(?:Page\s+\d+\s*\/\s*(\d+)|第\s*\d+\s*\/\s*(\d+)\s*页)/i,
+      pageUrl: (base, page) => `${base}?page=${page}`,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          return u.href;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
+      // hitxhot 无搜索入口（?s= 返回首页，实测 2026-08-13），不支持聚合搜索
+      searchUrl: () => null
+    },
+    {
+      id: "kaizty",
+      hosts: ["kaizty.com"],
+      containerOpen: /<div[^>]*class="[^"]*contentme[^"]*"[^>]*>/,
+      // 与 hitxhot 同模板：标题含 "| Page X/Y"（组2 = 总页数）
+      pagePattern: /\|\s*(?:Page\s+\d+\s*\/\s*(\d+)|第\s*\d+\s*\/\s*(\d+)\s*页)/i,
+      pageUrl: (base, page) => `${base}?page=${page}`,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          return u.href;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.replace(/^Kaizty Photos:\s*/i, "").replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
+      // kaizty 无搜索入口（同 hitxhot 模板），不支持聚合搜索
+      searchUrl: () => null
+    },
+    {
+      id: "jrants",
+      hosts: ["jrants.com"],
+      containerOpen: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/,
+      // WP 多页文章：标题无 Page 标记（h1 不分页），总页数靠分页链接兜底（见 parseGalleryMaxPage 兜底3）
+      pagePattern: /(?!)0/,
+      pageUrl: (base, page) => page <= 1 ? base : `${base}/${page}`,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          const path = u.pathname.replace(/\/\d+$/, "");
+          return `${u.origin}${path}`;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.trim(),
+      // WP 标准搜索（?s= + paged）
+      searchUrl: (q, page) => `https://jrants.com/?s=${encodeURIComponent(q)}${page > 1 ? `&paged=${page}` : ""}`
+    },
+    {
+      id: "pixibb",
+      hosts: ["pixibb.com"],
+      containerOpen: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/,
+      // WP 多页文章（magezix 主题）：标题无 Page 标记，总页数靠分页链接兜底（post-page-numbers，尾斜杠 /N/）
+      pagePattern: /(?!)0/,
+      pageUrl: (base, page) => page <= 1 ? base : `${base.replace(/\/?$/, "/")}${page}/`,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          const path = u.pathname.replace(/\/\d+\/$/, "").replace(/\/\d+$/, "");
+          return `${u.origin}${path}`;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.trim(),
+      // WP 标准搜索（?s= + paged）；主内容子域 sexy
+      searchUrl: (q, page) => `https://sexy.pixibb.com/?s=${encodeURIComponent(q)}${page > 1 ? `&paged=${page}` : ""}`
+    }
+  ];
+  function matchGallerySite(url) {
+    try {
+      const host = new URL(url).hostname.replace(/^www\./, "");
+      for (const site of GALLERY_SITES) {
+        if (site.hosts.some((h) => host === h || host.endsWith(`.${h}`))) return site;
+      }
+    } catch {
+    }
+    return null;
+  }
+
+  // src/lib/jrants-parse.ts
+  function extractJrantsFolderName(title) {
+    return title.replace(/\s*[-–—]\s*青年美图\s*$/i, "").replace(/[\\/:*?"<>|\n\r]/g, "_").trim().slice(0, 120) || "jrants";
+  }
+
+  // src/lib/pixibb-parse.ts
+  function extractPixibbFolderName(title) {
+    return title.replace(/\s*[-–—]\s*PixiBB\s*$/i, "").replace(/[\\/:*?"<>|\n\r]/g, "_").trim().slice(0, 120) || "pixibb";
+  }
+
   // src/grabber/view-buondua.ts
   var logger5 = initLogger("grabber");
   var BATCH_SIZE = 10;
@@ -4474,6 +4626,9 @@
     };
   }
   function buildBuonduaFolderName(title, url) {
+    const site = matchGallerySite(url);
+    if (site?.id === "jrants") return extractJrantsFolderName(title);
+    if (site?.id === "pixibb") return extractPixibbFolderName(title);
     return extractBuonduaAlbumName(title, url);
   }
   function initBuonduaView(root, srcTabId2, sourceUrl) {
@@ -4481,17 +4636,18 @@
     <div class="adapters-view">
       <div class="adapter-head">
         <h3>\u591A\u9875\u56FE\u7AD9</h3>
-        <span class="adapter-hint">buondua / rrwsh / hitxhot\uFF1A\u5168\u5B50\u9875\u6293\u53D6 / \u63A8\u8350 / \u5176\u4ED6\u94FE\u63A5\u6279\u91CF\u6293\u53D6</span>
+        <span class="adapter-hint">buondua / rrwsh / hitxhot / jrants / pixibb / kaizty\uFF1A\u5168\u5B50\u9875\u6293\u53D6 / \u63A8\u8350 / \u5176\u4ED6\u94FE\u63A5\u6279\u91CF\u6293\u53D6</span>
       </div>
       <div class="adapter-tabs">
         <button data-sub="bd-album" class="adapter-tab active">\u6293\u53D6</button>
         <button data-sub="bd-recommended" class="adapter-tab">\u6279\u91CF\u6293\u53D6\u63A8\u8350\u94FE\u63A5</button>
         <button data-sub="bd-popular" class="adapter-tab">\u6279\u91CF\u6293\u53D6\u5176\u4ED6\u94FE\u63A5</button>
+        <button data-sub="bd-search" class="adapter-tab">\u805A\u5408\u641C\u7D22</button>
       </div>
 
       <div id="sub-bd-album" class="adapter-panel active">
         <div class="row">
-          <input id="bd-album-url" class="text-input" placeholder="\u76F8\u518C URL\uFF1Abuondua / rrwsh.uuss.uk / hitxhot.org">
+          <input id="bd-album-url" class="text-input" placeholder="\u76F8\u518C URL\uFF1Abuondua / rrwsh.uuss.uk / hitxhot.org / jrants.com / pixibb.com / kaizty.com">
           <button id="bd-album-fetch" class="btn primary">\u6293\u53D6\u5168\u90E8\u5B50\u9875</button>
         </div>
         <div id="bd-album-grab-view" class="grab-view-host"></div>
@@ -4528,6 +4684,35 @@
           <span class="bd-list-status status-text"></span>
         </div>
         <div class="bd-link-list"></div>
+        <div class="bd-batch-results"></div>
+      </div>
+
+      <div id="sub-bd-search" class="adapter-panel">
+        <div class="row bd-search-disabled">
+          \u26A0\uFE0F \u805A\u5408\u641C\u7D22\u6682\u4E0D\u53EF\u7528\uFF1Ajrants \u641C\u7D22\u89E6\u53D1\u53CD\u722C\u62E6\u622A\uFF0Cpixibb \u7ED3\u679C\u4E0D\u7A33\u5B9A\uFF08\u7AD9\u70B9\u53CD\u722C\u9650\u5236\uFF09\u3002\u5F85\u7AD9\u70B9\u7B56\u7565\u53D8\u5316\u6216\u9002\u914D\u4F18\u5316\u540E\u6062\u590D\u3002
+        </div>
+        <div class="row">
+          <input id="bd-search-q" class="text-input" placeholder="\u5173\u952E\u8BCD\uFF08\u805A\u5408\u641C\u7D22\u591A\u7AD9\u70B9\uFF09" disabled>
+          <select id="bd-search-pages" class="num-input" title="\u6BCF\u7AD9\u641C\u7D22\u9875\u6570" disabled>
+            <option value="1">1 \u9875/\u7AD9</option>
+            <option value="2" selected>2 \u9875/\u7AD9</option>
+            <option value="3">3 \u9875/\u7AD9</option>
+          </select>
+          <button id="bd-search-go" class="btn primary" disabled title="\u805A\u5408\u641C\u7D22\u6682\u4E0D\u53EF\u7528">\u805A\u5408\u641C\u7D22</button>
+        </div>
+        <div class="row">
+          <div id="bd-search-sites" class="bd-search-sites"></div>
+          <span id="bd-search-site-status" class="status-text"></span>
+        </div>
+        <div class="row">
+          <button class="btn bd-select-all" disabled>\u5168\u9009\u672C\u6279/\u53D6\u6D88</button>
+          <button class="btn bd-fetch-selected" disabled>\u6293\u53D6\u9009\u4E2D</button>
+          <button class="btn bd-prev-batch" disabled>\u4E0A\u4E00\u6279</button>
+          <button class="btn bd-next-batch" disabled>\u4E0B\u4E00\u6279</button>
+          <span class="bd-batch-info status-text"></span>
+          <span class="bd-list-status status-text"></span>
+        </div>
+        <div class="bd-link-list bd-search-list"></div>
         <div class="bd-batch-results"></div>
       </div>
     </div>
@@ -4768,11 +4953,244 @@
     const recList = setupBatchPanel("bd-recommended", "recommended");
     const popList = setupBatchPanel("bd-popular", "popular");
     linkLists.push(recList, popList);
-    if (sourceUrl && /(buondua\.com|rrwsh\.uuss\.uk|hitxhot\.org)\/.*/.test(sourceUrl)) {
+    function setupSearchPanel() {
+      const panel = root.querySelector("#sub-bd-search");
+      const queryInput = panel.querySelector("#bd-search-q");
+      const pagesInput = panel.querySelector("#bd-search-pages");
+      const searchBtn = panel.querySelector("#bd-search-go");
+      const siteBoxes = panel.querySelector("#bd-search-sites");
+      const siteStatus = panel.querySelector("#bd-search-site-status");
+      const listEl = panel.querySelector(".bd-link-list");
+      const resultsHost = panel.querySelector(".bd-batch-results");
+      const statusEl = panel.querySelector(".bd-list-status");
+      const btnSelectAll = panel.querySelector(".bd-select-all");
+      const btnFetch = panel.querySelector(".bd-fetch-selected");
+      const btnNext = panel.querySelector(".bd-next-batch");
+      const btnPrev = panel.querySelector(".bd-prev-batch");
+      const batchInfo = panel.querySelector(".bd-batch-info");
+      const searchable = GALLERY_SITES.filter((s) => s.searchUrl);
+      const defaultChecked = /* @__PURE__ */ new Set(["jrants", "pixibb"]);
+      siteBoxes.innerHTML = searchable.map(
+        (s) => `<label class="bd-site-check"><input type="checkbox" value="${s.id}" ${defaultChecked.has(s.id) ? "checked" : ""}> ${s.id}</label>`
+      ).join("");
+      const selectedSites = () => Array.from(siteBoxes.querySelectorAll('input[type="checkbox"]:checked')).map((c) => c.value);
+      let items = [];
+      let page = 0;
+      const selected = /* @__PURE__ */ new Set();
+      const pageCount = () => Math.ceil(items.length / BATCH_SIZE);
+      let pendingSites = 0;
+      function renderList() {
+        listEl.innerHTML = "";
+        if (items.length === 0) {
+          listEl.innerHTML = '<div class="empty-tip">\u6682\u65E0\u7ED3\u679C\u3002\u8BF7\u8F93\u5165\u5173\u952E\u8BCD\u540E\u70B9\u51FB\u300C\u805A\u5408\u641C\u7D22\u300D\u3002</div>';
+          btnNext.disabled = true;
+          btnPrev.disabled = true;
+          btnFetch.disabled = true;
+          btnSelectAll.disabled = true;
+          batchInfo.textContent = "";
+          return;
+        }
+        const start = page * BATCH_SIZE;
+        const slice = items.slice(start, start + BATCH_SIZE);
+        for (const [i, item] of slice.entries()) {
+          const globalIdx = start + i;
+          const card = document.createElement("div");
+          card.className = "bd-search-card" + (selected.has(globalIdx) ? " selected" : "");
+          card.dataset.idx = String(globalIdx);
+          const check = document.createElement("input");
+          check.type = "checkbox";
+          check.className = "bd-search-check";
+          check.checked = selected.has(globalIdx);
+          check.title = "\u52FE\u9009\u4EE5\u6279\u91CF\u6293\u53D6";
+          check.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            if (selected.has(globalIdx)) selected.delete(globalIdx);
+            else selected.add(globalIdx);
+            card.classList.toggle("selected", selected.has(globalIdx));
+          });
+          const cover = document.createElement("div");
+          cover.className = "bd-search-cover";
+          cover.title = "\u70B9\u51FB\u6253\u5F00\u76F8\u518C\u9875";
+          const img = document.createElement("img");
+          img.loading = "lazy";
+          img.src = item.coverUrl || "";
+          img.alt = item.title;
+          img.draggable = false;
+          img.addEventListener("error", () => {
+            img.style.display = "none";
+            cover.classList.add("no-cover");
+          });
+          cover.appendChild(img);
+          const info = document.createElement("div");
+          info.className = "bd-search-info";
+          const title = document.createElement("div");
+          title.className = "bd-search-title";
+          title.textContent = item.title;
+          title.title = item.title;
+          const meta = document.createElement("div");
+          meta.className = "bd-search-meta";
+          meta.textContent = item.imageCount !== void 0 ? `${item.imageCount} \u5F20` : "\u5F20\u6570\u672A\u77E5";
+          info.append(title, meta);
+          card.append(check, cover, info);
+          card.addEventListener("click", (ev) => {
+            const t = ev.target;
+            if (t.closest("input")) return;
+            window.open(item.url, "_blank", "noreferrer");
+          });
+          listEl.appendChild(card);
+        }
+        btnNext.disabled = page >= pageCount() - 1;
+        btnPrev.disabled = page <= 0;
+        btnFetch.disabled = false;
+        btnSelectAll.disabled = false;
+        batchInfo.textContent = `\u7B2C ${page + 1}/${pageCount()} \u6279\uFF08\u5171 ${items.length} \u4E2A\uFF0C\u672C\u6279 ${slice.length} \u4E2A\uFF09`;
+      }
+      function setBusy(busy) {
+        searchBtn.disabled = busy;
+        btnFetch.disabled = busy;
+        btnSelectAll.disabled = busy;
+        btnNext.disabled = busy || page >= pageCount() - 1;
+        btnPrev.disabled = busy || page <= 0;
+        searchBtn.textContent = busy ? "\u641C\u7D22\u4E2D\u2026" : "\u805A\u5408\u641C\u7D22";
+      }
+      btnSelectAll.addEventListener("click", () => {
+        const start = page * BATCH_SIZE;
+        for (let i = start; i < Math.min(start + BATCH_SIZE, items.length); i++) {
+          if (selected.has(i)) selected.delete(i);
+          else selected.add(i);
+        }
+        renderList();
+      });
+      btnNext.addEventListener("click", () => {
+        if (page < pageCount() - 1) {
+          page++;
+          renderList();
+        }
+      });
+      btnPrev.addEventListener("click", () => {
+        if (page > 0) {
+          page--;
+          renderList();
+        }
+      });
+      btnFetch.addEventListener("click", () => {
+        if (btnFetch.disabled) return;
+        const targets = [...selected].sort((a, b) => a - b).map((idx) => ({
+          url: items[idx].url,
+          folderName: buildBuonduaFolderName(items[idx].title, items[idx].url)
+        }));
+        if (targets.length === 0) {
+          setStatus(statusEl, "\u8BF7\u5148\u52FE\u9009\u8981\u6293\u53D6\u7684\u76F8\u518C", true);
+          return;
+        }
+        resultsHost.innerHTML = "";
+        batchViews.clear();
+        batchFolders.clear();
+        targets.forEach((target, idx) => {
+          batchFolders.set(idx, target.folderName);
+          batchAlbumNames.set(idx, extractBuonduaAlbumShortName(target.folderName));
+          const card = document.createElement("div");
+          card.className = "bd-batch-card";
+          const head = document.createElement("div");
+          head.className = "bd-batch-head";
+          const title = document.createElement("span");
+          title.className = "bd-batch-title";
+          title.textContent = target.folderName.replace(/^ID-buondua-/, "").replace(/-\d{8}_\d{6}$/, "");
+          const status = document.createElement("span");
+          status.className = "bd-batch-status";
+          status.textContent = "\u7B49\u5F85\u6293\u53D6\u2026";
+          head.append(title, status);
+          const host = document.createElement("div");
+          host.className = "grab-view-host";
+          card.append(head, host);
+          resultsHost.appendChild(card);
+          const grabView = createGrabView(host, {
+            srcTabId: srcTabId2,
+            getFolderName: () => batchFolders.get(idx) ?? `ID-buondua-\u76F8\u518C-${Date.now()}`,
+            getAlbumName: () => batchAlbumNames.get(idx) ?? "album",
+            showReparse: false,
+            showLoadMore: false
+          });
+          grabView.setBusyParsing(true);
+          grabView.setParseText("\u6293\u53D6\u4E2D\u2026");
+          batchViews.set(idx, grabView);
+        });
+        setStatus(statusEl, `\u5F00\u59CB\u6279\u91CF\u6293\u53D6 ${targets.length} \u4E2A\u76F8\u518C\uFF08\u5E76\u53D1 3\uFF09\u2026`);
+        setBusy(true);
+        void sendMessage({ type: "BD_FETCH_ALBUMS", srcTabId: srcTabId2, targets }).then((res) => {
+          if (!res.ok) {
+            setStatus(statusEl, `\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`, true);
+            setBusy(false);
+          }
+        });
+      });
+      searchBtn.addEventListener("click", async () => {
+        const query = queryInput.value.trim();
+        if (!query) {
+          setStatus(statusEl, "\u8BF7\u8F93\u5165\u641C\u7D22\u5173\u952E\u8BCD", true);
+          return;
+        }
+        const sites = selectedSites();
+        if (sites.length === 0) {
+          setStatus(statusEl, "\u8BF7\u81F3\u5C11\u52FE\u9009\u4E00\u4E2A\u641C\u7D22\u7AD9\u70B9", true);
+          return;
+        }
+        if (!await ensureHostPermission()) {
+          setStatus(statusEl, "\u9700\u8981\u6388\u6743\u8BBF\u95EE\u591A\u9875\u56FE\u7AD9\uFF08<all_urls>\uFF09\u540E\u624D\u80FD\u641C\u7D22", true);
+          return;
+        }
+        items = [];
+        page = 0;
+        selected.clear();
+        pendingSites = sites.length;
+        renderList();
+        siteStatus.textContent = "\u641C\u7D22\u4E2D\uFF080/" + pendingSites + "\uFF09\u2026";
+        setStatus(statusEl, `\u805A\u5408\u641C\u7D22\u300C${query}\u300D\uFF1A${sites.join(" / ")}`);
+        setBusy(true);
+        void sendMessage({ type: "BD_SEARCH", srcTabId: srcTabId2, query, sites, pagesPerSite: Number(pagesInput.value) || 2 }).then((res) => {
+          if (!res.ok) {
+            setStatus(statusEl, `\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`, true);
+            setBusy(false);
+          }
+        });
+      });
+      return {
+        show: (list) => {
+          items = list;
+          page = 0;
+          selected.clear();
+          renderList();
+        },
+        append: (list, error, siteId) => {
+          const seen = new Set(items.map((i) => i.url));
+          for (const item of list) {
+            if (!seen.has(item.url)) {
+              seen.add(item.url);
+              items.push(item);
+            }
+          }
+          pendingSites = Math.max(0, pendingSites - 1);
+          const done = pendingSites === 0;
+          const tag = siteId ? `${siteId}\uFF1A${list.length} \u6761` : `${list.length} \u6761`;
+          const err = error ? `\uFF08\u5931\u8D25\uFF1A${error}\uFF09` : "";
+          siteStatus.textContent = `${done ? "\u641C\u7D22\u5B8C\u6210" : `\u641C\u7D22\u4E2D\uFF08${pendingSites} \u7AD9\u5F85\u67E5\uFF09`}\uFF1A${tag}${err}`;
+          renderList();
+        },
+        setBusy,
+        finish: () => {
+          setBusy(false);
+          siteStatus.textContent = `\u641C\u7D22\u5B8C\u6210\uFF1A${items.length} \u4E2A\u7ED3\u679C`;
+          setStatus(statusEl, `\u641C\u7D22\u5B8C\u6210\uFF1A\u5171 ${items.length} \u4E2A\u7ED3\u679C\uFF08\u53BB\u91CD\uFF09`);
+        }
+      };
+    }
+    const searchList = setupSearchPanel();
+    linkLists.push(searchList);
+    if (sourceUrl && matchGallerySite(sourceUrl)) {
       albumUrlInput.value = sourceUrl;
       root.querySelector("#bd-rec-url").value = sourceUrl;
       root.querySelector("#bd-pop-url").value = sourceUrl;
-      logger5.info("view", "\u5DF2\u81EA\u52A8\u586B\u5145\u591A\u9875\u56FE\u7AD9\u7F51\u5740", { sourceUrl });
+      logger5.info("view", "\u5DF2\u81EA\u52A8\u586B\u5145\u591A\u9875\u56FE\u7AD9\u7F51\u5740", { sourceUrl, site: matchGallerySite(sourceUrl)?.id });
     }
     function routeDownload(job) {
       if (job.folderName === lastAlbumFolder) {
@@ -4828,6 +5246,11 @@
             linkLists.forEach((l) => l.setBusy(false));
             logger5.info("view", "buondua \u6279\u91CF\u6293\u53D6\u5B8C\u6210", { index: item.index, count: item.images.length });
           }
+        } else if (kind === "search-site") {
+          const r = data;
+          searchList.append(r.items, error, r.siteId);
+        } else if (kind === "search") {
+          searchList.finish();
         }
       },
       onDownloadProgress: (job) => routeDownload(job),
@@ -4836,76 +5259,6 @@
         logger5.info("view", "buondua \u4E0B\u8F7D\u4EFB\u52A1\u7ED3\u675F", { jobId: job.id, done: job.done, failed: job.failed });
       }
     };
-  }
-
-  // src/lib/gallery-sites.ts
-  var GALLERY_SITES = [
-    {
-      id: "buondua",
-      hosts: ["buondua.com"],
-      containerOpen: /<div[^>]*class="[^"]*article-fulltext[^"]*"[^>]*>/,
-      pagePattern: /\(\s*Page\s+\d+\s*\/\s*(\d+)\s*\)/i,
-      pageUrl: (base, page) => `${base}?page=${page}`,
-      baseUrlOf: (url) => {
-        try {
-          const u = new URL(url);
-          u.search = "";
-          u.hash = "";
-          return u.href;
-        } catch {
-          return url;
-        }
-      },
-      cleanTitle: (title) => title.replace(/\s*[-–—]\s*\(\s*Page\s+\d+\s*\/\s*\d+\s*\)\s*$/i, "").trim()
-    },
-    {
-      id: "rrwsh",
-      hosts: ["rrwsh.uuss.uk", "4khd.com"],
-      containerOpen: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/,
-      pagePattern: /Page\s+\d+\s+of\s+(\d+)/i,
-      pageUrl: (base, page) => `${base}/${page}`,
-      baseUrlOf: (url) => {
-        try {
-          const u = new URL(url);
-          u.search = "";
-          u.hash = "";
-          const path = u.pathname.replace(/\/\d+$/, "");
-          return `${u.origin}${path}`;
-        } catch {
-          return url;
-        }
-      },
-      cleanTitle: (title) => title.replace(/\s*[-–—]\s*Page\s+\d+\s+of\s+\d+\s*[-–—]\s*[^-]*$/i, "").replace(/\s*[-–—]\s*4KHD\s*$/i, "").trim()
-    },
-    {
-      id: "hitxhot",
-      hosts: ["hitxhot.org"],
-      containerOpen: /<div[^>]*class="[^"]*contentme[^"]*"[^>]*>/,
-      // 兼容英文 "| Page 2/3" 与中文 "| 第1/6页"（组2 = 总页数）
-      pagePattern: /\|\s*(?:Page\s+\d+\s*\/\s*(\d+)|第\s*\d+\s*\/\s*(\d+)\s*页)/i,
-      pageUrl: (base, page) => `${base}?page=${page}`,
-      baseUrlOf: (url) => {
-        try {
-          const u = new URL(url);
-          u.search = "";
-          u.hash = "";
-          return u.href;
-        } catch {
-          return url;
-        }
-      },
-      cleanTitle: (title) => title.replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim()
-    }
-  ];
-  function matchGallerySite(url) {
-    try {
-      const host = new URL(url).hostname.replace(/^www\./, "");
-      for (const site of GALLERY_SITES) {
-        if (site.hosts.some((h) => host === h || host.endsWith(`.${h}`))) return site;
-      }
-    } catch {
-    }
-    return null;
   }
 
   // src/grabber/view-images.ts
@@ -4997,1588 +5350,14 @@
     logger7.info("view", "\u7AD9\u70B9\u9002\u914D\u6A21\u677F\u9875\u5DF2\u6302\u8F7D\uFF08\u7A7A\u6A21\u677F\uFF09");
   }
 
-  // src/lib/freeimage-parse.ts
-  function matchAlbumKeywords(albums, keywords) {
-    const ks = keywords.map((k) => k.toLowerCase()).filter(Boolean);
-    if (ks.length === 0) return albums;
-    return albums.filter((a) => {
-      const haystack = `${a.name} ${a.username ?? ""}`.toLowerCase();
-      return ks.every((k) => haystack.includes(k));
-    });
-  }
-
-  // src/lib/freeimage-types.ts
-  function emptyFhProducerDb() {
-    return { entries: {}, updatedAt: 0 };
-  }
-  function emptyFhAlbumIndexDb() {
-    return { entries: {}, updatedAt: 0 };
-  }
-
-  // src/grabber/view-freeimage.ts
-  var logger8 = initLogger("grabber");
-  var BATCH_PAGES2 = 3;
-  function toGrabbed3(img) {
-    return {
-      id: img.id,
-      url: img.originalUrl,
-      downloadUrl: img.originalUrl,
-      thumbUrl: img.thumbUrl || img.mediumUrl,
-      width: img.width,
-      height: img.height,
-      sizeStatus: img.width && img.height ? "ok" : "unknown"
-    };
-  }
-  function initFreeimageView(root, srcTabId2, _sourceUrl) {
-    let homeFolder = "freeimage\u7528\u6237\u4E3B\u9875";
-    let albumFolder = "freeimage\u76F8\u518C";
-    let albumsPage = 0;
-    let fhAlbumIndex = emptyFhAlbumIndexDb();
-    let searchBusy = false;
-    let searchRounds = 0;
-    let searchMode = "recent";
-    let searchType = "albums";
-    let roundStage = "idle";
-    let roundPageSize = 2;
-    let roundSample = 12;
-    let exploreCursor = 0;
-    let exploreImages = [];
-    let owners = [];
-    let scanEntries = [];
-    let producerDb = emptyFhProducerDb();
-    root.innerHTML = `
-    <div class="adapters-view">
-      <div class="adapter-head">
-        <h3>freeimage \u56FE\u5E8A</h3>
-        <span class="adapter-hint">Chevereto \u56FE\u5E8A\uFF1A\u7528\u6237\u4E3B\u9875 / \u76F8\u518C / \u76F8\u518C\u5206\u6790 / \u63A2\u7D22\u68C0\u7D22 / \u7C7B\u7FA4\u9274\u522B</span>
-      </div>
-      <div class="adapter-tabs">
-        <button data-sub="fh-home" class="adapter-tab active">\u7528\u6237\u4E3B\u9875</button>
-        <button data-sub="fh-album" class="adapter-tab">\u76F8\u518C\u6293\u53D6</button>
-        <button data-sub="fh-albums" class="adapter-tab">\u76F8\u518C\u5206\u6790</button>
-        <button data-sub="fh-search" class="adapter-tab">\u63A2\u7D22\u68C0\u7D22</button>
-        <button data-sub="fh-following" class="adapter-tab">\u5173\u6CE8\u5899</button>
-        <button data-sub="fh-diffuse" class="adapter-tab">\u6269\u6563\u68C0\u7D22</button>
-        <button data-sub="fh-producers" class="adapter-tab">\u7C7B\u7FA4\u9274\u522B</button>
-      </div>
-
-      <!-- A \u7528\u6237\u4E3B\u9875 -->
-      <div id="sub-fh-home" class="adapter-panel active">
-        <div class="row">
-          <input id="fh-home-url" class="text-input" placeholder="freeimage \u7528\u6237\u540D\u6216\u4E3B\u9875 URL\uFF0C\u5982 jzqgoodlife / https://freeimage.host/jzqgoodlife">
-          <button id="fh-home-fetch" class="btn primary">\u6293\u7B2C\u4E00\u6279\uFF08\u7EA6100\uFF09</button>
-          <button id="fh-home-next" class="btn">\u4E0B\u4E00\u6279</button>
-        </div>
-        <div class="row">
-          <span class="row-label">\u5206\u9875\u8303\u56F4</span>
-          <input id="fh-home-from" class="num-input" value="1" type="number" min="1">
-          <span>~</span>
-          <input id="fh-home-to" class="num-input" value="3" type="number" min="1">
-          <button id="fh-home-pages" class="btn">\u6309\u9875\u6293\u53D6</button>
-        </div>
-        <div id="fh-home-grab-view" class="grab-view-host"></div>
-      </div>
-
-      <!-- B \u76F8\u518C\u6293\u53D6 -->
-      <div id="sub-fh-album" class="adapter-panel">
-        <div class="row">
-          <input id="fh-album-url" class="text-input" placeholder="\u76F8\u518C URL\uFF0C\u5982 https://freeimage.host/a/ba-bi.zLEWQ \u6216 /album/zLEWQ">
-          <button id="fh-album-fetch" class="btn primary">\u6293\u53D6\u5168\u90E8\u56FE\u7247</button>
-        </div>
-        <div id="fh-album-grab-view" class="grab-view-host"></div>
-      </div>
-
-      <!-- C \u76F8\u518C\u5206\u6790 -->
-      <div id="sub-fh-albums" class="adapter-panel">
-        <div class="row">
-          <input id="fh-albums-user" class="text-input" placeholder="freeimage \u7528\u6237\u540D\uFF0C\u5982 jzqgoodlife">
-          <label class="row-label">\u6392\u5E8F</label>
-          <select id="fh-albums-sort" class="select-input">
-            <option value="views_desc">\u6700\u591A\u6D4F\u89C8</option>
-            <option value="date_desc">\u6700\u65B0</option>
-            <option value="likes_desc">\u6700\u591A\u559C\u6B22</option>
-            <option value="name_asc">\u540D\u79F0</option>
-          </select>
-          <button id="fh-albums-start" class="btn primary">\u5F00\u59CB\u5206\u6790</button>
-          <button id="fh-albums-next" class="btn">\u4E0B\u4E00\u6279</button>
-          <span id="fh-albums-status" class="status-text"></span>
-        </div>
-        <div class="album-grid" id="fh-albums-grid"></div>
-      </div>
-
-      <!-- D \u63A2\u7D22\u68C0\u7D22 -->
-      <div id="sub-fh-search" class="adapter-panel">
-        <div class="diffuse-section">
-          <div class="section-title">\u2460 \u63A2\u7D22\u68C0\u7D22\uFF1A\u6A21\u5F0F \xD7 \u7C7B\u578B\uFF08\u4EC5\u6587\u5B57\uFF0C\u6BCF\u6279\u81EA\u52A8\u4FDD\u5B58\u5230\u8BB0\u5F55\u5E93\uFF09</div>
-          <div class="row">
-            <span class="row-label">\u6A21\u5F0F</span>
-            <button class="btn fh-mode active" data-fh-mode="recent">\u6700\u65B0</button>
-            <button class="btn fh-mode" data-fh-mode="popular">\u70ED\u95E8</button>
-            <button class="btn fh-mode" data-fh-mode="trending">\u6700\u591A\u559C\u6B22</button>
-            <span class="row-label">\u7C7B\u578B</span>
-            <button class="btn fh-type active" data-fh-type="albums">\u76F8\u518C</button>
-            <button class="btn fh-type" data-fh-type="images">\u56FE\u7247</button>
-            <button class="btn fh-type" data-fh-type="users">\u7528\u6237</button>
-          </div>
-          <div class="row">
-            <span class="row-label">\u6BCF\u6279\u8F6E\u6570</span>
-            <input id="fh-sr-rounds" class="num-input" value="5" type="number" min="1" max="200">
-            <span class="status-text">\u6BCF\u8F6E 1 \u9875\uFF0836 \u6761\uFF09\uFF0C\u6BCF\u6279\u5B8C\u6210\u81EA\u52A8\u4FDD\u5B58</span>
-            <button id="fh-sr-start" class="btn primary">\u5F00\u59CB\u68C0\u7D22</button>
-            <button id="fh-sr-next-batch" class="btn" disabled>\u4E0B\u4E00\u6279</button>
-            <button id="fh-sr-stop" class="btn danger" disabled>\u7EC8\u6B62</button>
-          </div>
-          <div class="row">
-            <label class="radio-label"><input type="checkbox" id="fh-sr-cn-only"> \u4EC5\u4E2D\u6587\u76F8\u518C\uFF08\u8FC7\u6EE4\u65E0\u7528\u4FE1\u606F\uFF09</label>
-            <span class="row-label">\u6DF1\u6316\u8F6E\u6570</span>
-            <input id="fh-sr-mine-rounds" class="num-input" value="5" type="number" min="1" max="50">
-            <button id="fh-sr-mine" class="btn primary">\u4E2D\u6587\u6DF1\u6316</button>
-            <span class="status-text">\u63A2\u7D22\u8865\u7ED9+\u5C5E\u4E3B\u6DF1\u6316\uFF08\u9012\u5F52\uFF09</span>
-          </div>
-          <div class="row">
-            <input id="fh-sr-mine-seeds" class="text-input" placeholder="\u624B\u52A8\u79CD\u5B50\u7528\u6237\u540D\u6216\u4E3B\u9875 URL\uFF0C\u9017\u53F7\u5206\u9694\uFF08\u5982 jzqgoodlife\uFF09">
-            <button id="fh-sr-mine-seed-add" class="btn">\u52A0\u5165\u79CD\u5B50\u5E76\u6DF1\u6316</button>
-            <span class="status-text">\u53EF\u9009\uFF1A\u5DF2\u77E5\u4E2D\u6587\u7528\u6237\u4E00\u6B21\u6293\u5176\u5168\u90E8\u76F8\u518C</span>
-          </div>
-          <div class="row">
-            <span class="row-label">\u8FDB\u5EA6</span>
-            <div class="progress-bar thin" style="flex:1"><div id="fh-sr-fill" class="progress-fill" style="width:0%"></div></div>
-            <span id="fh-sr-progress" class="progress-text">\u672A\u5F00\u59CB</span>
-          </div>
-          <div class="diffuse-log" id="fh-sr-log"></div>
-        </div>
-        <div class="diffuse-section">
-          <div class="section-title">\u2461 \u8BB0\u5F55\u5E93\uFF08\u5DF2\u4FDD\u5B58\u6761\u76EE\uFF0C\u81EA\u52A8\u53BB\u91CD\u5408\u5E76\uFF0C\u53EF\u5BFC\u51FA\u5907\u4EFD\uFF09</div>
-          <div class="row">
-            <span id="fh-sr-stats" class="status-text">\u5DF2\u8BB0\u5F55 0 \u6761</span>
-            <button id="fh-sr-export" class="btn primary">\u5BFC\u51FA JSON</button>
-            <button id="fh-sr-import" class="btn">\u5BFC\u5165\u5408\u5E76</button>
-            <input id="fh-sr-import-file" type="file" accept=".json" style="display:none">
-            <button id="fh-sr-clear" class="btn danger">\u6E05\u7A7A</button>
-          </div>
-        </div>
-        <div class="diffuse-section">
-          <div class="section-title">\u2462 \u76F8\u518C\u5173\u952E\u8BCD\u68C0\u7D22\uFF08\u7EAF\u672C\u5730\u5339\u914D\u8BB0\u5F55\u5E93\uFF0Cimgbb \u98CE\u683C\uFF09</div>
-          <div class="row">
-            <input id="fh-sr-keywords" class="text-input" placeholder="\u5173\u952E\u8BCD\uFF0C\u9017\u53F7\u5206\u9694\uFF08\u5339\u914D\u76F8\u518C\u540D/\u7528\u6237\u540D\uFF09">
-            <button id="fh-sr-run" class="btn primary">\u68C0\u7D22</button>
-            <span id="fh-sr-hit" class="status-text"></span>
-          </div>
-          <div class="row">
-            <button id="fh-sr-prev" class="btn" disabled>\u4E0A\u4E00\u9875</button>
-            <span id="fh-sr-page" class="status-text"></span>
-            <button id="fh-sr-next" class="btn" disabled>\u4E0B\u4E00\u9875</button>
-            <span id="fh-sr-total" class="status-text"></span>
-          </div>
-          <div class="fh-hit-list" id="fh-sr-hits"></div>
-        </div>
-        <div class="diffuse-section">
-          <div class="section-title">\u2463 \u4E2D\u6587\u76F8\u518C\u68C0\u7D22\u8BB0\u5F55\uFF08\u72EC\u7ACB\u6570\u636E\u8868\uFF1A\u63A2\u7D22/\u6DF1\u6316\u81EA\u52A8\u6536\u96C6\u4E2D\u6587\u76F8\u518C\uFF09</div>
-          <div class="row">
-            <span id="fh-cn-stats" class="status-text">\u4E2D\u6587\u8BB0\u5F55 0 \u6761</span>
-            <button id="fh-cn-export" class="btn primary">\u5BFC\u51FA JSON</button>
-            <button id="fh-cn-import" class="btn">\u5BFC\u5165\u5408\u5E76</button>
-            <input id="fh-cn-import-file" type="file" accept=".json" style="display:none">
-            <button id="fh-cn-clear" class="btn danger">\u6E05\u7A7A</button>
-          </div>
-          <div class="row">
-            <input id="fh-cn-keywords" class="text-input" placeholder="\u4E2D\u6587\u5173\u952E\u8BCD\u68C0\u7D22\uFF08\u5339\u914D\u76F8\u518C\u540D/\u7528\u6237\u540D\uFF09">
-            <button id="fh-cn-run" class="btn primary">\u68C0\u7D22</button>
-          </div>
-          <div class="row">
-            <button id="fh-sr-cn-all" class="btn primary">\u663E\u793A\u5168\u90E8\u4E2D\u6587\u76F8\u518C</button>
-            <button id="fh-cn-prev" class="btn" disabled>\u4E0A\u4E00\u9875</button>
-            <span id="fh-cn-page" class="status-text"></span>
-            <button id="fh-cn-next" class="btn" disabled>\u4E0B\u4E00\u9875</button>
-            <span id="fh-cn-total" class="status-text"></span>
-          </div>
-          <div class="fh-hit-list" id="fh-sr-cn-list"></div>
-        </div>
-      </div>
-
-      <!-- F \u5173\u6CE8\u5899\uFF08\u8FC1\u79FB imgbb \u5173\u6CE8\u5899\uFF09 -->
-      <div id="sub-fh-following" class="adapter-panel">
-        <div class="row">
-          <input id="fh-fw-user" class="text-input" placeholder="freeimage \u7528\u6237\u540D\uFF0C\u5982 holystick">
-          <label class="radio-label"><input type="radio" name="fh-fw-side" value="both" checked>\u5168\u90E8</label>
-          <label class="radio-label"><input type="radio" name="fh-fw-side" value="following">\u5173\u6CE8\u8005</label>
-          <label class="radio-label"><input type="radio" name="fh-fw-side" value="followers">\u88AB\u5173\u6CE8\u8005</label>
-          <button id="fh-fw-start" class="btn primary">\u5F00\u59CB\u5206\u6790</button>
-          <button id="fh-fw-next" class="btn" disabled>\u4E0B\u4E00\u6279</button>
-          <span id="fh-fw-status" class="status-text"></span>
-        </div>
-        <div class="row"><span class="status-text">\u6BCF\u6279 30 \u7528\u6237\uFF1A\u6293\u53D6\u5173\u6CE8\u5173\u7CFB \u2192 \u9010\u4E2A\u67E5\u76F8\u518C \u2192 \u5C55\u793A\u7528\u6237+\u76F8\u518C</span></div>
-        <div class="following-list" id="fh-fw-list"></div>
-      </div>
-
-      <!-- G \u6269\u6563\u68C0\u7D22\uFF08\u8FC1\u79FB imgbb FP-005\uFF09 -->
-      <div id="sub-fh-diffuse" class="adapter-panel">
-        <div class="diffuse-section">
-          <div class="section-title">\u2460 \u5E7F\u57DF\u7B5B\u9009\uFF1Afollowing \u6269\u6563 \u2192 \u5165\u5EA6\u7EDF\u8BA1</div>
-          <div class="row">
-            <input id="fh-df-user" class="text-input diffuse-user-input" placeholder="\u8D77\u70B9\u7528\u6237\u540D\uFF0C\u5982 holystick">
-            <button id="fh-df-start" class="btn primary">\u5F00\u59CB\u6269\u6563</button>
-            <button id="fh-df-next" class="btn">\u4E0B\u4E00\u6279(50)</button>
-            <span id="fh-df-status" class="status-text"></span>
-          </div>
-          <div class="row">
-            <span class="row-label">\u5B9E\u65F6</span>
-            <span id="fh-df-progress" class="status-text"></span>
-            <span class="row-label">429</span>
-            <span id="fh-df-429" class="status-text"></span>
-          </div>
-          <div class="batch-progress-row">
-            <div class="progress-bar thin"><div id="fh-df-batch-fill" class="progress-fill"></div></div>
-            <span id="fh-df-batch-text" class="progress-text"></span>
-          </div>
-          <div class="diffuse-log" id="fh-df-log"></div>
-          <table class="batch-history" id="fh-df-history">
-            <thead><tr><th>\u6279</th><th>\u5904\u7406</th><th>\u65B0\u589E</th><th>\u5931\u8D25</th><th>\u8017\u65F6</th><th>\u5747\u8BF7\u6C42</th><th>\u5165\u5EA6+</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <div class="diffuse-section">
-          <div class="section-title">\u2461 \u751F\u4EA7\u8005\u5E93\uFF1A\u5165\u5EA6\u5408\u5E76 \u2192 \u76F8\u518C\u786E\u8BA4 \u2192 \u7EFC\u5408\u8BC4\u5206\u6392\u884C</div>
-          <div class="row">
-            <button id="fh-db-save" class="btn">\u5408\u5E76\u5165\u5E93</button>
-            <button id="fh-db-load" class="btn">\u8BFB\u53D6</button>
-            <button id="fh-db-reset" class="btn primary">\u91CD\u65B0\u786E\u8BA4</button>
-            <button id="fh-db-clear" class="btn danger">\u6E05\u7A7A</button>
-            <span id="fh-db-status" class="status-text"></span>
-          </div>
-          <div class="row">
-            <button id="fh-score-start" class="btn">\u786E\u8BA4\u8BC4\u5206</button>
-            <button id="fh-score-next" class="btn">\u4E0B\u4E00\u6279\u786E\u8BA4</button>
-            <button id="fh-score-stop" class="btn danger" disabled>\u505C\u6B62</button>
-            <label class="radio-label">\u5165\u5EA6\u6743\u91CD <input id="fh-w1" class="num-input" value="60" type="number" min="0" max="100" style="width:48px">%</label>
-            <span id="fh-score-status" class="status-text"></span>
-          </div>
-          <div class="row"><span class="row-label">\u6392\u884C\u6570\u91CF</span><input id="fh-rank-n" class="num-input" value="100" type="number" min="10" max="500" style="width:60px"></div>
-          <div class="rank-groups">
-            <div class="rank-group"><div class="rank-title">\u5F97\u5206 Top <span class="rank-num" id="fh-rank-score-n">100</span></div><div class="user-list" id="fh-rank-score"></div></div>
-            <div class="rank-group"><div class="rank-title">\u5165\u5EA6 Top <span class="rank-num" id="fh-rank-degree-n">100</span></div><div class="user-list" id="fh-rank-degree"></div></div>
-            <div class="rank-group"><div class="rank-title">\u76F8\u518C\u6570 Top <span class="rank-num" id="fh-rank-album-n">100</span>\uFF08\u5DF2\u786E\u8BA4\uFF09</div><div class="user-list" id="fh-rank-album"></div></div>
-          </div>
-        </div>
-        <div class="diffuse-section">
-          <div class="section-title">\u2462 \u76F8\u518C\u5173\u952E\u8BCD\u68C0\u7D22\uFF08\u7EAF\u672C\u5730\u5339\u914D\uFF09</div>
-          <div class="row">
-            <input id="fh-df-keywords" class="text-input" placeholder="\u5173\u952E\u8BCD\uFF0C\u9017\u53F7\u5206\u9694">
-            <label class="radio-label">\u53D6\u524D <input id="fh-df-pct" type="range" min="1" max="100" value="100" class="pct-range"> <span id="fh-df-pct-val">100</span>%</label>
-            <button id="fh-df-search" class="btn primary">\u533A\u95F4\u68C0\u7D22</button>
-            <span id="fh-df-search-status" class="status-text"></span>
-          </div>
-          <div class="search-results" id="fh-df-results"></div>
-        </div>
-        <div class="diffuse-section">
-          <div class="section-title">\u2463 \u672C\u5730\u6570\u636E\u8868\uFF08\u5BFC\u51FA / \u5BFC\u5165\u5408\u5E76\uFF09</div>
-          <div class="row">
-            <button id="fh-db-export" class="btn primary">\u5BFC\u51FA\u6570\u636E\u8868</button>
-            <button id="fh-db-import" class="btn">\u5BFC\u5165\u5408\u5E76</button>
-            <input id="fh-db-import-file" type="file" accept=".json" style="display:none">
-            <span id="fh-db-local-status" class="status-text"></span>
-          </div>
-        </div>
-      </div>
-
-      <!-- E \u7C7B\u7FA4\u9274\u522B -->
-      <div id="sub-fh-producers" class="adapter-panel">
-        <div class="diffuse-section">
-          <div class="section-title">\u2460 \u591A\u8F6E\u6269\u6563\uFF1A\u6BCF\u8F6E = \u63A2\u7D22\u9875\u65B0\u9875 \u2192 \u5C5E\u4E3B\u63D0\u53D6 \u2192 \u76F8\u518C\u540D\u7EBF\u7D22</div>
-          <div class="row">
-            <span class="row-label">\u6BCF\u8F6E\u9875\u6570</span>
-            <input id="fh-pd-pages" class="num-input" value="2" type="number" min="1" max="5">
-            <span class="row-label">\u6BCF\u9875\u91C7\u6837</span>
-            <input id="fh-pd-sample" class="num-input" value="12" type="number" min="1" max="36">
-            <button id="fh-pd-round" class="btn primary">\u4E0B\u4E00\u8F6E\u6269\u6563</button>
-            <span id="fh-pd-status" class="status-text"></span>
-          </div>
-          <div class="diffuse-log" id="fh-pd-log"></div>
-          <div class="fh-candidates" id="fh-pd-candidates"></div>
-        </div>
-        <div class="diffuse-section">
-          <div class="section-title">\u2461 \u7C7B\u7FA4\u5E93\uFF08\u624B\u52A8\u6807\u6CE8\uFF1A\u76EE\u6807 / \u6392\u9664\u975E\u76EE\u6807\u7C7B\u7FA4\uFF09</div>
-          <div class="row">
-            <span class="row-label">\u7B5B\u9009</span>
-            <button class="btn fh-db-filter active" data-fh-filter="all">\u5168\u90E8</button>
-            <button class="btn fh-db-filter" data-fh-filter="target">\u76EE\u6807</button>
-            <button class="btn fh-db-filter" data-fh-filter="excluded">\u5DF2\u6392\u9664</button>
-            <button id="fh-pd-export" class="btn primary">\u5BFC\u51FA JSON</button>
-            <button id="fh-pd-import" class="btn">\u5BFC\u5165\u5408\u5E76</button>
-            <input id="fh-pd-import-file" type="file" accept=".json" style="display:none">
-            <span id="fh-pd-db-status" class="status-text"></span>
-          </div>
-          <div class="fh-db-list" id="fh-pd-db"></div>
-        </div>
-      </div>
-    </div>
-  `;
-    function setStatus(el, text, isError = false) {
-      if (!el) return;
-      el.textContent = text;
-      el.classList.toggle("error", isError);
-    }
-    function cleanFolderName(name) {
-      return name.replace(/[\\/:*?"<>|\n\r]/g, "_").trim().slice(0, 120) || "\u672A\u547D\u540D";
-    }
-    async function openTab(url) {
-      try {
-        const current = await chrome.tabs.getCurrent();
-        const index = current?.index ?? 0;
-        await chrome.tabs.create({ url, index: index + 1 });
-      } catch (err) {
-        logger8.error("freeimage", "\u65B0\u5F00\u9875\u7B7E\u5931\u8D25", String(err));
-      }
-    }
-    async function ensureHostPermission() {
-      try {
-        if (await chrome.permissions.contains({ origins: ["<all_urls>"] })) return true;
-        return await chrome.permissions.request({ origins: ["<all_urls>"] });
-      } catch {
-        return false;
-      }
-    }
-    const homeGrabView = createGrabView(root.querySelector("#fh-home-grab-view"), {
-      srcTabId: srcTabId2,
-      getFolderName: () => homeFolder,
-      getAlbumName: () => homeFolder,
-      showReparse: false,
-      showLoadMore: false
-    });
-    const albumGrabView = createGrabView(root.querySelector("#fh-album-grab-view"), {
-      srcTabId: srcTabId2,
-      getFolderName: () => albumFolder,
-      getAlbumName: () => albumFolder,
-      showReparse: false,
-      showLoadMore: false
-    });
-    root.querySelectorAll(".adapter-tab").forEach((tab) => {
-      tab.addEventListener("click", () => {
-        root.querySelectorAll(".adapter-tab").forEach((t) => t.classList.remove("active"));
-        tab.classList.add("active");
-        root.querySelectorAll(".adapter-panel").forEach((p) => {
-          p.classList.toggle("active", p.id === `sub-${tab.dataset.sub}`);
-        });
-      });
-    });
-    const homeUrlInput = root.querySelector("#fh-home-url");
-    let homePageCursor = 0;
-    async function fetchHomePages(pageFrom, pageTo) {
-      const url = homeUrlInput.value.trim();
-      if (!url) {
-        homeGrabView.setParseText("\u8BF7\u586B\u5199\u7528\u6237\u540D\u6216\u4E3B\u9875 URL");
-        return;
-      }
-      if (!await ensureHostPermission()) {
-        homeGrabView.setParseText("\u9700\u8981\u6388\u6743\u8BBF\u95EE freeimage\uFF08<all_urls>\uFF09\u540E\u624D\u80FD\u6293\u53D6");
-        return;
-      }
-      const m = url.match(/freeimage\.host\/([a-zA-Z0-9_-]+)/) ?? url.match(/^([a-zA-Z0-9_-]+)$/);
-      if (m) homeFolder = cleanFolderName(m[1]);
-      homeGrabView.setBusyParsing(true);
-      homeGrabView.setParseText(`\u6293\u53D6\u4E2D\uFF08page ${pageFrom}~${pageTo}\uFF09\u2026`);
-      const res = await sendMessage({ type: "FH_FETCH_USER", srcTabId: srcTabId2, url, pageFrom, pageTo });
-      if (!res.ok) {
-        homeGrabView.setBusyParsing(false);
-        homeGrabView.setParseText(`\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`);
-      }
-    }
-    root.querySelector("#fh-home-fetch")?.addEventListener("click", () => {
-      homePageCursor = BATCH_PAGES2;
-      void fetchHomePages(1, BATCH_PAGES2);
-    });
-    root.querySelector("#fh-home-next")?.addEventListener("click", () => {
-      const from = homePageCursor + 1;
-      homePageCursor += BATCH_PAGES2;
-      void fetchHomePages(from, homePageCursor);
-    });
-    root.querySelector("#fh-home-pages")?.addEventListener("click", () => {
-      const from = Math.max(1, Number(root.querySelector("#fh-home-from").value) || 1);
-      const to = Math.max(from, Number(root.querySelector("#fh-home-to").value) || from);
-      homePageCursor = to;
-      void fetchHomePages(from, to);
-    });
-    const albumUrlInput = root.querySelector("#fh-album-url");
-    root.querySelector("#fh-album-fetch")?.addEventListener("click", async () => {
-      const url = albumUrlInput.value.trim();
-      if (!url) {
-        albumGrabView.setParseText("\u8BF7\u586B\u5199\u76F8\u518C URL");
-        return;
-      }
-      if (!await ensureHostPermission()) {
-        albumGrabView.setParseText("\u9700\u8981\u6388\u6743\u8BBF\u95EE freeimage\uFF08<all_urls>\uFF09\u540E\u624D\u80FD\u6293\u53D6");
-        return;
-      }
-      albumGrabView.setBusyParsing(true);
-      albumGrabView.setParseText("\u6293\u53D6\u76F8\u518C\u4E2D\u2026");
-      const res = await sendMessage({
-        type: "FH_FETCH_ALBUM",
-        srcTabId: srcTabId2,
-        albumUrl: url
-      });
-      if (!res.ok) {
-        albumGrabView.setBusyParsing(false);
-        albumGrabView.setParseText(`\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`);
-      } else if (res.name) {
-        albumFolder = cleanFolderName(res.name);
-      }
-    });
-    const albumsGrid = root.querySelector("#fh-albums-grid");
-    const albumsStatus = root.querySelector("#fh-albums-status");
-    const albumsUserInput = root.querySelector("#fh-albums-user");
-    const albumsSort = root.querySelector("#fh-albums-sort");
-    function renderAlbumGrid(items) {
-      albumsGrid.innerHTML = "";
-      if (items.length === 0) {
-        albumsGrid.innerHTML = '<div class="empty-tip">\u6682\u65E0\u76F8\u518C\uFF08\u7528\u6237\u4E0D\u5B58\u5728\u6216\u6CA1\u6709\u516C\u5F00\u76F8\u518C\uFF09\u3002</div>';
-        return;
-      }
-      for (const album of items) {
-        const card = document.createElement("div");
-        card.className = "album-card";
-        card.title = album.name;
-        const cover = document.createElement("img");
-        cover.className = "album-cover";
-        cover.loading = "lazy";
-        cover.src = album.coverUrl || "";
-        cover.draggable = false;
-        const name = document.createElement("div");
-        name.className = "album-name";
-        name.textContent = album.name;
-        card.append(cover, name);
-        card.addEventListener("click", () => void openTab(album.url));
-        albumsGrid.appendChild(card);
-      }
-    }
-    async function fetchAlbums(page) {
-      const username = albumsUserInput.value.trim();
-      if (!username) {
-        setStatus(albumsStatus, "\u8BF7\u586B\u5199\u7528\u6237\u540D");
-        return;
-      }
-      if (!await ensureHostPermission()) {
-        setStatus(albumsStatus, "\u9700\u8981\u6388\u6743\u8BBF\u95EE freeimage \u540E\u624D\u80FD\u5206\u6790", true);
-        return;
-      }
-      setStatus(albumsStatus, `\u6293\u53D6\u7B2C ${page} \u9875\u2026`);
-      const res = await sendMessage({ type: "FH_FETCH_ALBUMS", srcTabId: srcTabId2, username, sort: albumsSort.value, page });
-      if (!res.ok) setStatus(albumsStatus, `\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`, true);
-    }
-    root.querySelector("#fh-albums-start")?.addEventListener("click", () => {
-      albumsPage = 1;
-      void fetchAlbums(1);
-    });
-    root.querySelector("#fh-albums-next")?.addEventListener("click", () => {
-      albumsPage++;
-      void fetchAlbums(albumsPage);
-    });
-    const srLog = root.querySelector("#fh-sr-log");
-    const srStats = root.querySelector("#fh-sr-stats");
-    const srProgress = root.querySelector("#fh-sr-progress");
-    const srFill = root.querySelector("#fh-sr-fill");
-    const srHits = root.querySelector("#fh-sr-hits");
-    const srHit = root.querySelector("#fh-sr-hit");
-    const srPageEl = root.querySelector("#fh-sr-page");
-    const srTotalEl = root.querySelector("#fh-sr-total");
-    const srPrevBtn = root.querySelector("#fh-sr-prev");
-    const srNextBtn = root.querySelector("#fh-sr-next");
-    const btnStart = root.querySelector("#fh-sr-start");
-    const btnNextBatch = root.querySelector("#fh-sr-next-batch");
-    const btnStop = root.querySelector("#fh-sr-stop");
-    const SEARCH_PAGE_SIZE = 100;
-    let searchAll = [];
-    let searchPage = 0;
-    function logSr(text) {
-      const div = document.createElement("div");
-      div.textContent = text;
-      srLog.appendChild(div);
-      while (srLog.childElementCount > 300) srLog.firstElementChild?.remove();
-      srLog.scrollTop = srLog.scrollHeight;
-    }
-    function renderIndexStats() {
-      const total = Object.keys(fhAlbumIndex.entries).length;
-      const cn = Object.values(fhAlbumIndex.entries).filter((e) => /[\u4e00-\u9fff]/.test(e.name)).length;
-      srStats.textContent = `\u5DF2\u8BB0\u5F55 ${total} \u6761\uFF08\u4E2D\u6587 ${cn} \u6761\uFF0C\u5DF2\u4FDD\u5B58\u5230\u8BB0\u5F55\u5E93\uFF09`;
-    }
-    function setSearchBusy(busy) {
-      searchBusy = busy;
-      btnStart.disabled = busy;
-      btnStop.disabled = !busy;
-      if (busy) btnNextBatch.disabled = true;
-    }
-    function updateProgress(round) {
-      const pct = searchRounds > 0 ? Math.round(round / searchRounds * 100) : 0;
-      srFill.style.width = `${Math.min(100, pct)}%`;
-      srProgress.textContent = `\u7B2C ${round} / ${searchRounds} \u8F6E\uFF08${pct}%\uFF09`;
-    }
-    function renderSearchPage() {
-      const total = searchAll.length;
-      const pages = Math.max(1, Math.ceil(total / SEARCH_PAGE_SIZE));
-      if (searchPage >= pages) searchPage = pages - 1;
-      const slice = searchAll.slice(searchPage * SEARCH_PAGE_SIZE, (searchPage + 1) * SEARCH_PAGE_SIZE);
-      srHits.innerHTML = "";
-      if (total === 0) {
-        srHits.innerHTML = '<div class="empty-tip">\u65E0\u547D\u4E2D\uFF08\u5148\u91C7\u96C6\u4FDD\u5B58\u8BB0\u5F55\uFF0C\u6216\u8C03\u6574\u5173\u952E\u8BCD\uFF09\u3002</div>';
-      }
-      for (const hit of slice) {
-        const block = document.createElement("div");
-        block.className = "search-hit";
-        const user = document.createElement("div");
-        user.className = "search-user";
-        const a = document.createElement("a");
-        a.href = hit.url;
-        a.target = "_blank";
-        a.textContent = hit.name;
-        user.appendChild(a);
-        if (hit.username) {
-          const deg = document.createElement("span");
-          deg.className = "user-degree";
-          deg.textContent = `\u5C5E\u4E3B ${hit.username}`;
-          user.appendChild(deg);
-        }
-        block.appendChild(user);
-        srHits.appendChild(block);
-      }
-      srPageEl.textContent = total > 0 ? `\u7B2C ${searchPage + 1}/${pages} \u9875` : "";
-      srTotalEl.textContent = total > 0 ? `\u5171\u547D\u4E2D ${total} \u6761` : "";
-      srPrevBtn.disabled = searchPage <= 0;
-      srNextBtn.disabled = searchPage >= pages - 1;
-    }
-    function runSearch() {
-      const kw = root.querySelector("#fh-sr-keywords").value;
-      const keywords = kw.split(/[,，]/).map((k) => k.trim()).filter(Boolean);
-      if (keywords.length === 0) {
-        setStatus(srHit, "\u8BF7\u8F93\u5165\u5173\u952E\u8BCD", true);
-        return;
-      }
-      const all = Object.values(fhAlbumIndex.entries).map((e) => ({ name: e.name, url: e.url, username: e.username }));
-      searchAll = matchAlbumKeywords(all, keywords);
-      searchPage = 0;
-      renderSearchPage();
-      setStatus(srHit, `\u68C0\u7D22\u5B8C\u6210\uFF1A\u547D\u4E2D ${searchAll.length} \u6761`);
-    }
-    root.querySelectorAll(".fh-mode").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        root.querySelectorAll(".fh-mode").forEach((b) => b.classList.remove("active"));
-        btn.classList.add("active");
-        searchMode = btn.dataset.fhMode ?? "recent";
-      });
-    });
-    root.querySelectorAll(".fh-type").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        root.querySelectorAll(".fh-type").forEach((b) => b.classList.remove("active"));
-        btn.classList.add("active");
-        searchType = btn.dataset.fhType ?? "albums";
-      });
-    });
-    btnStart.addEventListener("click", async () => {
-      if (searchBusy) return;
-      if (!await ensureHostPermission()) {
-        setStatus(srHit, "\u9700\u8981\u6388\u6743\u8BBF\u95EE freeimage \u540E\u624D\u80FD\u68C0\u7D22", true);
-        return;
-      }
-      const rounds = Math.max(1, Math.min(200, Number(root.querySelector("#fh-sr-rounds").value) || 5));
-      searchRounds = rounds;
-      const cnOnly = root.querySelector("#fh-sr-cn-only").checked;
-      srLog.innerHTML = "";
-      updateProgress(0);
-      setSearchBusy(true);
-      logSr(`\u5F00\u59CB\u65B0\u4F1A\u8BDD\uFF1A${searchModeLabel(searchMode)} - ${searchTypeLabel(searchType)}\uFF0C\u6BCF\u6279 ${rounds} \u8F6E${cnOnly ? "\uFF08\u4EC5\u4E2D\u6587\uFF09" : ""}\uFF0C\u7ED3\u679C\u81EA\u52A8\u4FDD\u5B58`);
-      const res = await sendMessage({
-        type: "FH_EXPLORE_SEARCH_START",
-        srcTabId: srcTabId2,
-        mode: searchMode,
-        list: searchType,
-        rounds,
-        intervalMs: 150,
-        chineseOnly: cnOnly || void 0
-      });
-      if (!res.ok) {
-        setSearchBusy(false);
-        logSr(`\u542F\u52A8\u5931\u8D25\uFF1A${res.error}`);
-      }
-    });
-    btnNextBatch.addEventListener("click", async () => {
-      if (searchBusy) return;
-      const rounds = Math.max(1, Math.min(200, Number(root.querySelector("#fh-sr-rounds").value) || 5));
-      searchRounds = rounds;
-      const cnOnly = root.querySelector("#fh-sr-cn-only").checked;
-      updateProgress(0);
-      setSearchBusy(true);
-      logSr(`\u4E0B\u4E00\u6279\uFF1A\u7EE7\u7EED ${rounds} \u8F6E${cnOnly ? "\uFF08\u4EC5\u4E2D\u6587\uFF09" : ""}\uFF08\u7ED3\u679C\u81EA\u52A8\u4FDD\u5B58\uFF09\u2026`);
-      const res = await sendMessage({ type: "FH_EXPLORE_SEARCH_NEXT", srcTabId: srcTabId2, rounds, intervalMs: 150, chineseOnly: cnOnly || void 0 });
-      if (!res.ok) {
-        setSearchBusy(false);
-        logSr(`\u4E0B\u4E00\u6279\u5931\u8D25\uFF1A${res.error}`);
-      }
-    });
-    btnStop.addEventListener("click", () => {
-      void sendMessage({ type: "FH_EXPLORE_STOP" });
-      logSr("\u5DF2\u8BF7\u6C42\u7EC8\u6B62\u2026");
-    });
-    async function runMine(seedUsers) {
-      if (searchBusy) return;
-      if (!await ensureHostPermission()) {
-        setStatus(srHit, "\u9700\u8981\u6388\u6743\u8BBF\u95EE freeimage \u540E\u624D\u80FD\u6DF1\u6316", true);
-        return;
-      }
-      const rounds = Math.max(1, Math.min(50, Number(root.querySelector("#fh-sr-mine-rounds").value) || 5));
-      searchRounds = rounds;
-      srLog.innerHTML = "";
-      updateProgress(0);
-      setSearchBusy(true);
-      logSr(`\u4E2D\u6587\u6DF1\u6316\uFF1A${rounds} \u8F6E\uFF08\u6BCF\u8F6E\u63A2\u7D22\u8865\u7ED9 + \u5C5E\u4E3B\u6DF1\u6316\uFF09${seedUsers?.length ? `\uFF0C\u79CD\u5B50\u7528\u6237\uFF1A${seedUsers.join(", ")}` : ""}\u2026`);
-      const res = await sendMessage({ type: "FH_EXPLORE_MINE", srcTabId: srcTabId2, rounds, intervalMs: 200, seedUsers });
-      if (!res.ok) {
-        setSearchBusy(false);
-        logSr(`\u6DF1\u6316\u542F\u52A8\u5931\u8D25\uFF1A${res.error}`);
-      }
-    }
-    root.querySelector("#fh-sr-mine")?.addEventListener("click", () => void runMine());
-    root.querySelector("#fh-sr-mine-seed-add")?.addEventListener("click", () => {
-      const seeds = root.querySelector("#fh-sr-mine-seeds").value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
-      if (seeds.length === 0) {
-        setStatus(srHit, "\u8BF7\u8F93\u5165\u79CD\u5B50\u7528\u6237\u540D", true);
-        return;
-      }
-      void runMine(seeds);
-    });
-    function searchModeLabel(mode) {
-      return mode === "recent" ? "\u6700\u65B0" : mode === "popular" ? "\u70ED\u95E8" : "\u6700\u591A\u559C\u6B22";
-    }
-    function searchTypeLabel(type) {
-      return type === "albums" ? "\u76F8\u518C" : type === "images" ? "\u56FE\u7247" : "\u7528\u6237";
-    }
-    root.querySelector("#fh-sr-export")?.addEventListener("click", async () => {
-      const res = await sendMessage({ type: "FH_ALBUM_INDEX_EXPORT" });
-      if (!res.ok) {
-        setStatus(srHit, `\u5BFC\u51FA\u5931\u8D25\uFF1A${res.error}`, true);
-        return;
-      }
-      const blob = new Blob([res.json], { type: "application/json" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "freeimage-album-index.json";
-      a.click();
-      URL.revokeObjectURL(a.href);
-      logSr(`\u5DF2\u5BFC\u51FA\u8BB0\u5F55\u5E93\uFF08${Object.keys(fhAlbumIndex.entries).length} \u6761\uFF09`);
-    });
-    root.querySelector("#fh-sr-import")?.addEventListener("click", () => {
-      ;
-      root.querySelector("#fh-sr-import-file").click();
-    });
-    root.querySelector("#fh-sr-import-file")?.addEventListener("change", async (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        const db = JSON.parse(text);
-        const res = await sendMessage({
-          type: "FH_ALBUM_INDEX_IMPORT",
-          db
-        });
-        if (res.ok) {
-          logSr(`\u5BFC\u5165\u5408\u5E76\uFF1A${res.fhIndexImported.before} \u2192 ${res.fhIndexImported.after} \u6761`);
-          await refreshIndex();
-        } else {
-          setStatus(srHit, `\u5BFC\u5165\u5931\u8D25\uFF1A${res.error}`, true);
-        }
-      } catch (err) {
-        setStatus(srHit, `\u5BFC\u5165\u5931\u8D25\uFF1A${String(err)}`, true);
-      } finally {
-        ;
-        e.target.value = "";
-      }
-    });
-    root.querySelector("#fh-sr-clear")?.addEventListener("click", async () => {
-      if (!confirm("\u786E\u8BA4\u6E05\u7A7A\u8BB0\u5F55\u5E93\uFF1F")) return;
-      const res = await sendMessage({ type: "FH_ALBUM_INDEX_CLEAR" });
-      if (res.ok) {
-        await refreshIndex();
-        logSr("\u8BB0\u5F55\u5E93\u5DF2\u6E05\u7A7A");
-      }
-    });
-    root.querySelector("#fh-sr-run")?.addEventListener("click", () => runSearch());
-    srPrevBtn.addEventListener("click", () => {
-      if (searchPage > 0) {
-        searchPage--;
-        renderSearchPage();
-      }
-    });
-    srNextBtn.addEventListener("click", () => {
-      const pages = Math.max(1, Math.ceil(searchAll.length / SEARCH_PAGE_SIZE));
-      if (searchPage < pages - 1) {
-        searchPage++;
-        renderSearchPage();
-      }
-    });
-    const cnListEl = root.querySelector("#fh-sr-cn-list");
-    const cnPageEl = root.querySelector("#fh-cn-page");
-    const cnTotalEl = root.querySelector("#fh-cn-total");
-    const cnPrevBtn = root.querySelector("#fh-cn-prev");
-    const cnNextBtn = root.querySelector("#fh-cn-next");
-    const cnStatsEl = root.querySelector("#fh-cn-stats");
-    let fhCnAlbumIndex = emptyFhAlbumIndexDb();
-    let cnAll = [];
-    let cnPage = 0;
-    async function refreshCnIndex() {
-      const res = await sendMessage({ type: "FH_CN_INDEX_GET" });
-      if (res.ok) {
-        fhCnAlbumIndex = res.fhIndex;
-        cnStatsEl.textContent = `\u4E2D\u6587\u8BB0\u5F55 ${Object.keys(fhCnAlbumIndex.entries).length} \u6761\uFF08\u72EC\u7ACB\u6570\u636E\u8868\uFF09`;
-      }
-    }
-    function renderCnPage() {
-      const total = cnAll.length;
-      const pages = Math.max(1, Math.ceil(total / SEARCH_PAGE_SIZE));
-      if (cnPage >= pages) cnPage = pages - 1;
-      const slice = cnAll.slice(cnPage * SEARCH_PAGE_SIZE, (cnPage + 1) * SEARCH_PAGE_SIZE);
-      cnListEl.innerHTML = "";
-      if (total === 0) {
-        cnListEl.innerHTML = '<div class="empty-tip">\u6682\u65E0\u4E2D\u6587\u76F8\u518C\uFF08\u5148\u63A2\u7D22\u68C0\u7D22 / \u4E2D\u6587\u6DF1\u6316\u81EA\u52A8\u6536\u96C6\uFF09\u3002</div>';
-      }
-      for (const hit of slice) {
-        const block = document.createElement("div");
-        block.className = "search-hit";
-        const user = document.createElement("div");
-        user.className = "search-user";
-        const a = document.createElement("a");
-        a.href = hit.url;
-        a.target = "_blank";
-        a.textContent = hit.name;
-        user.appendChild(a);
-        const deg = document.createElement("span");
-        deg.className = "user-degree";
-        const srcLabel = hit.source === "mine" ? "\u6DF1\u6316" : hit.source === "mine-supply" ? "\u63A2\u7D22\u8865\u7ED9" : hit.source === "mine-seed" ? "\u624B\u52A8\u79CD\u5B50" : "\u63A2\u7D22";
-        deg.textContent = `${hit.username ? `\u5C5E\u4E3B ${hit.username} \xB7 ` : ""}${srcLabel}`;
-        user.appendChild(deg);
-        block.appendChild(user);
-        cnListEl.appendChild(block);
-      }
-      cnPageEl.textContent = total > 0 ? `\u7B2C ${cnPage + 1}/${pages} \u9875` : "";
-      cnTotalEl.textContent = total > 0 ? `\u5171 ${total} \u4E2A\u4E2D\u6587\u76F8\u518C` : "";
-      cnPrevBtn.disabled = cnPage <= 0;
-      cnNextBtn.disabled = cnPage >= pages - 1;
-    }
-    root.querySelector("#fh-sr-cn-all")?.addEventListener("click", async () => {
-      await refreshCnIndex();
-      cnAll = Object.values(fhCnAlbumIndex.entries).sort((a, b) => b.collectedAt - a.collectedAt).map((e) => ({ name: e.name, url: e.url, username: e.username, source: e.source }));
-      cnPage = 0;
-      renderCnPage();
-    });
-    cnPrevBtn.addEventListener("click", () => {
-      if (cnPage > 0) {
-        cnPage--;
-        renderCnPage();
-      }
-    });
-    cnNextBtn.addEventListener("click", () => {
-      const pages = Math.max(1, Math.ceil(cnAll.length / SEARCH_PAGE_SIZE));
-      if (cnPage < pages - 1) {
-        cnPage++;
-        renderCnPage();
-      }
-    });
-    root.querySelector("#fh-cn-run")?.addEventListener("click", async () => {
-      const kw = root.querySelector("#fh-cn-keywords").value;
-      const keywords = kw.split(/[,，]/).map((k) => k.trim()).filter(Boolean);
-      if (keywords.length === 0) {
-        cnListEl.innerHTML = '<div class="empty-tip">\u8BF7\u8F93\u5165\u4E2D\u6587\u5173\u952E\u8BCD\u3002</div>';
-        return;
-      }
-      await refreshCnIndex();
-      const all = Object.values(fhCnAlbumIndex.entries).map((e) => ({ name: e.name, url: e.url, username: e.username }));
-      cnAll = matchAlbumKeywords(all, keywords).map((h) => ({ name: h.name, url: h.url, username: h.username, source: "" }));
-      cnPage = 0;
-      renderCnPage();
-    });
-    root.querySelector("#fh-cn-export")?.addEventListener("click", async () => {
-      const res = await sendMessage({ type: "FH_CN_INDEX_EXPORT" });
-      if (!res.ok) {
-        setStatus(cnStatsEl, `\u5BFC\u51FA\u5931\u8D25\uFF1A${res.error}`, true);
-        return;
-      }
-      const blob = new Blob([res.json], { type: "application/json" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "freeimage-cn-albums.json";
-      a.click();
-      URL.revokeObjectURL(a.href);
-      setStatus(cnStatsEl, "\u5DF2\u5BFC\u51FA freeimage-cn-albums.json");
-    });
-    root.querySelector("#fh-cn-import")?.addEventListener("click", () => {
-      ;
-      root.querySelector("#fh-cn-import-file").click();
-    });
-    root.querySelector("#fh-cn-import-file")?.addEventListener("change", async (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        const db = JSON.parse(text);
-        const res = await sendMessage({
-          type: "FH_CN_INDEX_IMPORT",
-          db
-        });
-        if (res.ok) {
-          setStatus(cnStatsEl, `\u5BFC\u5165\u5408\u5E76\uFF1A${res.fhIndexImported.before} \u2192 ${res.fhIndexImported.after} \u6761`);
-          await refreshCnIndex();
-        } else setStatus(cnStatsEl, `\u5BFC\u5165\u5931\u8D25\uFF1A${res.error}`, true);
-      } catch (err) {
-        setStatus(cnStatsEl, `\u5BFC\u5165\u5931\u8D25\uFF1A${String(err)}`, true);
-      } finally {
-        ;
-        e.target.value = "";
-      }
-    });
-    root.querySelector("#fh-cn-clear")?.addEventListener("click", async () => {
-      if (!confirm("\u786E\u8BA4\u6E05\u7A7A\u4E2D\u6587\u76F8\u518C\u8BB0\u5F55\u8868\uFF1F")) return;
-      const res = await sendMessage({ type: "FH_CN_INDEX_CLEAR" });
-      if (res.ok) {
-        await refreshCnIndex();
-        cnListEl.innerHTML = "";
-      }
-    });
-    async function refreshIndex() {
-      const res = await sendMessage({ type: "FH_ALBUM_INDEX_GET" });
-      if (res.ok) {
-        fhAlbumIndex = res.fhIndex;
-        renderIndexStats();
-      }
-    }
-    const fwUserInput = root.querySelector("#fh-fw-user");
-    const fwStatus = root.querySelector("#fh-fw-status");
-    const fwList = root.querySelector("#fh-fw-list");
-    const btnFwStart = root.querySelector("#fh-fw-start");
-    const btnFwNext = root.querySelector("#fh-fw-next");
-    let fwUsers = [];
-    let fwBatchStart = 0;
-    let fwScanPending = false;
-    const FW_BATCH = 30;
-    function renderFollowingList() {
-      fwList.innerHTML = "";
-      if (fwUsers.length === 0) {
-        fwList.innerHTML = '<div class="empty-tip">\u6682\u65E0\u7528\u6237\u3002\u8BF7\u5148\u5F00\u59CB\u5206\u6790\u3002</div>';
-        return;
-      }
-      for (const u of fwUsers) {
-        const card = document.createElement("div");
-        card.className = "bd-link-card";
-        const info = document.createElement("div");
-        info.className = "bd-link-info";
-        const title = document.createElement("div");
-        title.className = "bd-link-title";
-        title.textContent = u.username;
-        info.append(title);
-        const btn = document.createElement("button");
-        btn.className = "btn";
-        btn.textContent = "\u6253\u5F00\u4E3B\u9875";
-        btn.addEventListener("click", () => void openTab(u.url));
-        card.append(info, btn);
-        fwList.appendChild(card);
-      }
-    }
-    function renderFwScan(entries) {
-      fwList.innerHTML = "";
-      if (entries.length === 0) {
-        fwList.innerHTML = '<div class="empty-tip">\u672C\u6279\u65E0\u6709\u6548\u7528\u6237\uFF08\u65E0\u76F8\u518C\u6216\u5185\u5BB9\u4E3A 0 \u7684\u7528\u6237\u5DF2\u8DF3\u8FC7\uFF09\u3002</div>';
-      }
-      for (const entry of entries) {
-        const card = document.createElement("div");
-        card.className = "following-card";
-        const head = document.createElement("div");
-        head.className = "following-head";
-        const name = document.createElement("span");
-        name.className = "following-name";
-        name.textContent = `${entry.username}\uFF08\u76F8\u518C ${entry.albumCount}\uFF09`;
-        head.append(name);
-        card.appendChild(head);
-        const links = document.createElement("div");
-        links.className = "following-covers";
-        const preview = document.createElement("div");
-        preview.className = "bd-link-meta";
-        preview.textContent = entry.albums.slice(0, 10).map((a) => a.name).join(" / ") || "\uFF08\u65E0\u76F8\u518C\uFF09";
-        links.appendChild(preview);
-        card.appendChild(links);
-        const btn = document.createElement("button");
-        btn.className = "btn";
-        btn.textContent = "\u6253\u5F00\u4E3B\u9875";
-        btn.style.margin = "4px";
-        btn.addEventListener("click", () => void openTab(`https://freeimage.host/${entry.username}`));
-        card.appendChild(btn);
-        fwList.appendChild(card);
-      }
-      const remaining = fwUsers.length - fwBatchStart;
-      setStatus(fwStatus, `\u5DF2\u5206\u6790 ${fwBatchStart}/${fwUsers.length} \u7528\u6237${remaining > 0 ? `\uFF0C\u5269\u4F59 ${remaining}\uFF08\u53EF\u4E0B\u4E00\u6279\uFF09` : "\uFF0C\u5168\u90E8\u5B8C\u6210"}`);
-      btnFwNext.disabled = remaining <= 0;
-    }
-    async function runFwBatch() {
-      const batch = fwUsers.slice(fwBatchStart, fwBatchStart + FW_BATCH);
-      if (batch.length === 0) {
-        setStatus(fwStatus, "\u6CA1\u6709\u66F4\u591A\u7528\u6237");
-        return;
-      }
-      fwBatchStart += FW_BATCH;
-      setStatus(fwStatus, `\u5206\u6790\u7B2C ${Math.ceil(fwBatchStart / FW_BATCH)} \u6279\uFF08${batch.length} \u7528\u6237\uFF0C\u9010\u4E2A\u67E5\u76F8\u518C\uFF09\u2026`);
-      fwScanPending = true;
-      const res = await sendMessage({
-        type: "FH_SCAN_PRODUCERS",
-        srcTabId: srcTabId2,
-        usernames: batch.map((u) => u.username),
-        intervalMs: 200
-      });
-      if (!res.ok) {
-        fwScanPending = false;
-        setStatus(fwStatus, `\u5206\u6790\u5931\u8D25\uFF1A${res.error}`, true);
-      }
-    }
-    btnFwStart.addEventListener("click", async () => {
-      const username = fwUserInput.value.trim();
-      if (!username) {
-        setStatus(fwStatus, "\u8BF7\u586B\u5199\u7528\u6237\u540D", true);
-        return;
-      }
-      if (!await ensureHostPermission()) {
-        setStatus(fwStatus, "\u9700\u8981\u6388\u6743\u8BBF\u95EE freeimage \u540E\u624D\u80FD\u5206\u6790", true);
-        return;
-      }
-      const side = root.querySelector('input[name="fh-fw-side"]:checked')?.value ?? "both";
-      setStatus(fwStatus, `\u6293\u53D6\u5173\u6CE8\u5173\u7CFB\uFF08${username}\uFF09\u2026`);
-      fwUsers = [];
-      fwBatchStart = 0;
-      const side2 = side === "following" || side === "followers" ? side : "both";
-      const res = await sendMessage({ type: "FH_FETCH_FOLLOWING", srcTabId: srcTabId2, username, side: side2 });
-      if (!res.ok) setStatus(fwStatus, `\u6293\u53D6\u5931\u8D25\uFF1A${res.error}`, true);
-    });
-    btnFwNext.addEventListener("click", () => void runFwBatch());
-    const dfUserInput = root.querySelector("#fh-df-user");
-    const dfStatus = root.querySelector("#fh-df-status");
-    const dfProgress = root.querySelector("#fh-df-progress");
-    const df429 = root.querySelector("#fh-df-429");
-    const dfLogEl = root.querySelector("#fh-df-log");
-    const dfBatchFill = root.querySelector("#fh-df-batch-fill");
-    const dfBatchText = root.querySelector("#fh-df-batch-text");
-    const dfHistoryBody = root.querySelector("#fh-df-history tbody");
-    const btnDfStart = root.querySelector("#fh-df-start");
-    const btnDfNext = root.querySelector("#fh-df-next");
-    let dfHistoryCount = 0;
-    function logDf(text) {
-      const div = document.createElement("div");
-      div.textContent = text;
-      dfLogEl.appendChild(div);
-      while (dfLogEl.childElementCount > 200) dfLogEl.firstElementChild?.remove();
-      dfLogEl.scrollTop = dfLogEl.scrollHeight;
-    }
-    function renderDiffuseSnapshot(snap) {
-      setStatus(dfProgress, `\u961F\u5217 ${snap.queueSize} \xB7 \u5DF2\u8BBF\u95EE ${snap.visitedTotal} \xB7 \u5165\u5EA6\u8868 ${snap.inDegreeSize} \xB7 \u8BF7\u6C42 ${snap.totalRequests}`);
-      setStatus(df429, snap.consecutive429 > 0 ? `\u8FDE\u7EED ${snap.consecutive429} \u6B21` : "");
-      dfBatchFill.style.width = "0%";
-      dfBatchText.textContent = "";
-    }
-    async function runDiffuseBatch() {
-      setStatus(dfStatus, "\u6269\u6563\u6279\u6B21\u5904\u7406\u4E2D\u2026");
-      const res = await sendMessage({ type: "FH_DIFFUSE_BATCH", srcTabId: srcTabId2, batchSize: 50, concurrency: 4, intervalMs: 500 });
-      if (!res.ok) {
-        setStatus(dfStatus, `\u6279\u6B21\u5931\u8D25\uFF1A${res.error}`, true);
-        return;
-      }
-      const { result, snapshot } = res;
-      renderDiffuseSnapshot(snapshot);
-      dfHistoryCount++;
-      const row = document.createElement("tr");
-      const cells = [
-        String(dfHistoryCount),
-        String(result.processed),
-        String(result.newUsers),
-        String(result.failed),
-        `${(result.durationMs / 1e3).toFixed(1)}s`,
-        `${result.avgRequestMs}ms`,
-        String(Object.keys(result.inDegreeDelta).length)
-      ];
-      for (const c of cells) {
-        const td = document.createElement("td");
-        td.textContent = c;
-        row.appendChild(td);
-      }
-      dfHistoryBody.appendChild(row);
-      logDf(`\u7B2C ${dfHistoryCount} \u6279\uFF1A\u5904\u7406 ${result.processed} \xB7 \u65B0\u589E ${result.newUsers} \xB7 \u5931\u8D25 ${result.failed} \xB7 \u5165\u5EA6+${Object.keys(result.inDegreeDelta).length} \xB7 ${(result.durationMs / 1e3).toFixed(1)}s`);
-      setStatus(dfStatus, result.done ? "\u6269\u6563\u5B8C\u6210\uFF08\u961F\u5217\u8017\u5C3D\uFF09" : `\u961F\u5217\u5269\u4F59 ${result.queueSize}\uFF0C\u53EF\u7EE7\u7EED\u4E0B\u4E00\u6279`);
-    }
-    btnDfStart.addEventListener("click", async () => {
-      const user = dfUserInput.value.trim();
-      if (!user) {
-        setStatus(dfStatus, "\u8BF7\u586B\u5199\u8D77\u70B9\u7528\u6237\u540D", true);
-        return;
-      }
-      if (!await ensureHostPermission()) {
-        setStatus(dfStatus, "\u9700\u8981\u6388\u6743\u8BBF\u95EE freeimage \u540E\u624D\u80FD\u6269\u6563", true);
-        return;
-      }
-      dfHistoryCount = 0;
-      dfHistoryBody.innerHTML = "";
-      dfLogEl.innerHTML = "";
-      const res = await sendMessage({ type: "FH_DIFFUSE_START", srcTabId: srcTabId2, startUser: user });
-      if (!res.ok) {
-        setStatus(dfStatus, `\u542F\u52A8\u5931\u8D25\uFF1A${res.error}`, true);
-        return;
-      }
-      logDf(`\u25B6 \u6269\u6563\u542F\u52A8\uFF1A\u8D77\u70B9 ${user}`);
-      await runDiffuseBatch();
-    });
-    btnDfNext.addEventListener("click", () => void runDiffuseBatch());
-    const dbStatus = root.querySelector("#fh-db-status");
-    const scoreStatus = root.querySelector("#fh-score-status");
-    const btnScoreStart = root.querySelector("#fh-score-start");
-    const btnScoreNext = root.querySelector("#fh-score-next");
-    const btnScoreStop = root.querySelector("#fh-score-stop");
-    const rankScoreEl = root.querySelector("#fh-rank-score");
-    const rankDegreeEl = root.querySelector("#fh-rank-degree");
-    const rankAlbumEl = root.querySelector("#fh-rank-album");
-    let lastW1 = 0.6;
-    function renderRankList(el, items) {
-      el.innerHTML = "";
-      if (!items || items.length === 0) {
-        el.innerHTML = '<div class="empty-tip">\uFF08\u7A7A\uFF09</div>';
-        return;
-      }
-      for (const it of items.slice(0, 30)) {
-        const row = document.createElement("div");
-        row.className = "user-row";
-        const u = document.createElement("span");
-        u.className = "user-name";
-        u.textContent = it.username;
-        const d = document.createElement("span");
-        d.className = "user-degree";
-        d.textContent = `\u5165\u5EA6 ${it.inDegree}${it.albumCount !== void 0 ? ` \xB7 \u76F8\u518C ${it.albumCount}` : ""}${it.score !== void 0 ? ` \xB7 \u5F97\u5206 ${it.score.toFixed(2)}` : ""}`;
-        row.append(u, d);
-        el.appendChild(row);
-      }
-    }
-    async function loadDiffuseDb() {
-      lastW1 = Math.max(0, Math.min(100, Number(root.querySelector("#fh-w1").value) || 60)) / 100;
-      const topN = Math.max(10, Math.min(500, Number(root.querySelector("#fh-rank-n").value) || 100));
-      const res = await sendMessage({ type: "FH_DIFFUSE_DB_GET", w1: lastW1, topN });
-      if (!res.ok) {
-        setStatus(dbStatus, `\u8BFB\u53D6\u5931\u8D25\uFF1A${res.error}`, true);
-        return;
-      }
-      setStatus(dbStatus, `\u5E93\uFF1A${res.total ?? 0} \u7528\u6237\uFF08\u5DF2\u786E\u8BA4 ${res.confirmed ?? 0}\uFF09`);
-      renderRankList(rankScoreEl, res.rankScore ?? []);
-      renderRankList(rankDegreeEl, res.rankDegree ?? []);
-      renderRankList(rankAlbumEl, res.rankAlbum ?? []);
-      root.querySelector("#fh-rank-score-n").textContent = String(topN);
-      root.querySelector("#fh-rank-degree-n").textContent = String(topN);
-      root.querySelector("#fh-rank-album-n").textContent = String(topN);
-    }
-    root.querySelector("#fh-db-save")?.addEventListener("click", async () => {
-      const res = await sendMessage({ type: "FH_DIFFUSE_DB_SAVE", source: "grabber" });
-      if (res.ok) {
-        setStatus(dbStatus, `\u5DF2\u5408\u5E76\u5165\u5E93\uFF1A${res.total} \u7528\u6237\uFF08\u786E\u8BA4 ${res.confirmed}\uFF09`);
-        await loadDiffuseDb();
-      } else setStatus(dbStatus, `\u4FDD\u5B58\u5931\u8D25\uFF1A${res.error}`, true);
-    });
-    root.querySelector("#fh-db-load")?.addEventListener("click", () => void loadDiffuseDb());
-    root.querySelector("#fh-db-reset")?.addEventListener("click", async () => {
-      if (!confirm("\u91CD\u7F6E\u6240\u6709\u786E\u8BA4\u72B6\u6001\uFF08\u4FDD\u7559\u5165\u5EA6\uFF09\uFF1F")) return;
-      const res = await sendMessage({ type: "FH_DIFFUSE_DB_RESET_CONFIRM" });
-      if (res.ok) {
-        setStatus(dbStatus, `\u5DF2\u91CD\u7F6E\u786E\u8BA4\u72B6\u6001\uFF08${res.total} \u7528\u6237\uFF09`);
-        await loadDiffuseDb();
-      }
-    });
-    root.querySelector("#fh-db-clear")?.addEventListener("click", async () => {
-      if (!confirm("\u786E\u8BA4\u6E05\u7A7A freeimage \u751F\u4EA7\u8005\u5E93\uFF1F")) return;
-      const res = await sendMessage({ type: "FH_DIFFUSE_DB_CLEAR" });
-      if (res.ok) {
-        setStatus(dbStatus, "\u5DF2\u6E05\u7A7A");
-        await loadDiffuseDb();
-      }
-    });
-    async function runScoreBatch() {
-      btnScoreStart.disabled = true;
-      btnScoreNext.disabled = true;
-      btnScoreStop.disabled = false;
-      const w1 = Math.max(0, Math.min(100, Number(root.querySelector("#fh-w1").value) || 60)) / 100;
-      setStatus(scoreStatus, "\u786E\u8BA4\u8BC4\u5206\u4E2D\u2026");
-      const res = await sendMessage({ type: "FH_DIFFUSE_SCORE_BATCH", srcTabId: srcTabId2, batchSize: 50, concurrency: 4, intervalMs: 800, order: "inDegree", w1, w2: 1 - w1 });
-      btnScoreStart.disabled = false;
-      btnScoreNext.disabled = false;
-      btnScoreStop.disabled = true;
-      if (!res.ok) {
-        setStatus(scoreStatus, `\u786E\u8BA4\u5931\u8D25\uFF1A${res.error}`, true);
-        return;
-      }
-      const s = res.score;
-      setStatus(scoreStatus, `\u786E\u8BA4 ${s.processed} \u4EBA\uFF1A\u6709\u76F8\u518C ${s.withAlbums} \xB7 \u96F6\u76F8\u518C ${s.zeroAlbums} \xB7 \u5931\u8D25 ${s.failed} \xB7 \u5269\u4F59\u672A\u786E\u8BA4 ${res.unconfirmed ?? 0}${s.done ? "\uFF08\u5168\u90E8\u786E\u8BA4\u5B8C\u6BD5\uFF09" : ""}`);
-      await loadDiffuseDb();
-    }
-    btnScoreStart.addEventListener("click", () => void runScoreBatch());
-    btnScoreNext.addEventListener("click", () => void runScoreBatch());
-    btnScoreStop.addEventListener("click", () => {
-      void sendMessage({ type: "FH_DIFFUSE_SCORE_STOP" });
-      setStatus(scoreStatus, "\u5DF2\u8BF7\u6C42\u505C\u6B62\u2026");
-    });
-    const dfKeywordsInput = root.querySelector("#fh-df-keywords");
-    const dfPctInput = root.querySelector("#fh-df-pct");
-    const dfPctVal = root.querySelector("#fh-df-pct-val");
-    const dfSearchStatus = root.querySelector("#fh-df-search-status");
-    const dfResultsEl = root.querySelector("#fh-df-results");
-    dfPctInput?.addEventListener("input", () => {
-      if (dfPctVal) dfPctVal.textContent = dfPctInput.value;
-    });
-    root.querySelector("#fh-df-search")?.addEventListener("click", async () => {
-      const keywords = (dfKeywordsInput.value || "").split(/[,，]/).map((k) => k.trim()).filter(Boolean);
-      if (keywords.length === 0) {
-        setStatus(dfSearchStatus, "\u8BF7\u8F93\u5165\u5173\u952E\u8BCD", true);
-        return;
-      }
-      const pct = Number(dfPctInput?.value) || 100;
-      const w1 = Math.max(0, Math.min(100, Number(root.querySelector("#fh-w1").value) || 60)) / 100;
-      setStatus(dfSearchStatus, "\u68C0\u7D22\u4E2D\u2026");
-      const res = await sendMessage({ type: "FH_DIFFUSE_SEARCH_START", keywords, fromPct: 0, toPct: pct, w1, w2: 1 - w1 });
-      if (!res.ok) {
-        setStatus(dfSearchStatus, `\u68C0\u7D22\u5931\u8D25\uFF1A${res.error}`, true);
-        return;
-      }
-      const search = res.search;
-      dfResultsEl.innerHTML = "";
-      if (search.matches.length === 0) {
-        dfResultsEl.innerHTML = '<div class="empty-tip">\u65E0\u547D\u4E2D</div>';
-      }
-      for (const m of search.matches.slice(0, 50)) {
-        const block = document.createElement("div");
-        block.className = "search-hit";
-        const user = document.createElement("div");
-        user.className = "search-user";
-        const a = document.createElement("a");
-        a.href = `https://freeimage.host/${m.username}`;
-        a.target = "_blank";
-        a.textContent = m.username;
-        const deg = document.createElement("span");
-        deg.className = "user-degree";
-        deg.textContent = `\u5165\u5EA6 ${m.inDegree}`;
-        user.append(a, deg);
-        block.appendChild(user);
-        for (const alb of m.albums) {
-          const line = document.createElement("div");
-          line.className = "search-album";
-          const la = document.createElement("a");
-          la.href = alb.url;
-          la.target = "_blank";
-          la.textContent = alb.name;
-          line.appendChild(la);
-          block.appendChild(line);
-        }
-        dfResultsEl.appendChild(block);
-      }
-      setStatus(dfSearchStatus, `\u547D\u4E2D ${search.matches.length} \u6761`);
-    });
-    root.querySelector("#fh-db-export")?.addEventListener("click", async () => {
-      const res = await sendMessage({ type: "FH_DIFFUSE_DB_EXPORT" });
-      if (!res.ok) {
-        setStatus(root.querySelector("#fh-db-local-status"), `\u5BFC\u51FA\u5931\u8D25\uFF1A${res.error}`, true);
-        return;
-      }
-      const blob = new Blob([res.json], { type: "application/json" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "freeimage-diffuse-db.json";
-      a.click();
-      URL.revokeObjectURL(a.href);
-      setStatus(root.querySelector("#fh-db-local-status"), "\u5DF2\u5BFC\u51FA freeimage-diffuse-db.json");
-    });
-    root.querySelector("#fh-db-import")?.addEventListener("click", () => {
-      ;
-      root.querySelector("#fh-db-import-file").click();
-    });
-    root.querySelector("#fh-db-import-file")?.addEventListener("change", async (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        const db = JSON.parse(text);
-        const res = await sendMessage({ type: "FH_DIFFUSE_DB_IMPORT", db });
-        if (res.ok) {
-          setStatus(root.querySelector("#fh-db-local-status"), `\u5BFC\u5165\u5408\u5E76\uFF1A${res.github?.message ?? "\u5B8C\u6210"}\uFF08\u5E93 ${res.total} \u7528\u6237\uFF09`);
-          await loadDiffuseDb();
-        } else setStatus(root.querySelector("#fh-db-local-status"), `\u5BFC\u5165\u5931\u8D25\uFF1A${res.error}`, true);
-      } catch (err) {
-        setStatus(root.querySelector("#fh-db-local-status"), `\u5BFC\u5165\u5931\u8D25\uFF1A${String(err)}`, true);
-      } finally {
-        ;
-        e.target.value = "";
-      }
-    });
-    const pdStatus = root.querySelector("#fh-pd-status");
-    const pdLog = root.querySelector("#fh-pd-log");
-    const pdCandidates = root.querySelector("#fh-pd-candidates");
-    const pdDb = root.querySelector("#fh-pd-db");
-    const pdDbStatus = root.querySelector("#fh-pd-db-status");
-    let currentFilter = "all";
-    function logPd(text) {
-      const div = document.createElement("div");
-      div.textContent = text;
-      pdLog.appendChild(div);
-      while (pdLog.childElementCount > 200) pdLog.firstElementChild?.remove();
-      pdLog.scrollTop = pdLog.scrollHeight;
-    }
-    async function annotate(username, status, reason) {
-      if (status === null) {
-        const res = await sendMessage({ type: "FH_PRODUCER_CLEAR", username });
-        if (res.ok) logPd(`\u5DF2\u6E05\u9664\u6807\u6CE8\uFF1A${username}`);
-      } else {
-        const res = await sendMessage({ type: "FH_PRODUCER_SAVE", username, status, reason });
-        if (res.ok) logPd(`\u5DF2\u6807\u6CE8\u300C${status}\u300D\uFF1A${username}${reason ? `\uFF08${reason}\uFF09` : ""}`);
-      }
-      await refreshProducerDb();
-    }
-    async function refreshProducerDb() {
-      const res = await sendMessage({ type: "FH_PRODUCER_GET" });
-      if (res.ok) {
-        producerDb = res.fh;
-        renderDb();
-      }
-    }
-    function renderCandidates() {
-      pdCandidates.innerHTML = "";
-      if (scanEntries.length === 0) {
-        pdCandidates.innerHTML = '<div class="empty-tip">\u6682\u65E0\u5019\u9009\u7528\u6237\u3002\u70B9\u300C\u4E0B\u4E00\u8F6E\u6269\u6563\u300D\u5F00\u59CB\u91C7\u96C6\u3002</div>';
-        return;
-      }
-      for (const entry of scanEntries) {
-        const marked = producerDb.entries[entry.username];
-        const card = document.createElement("div");
-        card.className = "following-card";
-        const head = document.createElement("div");
-        head.className = "following-head";
-        const name = document.createElement("span");
-        name.className = "following-name";
-        name.textContent = `${entry.username}\uFF08\u76F8\u518C ${entry.albumCount}\uFF09${marked ? ` [${marked.status === "target" ? "\u76EE\u6807" : "\u5DF2\u6392\u9664"}]` : ""}`;
-        head.append(name);
-        card.appendChild(head);
-        const links = document.createElement("div");
-        links.className = "following-covers";
-        const preview = document.createElement("div");
-        preview.className = "bd-link-meta";
-        preview.textContent = entry.albums.slice(0, 12).map((a) => a.name).join(" / ") || "\uFF08\u65E0\u76F8\u518C\uFF09";
-        links.appendChild(preview);
-        card.appendChild(links);
-        const actions = document.createElement("div");
-        actions.className = "row";
-        const reasonInput = document.createElement("input");
-        reasonInput.className = "text-input";
-        reasonInput.placeholder = "\u7406\u7531\uFF08\u53EF\u9009\uFF09";
-        reasonInput.value = marked?.reason ?? "";
-        const btnTarget = document.createElement("button");
-        btnTarget.className = "btn";
-        btnTarget.textContent = "\u76EE\u6807";
-        btnTarget.addEventListener("click", () => void annotate(entry.username, "target", reasonInput.value.trim() || void 0));
-        const btnExclude = document.createElement("button");
-        btnExclude.className = "btn danger";
-        btnExclude.textContent = "\u6392\u9664";
-        btnExclude.addEventListener("click", () => void annotate(entry.username, "excluded", reasonInput.value.trim() || void 0));
-        const btnClear = document.createElement("button");
-        btnClear.className = "btn";
-        btnClear.textContent = "\u6E05\u9664\u6807\u6CE8";
-        btnClear.addEventListener("click", () => void annotate(entry.username, null));
-        const btnUser = document.createElement("button");
-        btnUser.className = "btn";
-        btnUser.textContent = "\u6253\u5F00\u4E3B\u9875";
-        btnUser.addEventListener("click", () => void openTab(`https://freeimage.host/${entry.username}`));
-        actions.append(reasonInput, btnTarget, btnExclude, btnClear, btnUser);
-        card.appendChild(actions);
-        pdCandidates.appendChild(card);
-      }
-    }
-    function renderDb() {
-      pdDb.innerHTML = "";
-      const entries = Object.values(producerDb.entries).filter((e) => currentFilter === "all" ? true : e.status === currentFilter).sort((a, b) => (b.notedAt ?? b.seenAt) - (a.notedAt ?? a.seenAt));
-      if (entries.length === 0) {
-        pdDb.innerHTML = '<div class="empty-tip">\u7C7B\u7FA4\u5E93\u4E3A\u7A7A\u3002\u6269\u6563\u540E\u5BF9\u5019\u9009\u7528\u6237\u6807\u6CE8\u76EE\u6807/\u6392\u9664\u3002</div>';
-        return;
-      }
-      for (const e of entries) {
-        const row = document.createElement("div");
-        row.className = "bd-link-card";
-        const info = document.createElement("div");
-        info.className = "bd-link-info";
-        const title = document.createElement("div");
-        title.className = "bd-link-title";
-        title.textContent = `${e.username} [${e.status === "target" ? "\u76EE\u6807" : "\u5DF2\u6392\u9664"}]${e.reason ? ` \u2014 ${e.reason}` : ""}`;
-        const meta = document.createElement("div");
-        meta.className = "bd-link-meta";
-        meta.textContent = `\u76F8\u518C ${e.albumCount ?? "?"} \u4E2A \xB7 ${e.albums?.slice(0, 5).map((a) => a.name).join(" / ") || "\uFF08\u65E0\u76F8\u518C\u7EBF\u7D22\uFF09"}`;
-        info.append(title, meta);
-        const actions = document.createElement("div");
-        actions.className = "bd-batch-actions";
-        const btnUser = document.createElement("button");
-        btnUser.className = "btn";
-        btnUser.textContent = "\u6253\u5F00\u4E3B\u9875";
-        btnUser.addEventListener("click", () => void openTab(`https://freeimage.host/${e.username}`));
-        const btnAlbums = document.createElement("button");
-        btnAlbums.className = "btn";
-        btnAlbums.textContent = "\u6253\u5F00\u76F8\u518C";
-        btnAlbums.addEventListener("click", () => void openTab(`https://freeimage.host/${e.username}/albums`));
-        const btnClear = document.createElement("button");
-        btnClear.className = "btn";
-        btnClear.textContent = "\u6E05\u9664";
-        btnClear.addEventListener("click", () => void annotate(e.username, null));
-        actions.append(btnUser, btnAlbums, btnClear);
-        row.append(info, actions);
-        pdDb.appendChild(row);
-      }
-    }
-    root.querySelector("#fh-pd-round")?.addEventListener("click", async () => {
-      if (roundStage !== "idle") {
-        setStatus(pdStatus, "\u4E0A\u4E00\u8F6E\u5C1A\u672A\u5B8C\u6210\uFF0C\u8BF7\u7A0D\u5019", true);
-        return;
-      }
-      if (!await ensureHostPermission()) {
-        setStatus(pdStatus, "\u9700\u8981\u6388\u6743\u8BBF\u95EE freeimage \u540E\u624D\u80FD\u6269\u6563", true);
-        return;
-      }
-      roundPageSize = Math.max(1, Math.min(5, Number(root.querySelector("#fh-pd-pages").value) || 2));
-      roundSample = Math.max(1, Math.min(36, Number(root.querySelector("#fh-pd-sample").value) || 12));
-      const from = exploreCursor + 1;
-      exploreCursor += roundPageSize;
-      roundStage = "explore";
-      setStatus(pdStatus, `\u7B2C ${from}~${exploreCursor} \u9875\u63A2\u7D22\u9875\u91C7\u96C6\u2026`);
-      logPd(`\u4E0B\u4E00\u8F6E\u6269\u6563\uFF1A\u63A2\u7D22\u9875 ${from}~${exploreCursor} \u9875\uFF0C\u91C7\u6837 ${roundSample} \u5F20/\u9875`);
-      const res = await sendMessage({ type: "FH_FETCH_EXPLORE", srcTabId: srcTabId2, pageFrom: from, pageTo: exploreCursor });
-      if (!res.ok) {
-        roundStage = "idle";
-        setStatus(pdStatus, `\u63A2\u7D22\u9875\u91C7\u96C6\u5931\u8D25\uFF1A${res.error}`, true);
-      }
-    });
-    root.querySelector("#fh-pd-export")?.addEventListener("click", async () => {
-      const res = await sendMessage({ type: "FH_PRODUCER_EXPORT" });
-      if (!res.ok) {
-        setStatus(pdDbStatus, `\u5BFC\u51FA\u5931\u8D25\uFF1A${res.error}`, true);
-        return;
-      }
-      const blob = new Blob([res.json], { type: "application/json" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "freeimage-producers.json";
-      a.click();
-      URL.revokeObjectURL(a.href);
-      setStatus(pdDbStatus, "\u5DF2\u5BFC\u51FA freeimage-producers.json");
-    });
-    root.querySelector("#fh-pd-import")?.addEventListener("click", () => {
-      ;
-      root.querySelector("#fh-pd-import-file").click();
-    });
-    root.querySelector("#fh-pd-import-file")?.addEventListener("change", async (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        const db = JSON.parse(text);
-        const res = await sendMessage({
-          type: "FH_PRODUCER_IMPORT",
-          db
-        });
-        if (res.ok) {
-          setStatus(pdDbStatus, `\u5BFC\u5165\u5408\u5E76\uFF1A${res.fhImported.before} \u2192 ${res.fhImported.after} \u7528\u6237`);
-          await refreshProducerDb();
-        } else {
-          setStatus(pdDbStatus, `\u5BFC\u5165\u5931\u8D25\uFF1A${res.error}`, true);
-        }
-      } catch (err) {
-        setStatus(pdDbStatus, `\u5BFC\u5165\u5931\u8D25\uFF1A${String(err)}`, true);
-      } finally {
-        ;
-        e.target.value = "";
-      }
-    });
-    root.querySelectorAll(".fh-db-filter").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        root.querySelectorAll(".fh-db-filter").forEach((b) => b.classList.remove("active"));
-        btn.classList.add("active");
-        currentFilter = btn.dataset.fhFilter ?? "all";
-        renderDb();
-      });
-    });
-    const handle = {
-      onResult(kind, data, done, error) {
-        switch (kind) {
-          case "user": {
-            homeGrabView.setBusyParsing(false);
-            if (error) {
-              homeGrabView.setParseText(`\u6293\u53D6\u5931\u8D25\uFF1A${error}`);
-            } else {
-              homeGrabView.appendImages(data.map(toGrabbed3));
-              homeGrabView.setParseText(done ? `\u5B8C\u6210\uFF1A${data.length} \u5F20` : "");
-            }
-            break;
-          }
-          case "album": {
-            albumGrabView.setBusyParsing(false);
-            if (error) {
-              albumGrabView.setParseText(`\u6293\u53D6\u5931\u8D25\uFF1A${error}`);
-            } else {
-              albumGrabView.appendImages(data.map(toGrabbed3));
-              albumGrabView.setParseText(done ? `\u5B8C\u6210\uFF1A${data.length} \u5F20` : "");
-            }
-            break;
-          }
-          case "albums": {
-            if (error) setStatus(albumsStatus, `\u5931\u8D25\uFF1A${error}`, true);
-            else {
-              renderAlbumGrid(data);
-              setStatus(albumsStatus, `\u7B2C ${albumsPage} \u9875\uFF1A${data.length} \u4E2A\u76F8\u518C`);
-            }
-            break;
-          }
-          case "explore-search": {
-            const p = data;
-            if (done) {
-              setSearchBusy(false);
-              updateProgress(searchRounds);
-              if (error) {
-                logSr(`\u6279\u6B21\u5931\u8D25\uFF1A${error}`);
-              } else if (p.more) {
-                btnNextBatch.disabled = false;
-                logSr(`\u6279\u6B21\u5B8C\u6210\uFF1A\u8BB0\u5F55\u5E93\u5DF2\u4FDD\u5B58 ${p.total} \u6761\uFF08\u53EF\u70B9\u300C\u4E0B\u4E00\u6279\u300D\u7EE7\u7EED\uFF09`);
-              } else {
-                logSr(`\u5DF2\u5230\u6700\u540E\u4E00\u9875\uFF1A\u8BB0\u5F55\u5E93\u5171\u4FDD\u5B58 ${p.total} \u6761\uFF08\u4F1A\u8BDD\u7ED3\u675F\uFF09`);
-              }
-              void refreshIndex();
-              void refreshCnIndex();
-            } else {
-              updateProgress(p.round);
-              logSr(`\u7B2C ${p.round} \u8F6E\uFF1A\u6293\u53D6\u7B2C ${p.pageFrom}~${p.pageTo} \u9875\uFF0C\u65B0\u589E ${p.added} \u6761\uFF0C\u7D2F\u8BA1 ${p.total} \u6761\uFF08\u5DF2\u4FDD\u5B58\uFF09`);
-              for (const e of p.newEntries.slice(0, 8)) {
-                logSr(`  \u2192 ${e.name}${e.username ? `\uFF08${e.username}\uFF09` : ""}`);
-              }
-              if (p.newEntries.length > 8) logSr(`  \u2026\u7B49\u5171 ${p.newEntries.length} \u6761`);
-              void refreshIndex();
-              void refreshCnIndex();
-            }
-            break;
-          }
-          case "explore-mine": {
-            const p = data;
-            if (done) {
-              setSearchBusy(false);
-              updateProgress(searchRounds);
-              logSr(error ? `\u6DF1\u6316\u5931\u8D25\uFF1A${error}` : `\u4E2D\u6587\u6DF1\u6316\u5B8C\u6210\uFF1A\u8BB0\u5F55\u5E93\u5171 ${p.total} \u6761\uFF08\u5DF2\u540C\u6B65\u4E2D\u6587\u8868\uFF09`);
-              void refreshIndex();
-              void refreshCnIndex();
-            } else {
-              updateProgress(p.round);
-              logSr(`\u6DF1\u6316\u7B2C ${p.round} \u8F6E\uFF1A${p.added} \u4E2A\u79CD\u5B50\uFF0C\u7D22\u5F15\u7D2F\u8BA1 ${p.total} \u6761\uFF08\u5DF2\u4FDD\u5B58\uFF09`);
-              void refreshIndex();
-              void refreshCnIndex();
-            }
-            break;
-          }
-          case "explore": {
-            const images = data;
-            exploreImages.push(...images);
-            if (roundStage === "explore") {
-              roundStage = "owners";
-              setStatus(pdStatus, `\u63A2\u7D22\u9875 ${images.length} \u5F20\uFF0C\u63D0\u53D6\u5C5E\u4E3B\u4E2D\u2026`);
-              void sendMessage({
-                type: "FH_EXTRACT_OWNER",
-                srcTabId: srcTabId2,
-                imageViewerUrls: images.map((i) => i.viewerUrl).filter(Boolean),
-                samplePerPage: roundSample,
-                intervalMs: 150
-              });
-            }
-            break;
-          }
-          case "owners": {
-            const list = data;
-            const seen = new Set(owners.map((o) => o.username));
-            for (const o of list) {
-              if (!seen.has(o.username)) {
-                seen.add(o.username);
-                owners.push(o);
-              }
-            }
-            if (roundStage === "owners") {
-              roundStage = "scan";
-              setStatus(pdStatus, `\u5C5E\u4E3B ${list.length} \u4E2A\uFF0C\u91C7\u96C6\u76F8\u518C\u540D\u4E2D\u2026`);
-              void sendMessage({
-                type: "FH_SCAN_PRODUCERS",
-                srcTabId: srcTabId2,
-                usernames: list.map((o) => o.username),
-                intervalMs: 150
-              });
-            }
-            break;
-          }
-          case "scan": {
-            const entries = data;
-            if (fwScanPending) {
-              fwScanPending = false;
-              renderFwScan(entries);
-              break;
-            }
-            scanEntries.push(...entries);
-            if (roundStage === "scan") {
-              roundStage = "idle";
-              renderCandidates();
-              setStatus(pdStatus, `\u672C\u8F6E\u6269\u6563\u5B8C\u6210\uFF1A\u5019\u9009 ${scanEntries.length} \u4E2A\u7528\u6237`);
-              logPd(`\u672C\u8F6E\u5B8C\u6210\uFF1A\u65B0\u589E\u7528\u6237 ${entries.length} \u4E2A`);
-            }
-            break;
-          }
-          case "following": {
-            if (error) {
-              setStatus(fwStatus, `\u6293\u53D6\u5931\u8D25\uFF1A${error}`, true);
-              break;
-            }
-            const users = data;
-            fwUsers = users;
-            fwBatchStart = 0;
-            setStatus(fwStatus, `\u5173\u6CE8\u5173\u7CFB\uFF1A${users.length} \u4E2A\u7528\u6237`);
-            if (users.length === 0) {
-              fwList.innerHTML = '<div class="empty-tip">\u8BE5\u7528\u6237\u65E0\u516C\u5F00\u5173\u6CE8\u5173\u7CFB\u3002</div>';
-              btnFwNext.disabled = true;
-            } else {
-              renderFollowingList();
-              btnFwNext.disabled = users.length <= FW_BATCH;
-              void runFwBatch();
-            }
-            break;
-          }
-        }
-      },
-      onScoreProgress(msg) {
-        setStatus(scoreStatus, `\u786E\u8BA4 ${msg.done}/${msg.total}\uFF1A${msg.username}\uFF08\u76F8\u518C ${msg.albumCount}\uFF09${msg.failed ? ` \xB7 \u5931\u8D25 ${msg.failed}` : ""}${msg.cancelled ? " \xB7 \u5DF2\u505C\u6B62" : ""}`);
-        if (msg.done >= msg.total || msg.cancelled) {
-          btnScoreStart.disabled = false;
-          btnScoreNext.disabled = false;
-          btnScoreStop.disabled = true;
-        }
-      },
-      onDownloadProgress(job) {
-        homeGrabView.setDownloadJob(job);
-        albumGrabView.setDownloadJob(job);
-      },
-      onDownloadDone(job) {
-        homeGrabView.setDownloadJob(job);
-        albumGrabView.setDownloadJob(job);
-      }
-    };
-    void refreshIndex();
-    void refreshCnIndex();
-    void refreshProducerDb();
-    return handle;
-  }
-
   // src/grabber/grabber.ts
-  var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260813180641" : "dev";
+  var logger8 = initLogger("grabber");
+  var BUILD_TIME = true ? "20260814004105" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
   var adaptersView = null;
   var buonduaView = null;
-  var freeimageView = null;
   function escapeHtml(text) {
     return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
   }
@@ -6609,13 +5388,11 @@
         imagesView.onDownloadProgress(msg.job);
         adaptersView?.onDownloadProgress(msg.job);
         buonduaView?.onDownloadProgress(msg.job);
-        freeimageView?.onDownloadProgress(msg.job);
         break;
       case "GRAB_DOWNLOAD_DONE":
         imagesView.onDownloadDone(msg.job);
         adaptersView?.onDownloadDone(msg.job);
         buonduaView?.onDownloadDone(msg.job);
-        freeimageView?.onDownloadDone(msg.job);
         break;
       case "GRAB_SESSION_END_FWD":
         imagesView.onSessionEnd();
@@ -6628,12 +5405,6 @@
         break;
       case "BD_RESULT":
         buonduaView?.onResult(msg.kind, msg.data, msg.done, msg.error);
-        break;
-      case "FH_RESULT":
-        freeimageView?.onResult(msg.kind, msg.data, msg.done, msg.error);
-        break;
-      case "FH_DIFFUSE_SCORE_PROGRESS_FWD":
-        freeimageView?.onScoreProgress(msg);
         break;
     }
   });
@@ -6663,7 +5434,7 @@
       if (concurrencyInput) concurrencyInput.value = String(n);
       void sendMessage({ type: "GRAB_SET_CONCURRENCY", concurrency: n }).then((res) => {
         if (res.ok) {
-          logger9.info("grabber", "\u4E0B\u8F7D\u5E76\u53D1\u5DF2\u8BBE\u7F6E", { concurrency: res.concurrency });
+          logger8.info("grabber", "\u4E0B\u8F7D\u5E76\u53D1\u5DF2\u8BBE\u7F6E", { concurrency: res.concurrency });
           if (pageInfo) {
             const old = pageInfo.innerHTML;
             pageInfo.innerHTML = old + `<br><span class="folder">\u4E0B\u8F7D\u5E76\u53D1\uFF1A${res.concurrency}</span>`;
@@ -6674,7 +5445,7 @@
     try {
       const currentTab = await chrome.tabs.getCurrent();
       const grabTabId = currentTab?.id ?? 0;
-      logger9.info("grabber", "\u5F00\u59CB\u521D\u59CB\u5316", { srcTabId, grabTabId });
+      logger8.info("grabber", "\u5F00\u59CB\u521D\u59CB\u5316", { srcTabId, grabTabId });
       let session;
       let lastError = "";
       let created = false;
@@ -6697,7 +5468,7 @@
           }
         } catch (err) {
           lastError = String(err);
-          logger9.warn("grabber", `\u4F1A\u8BDD\u6CE8\u518C\u7B2C ${attempt} \u6B21\u5931\u8D25\uFF0C\u91CD\u8BD5\u4E2D`, lastError);
+          logger8.warn("grabber", `\u4F1A\u8BDD\u6CE8\u518C\u7B2C ${attempt} \u6B21\u5931\u8D25\uFF0C\u91CD\u8BD5\u4E2D`, lastError);
         }
       }
       if (!created || !session) {
@@ -6710,14 +5481,13 @@
       initLogPanel(document.getElementById("panel-logs"));
       adaptersView = initAdaptersView(document.getElementById("panel-imgbb"), srcTabId, session.url);
       buonduaView = initBuonduaView(document.getElementById("panel-buondua"), srcTabId, session.url);
-      freeimageView = initFreeimageView(document.getElementById("panel-freeimage"), srcTabId, session.url);
       initTemplateView(document.getElementById("panel-template"));
       void withTimeout(sendMessage({ type: "GRAB_PARSE_START", srcTabId }), 5e3, "\u89E3\u6790\u542F\u52A8\u8D85\u65F6").then(() => {
-      }).catch((err) => logger9.warn("grabber", "\u89E3\u6790\u542F\u52A8\u5931\u8D25", String(err)));
-      logger9.info("grabber", "\u6293\u53D6\u9875\u5C31\u7EEA\uFF0C\u5DF2\u8BF7\u6C42\u89E3\u6790", { srcTabId, title: session.title });
+      }).catch((err) => logger8.warn("grabber", "\u89E3\u6790\u542F\u52A8\u5931\u8D25", String(err)));
+      logger8.info("grabber", "\u6293\u53D6\u9875\u5C31\u7EEA\uFF0C\u5DF2\u8BF7\u6C42\u89E3\u6790", { srcTabId, title: session.title });
     } catch (err) {
       if (pageInfo) pageInfo.textContent = "\u9519\u8BEF\uFF1A" + String(err);
-      logger9.error("grabber", "\u521D\u59CB\u5316\u5931\u8D25", String(err));
+      logger8.error("grabber", "\u521D\u59CB\u5316\u5931\u8D25", String(err));
     }
   })();
 })();
