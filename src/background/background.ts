@@ -20,6 +20,14 @@ import { storageGet, storageSet } from '../lib/storage'
 import type { GrabSession, ImgbbAlbum, ImgbbFollowingUser, ImgbbImage } from '../lib/types'
 import { ImgbbService } from './imgbb-service'
 import { BuonduaService } from './buondua-service'
+import { FreeimageService } from './freeimage-service'
+import { FhDiffuseEngine } from './freeimage-diffuse'
+import { parseExploreUsers } from '../lib/freeimage-parse'
+import { emptyFhProducerDb, loadFhProducerDb } from '../lib/freeimage-types'
+import type { FhProducerDb } from '../lib/freeimage-types'
+import { emptyFhAlbumIndexDb, loadFhAlbumIndexDb } from '../lib/freeimage-types'
+import type { FhAlbumIndexDb } from '../lib/freeimage-types'
+import type { FhOwner } from '../lib/freeimage-types'
 
 const logger = initLogger('background')
 
@@ -136,6 +144,201 @@ async function saveDiffuseState(): Promise<void> {
   } catch {
     // 忽略：session 存储失败不影响运行
   }
+}
+
+// ---------- freeimage 适配器服务（FP-007） ----------
+
+const freeimage = new FreeimageService()
+/** freeimage 类群标注库（fh_producer_db，持久化） */
+let fhProducerDb: FhProducerDb = emptyFhProducerDb()
+const FH_PRODUCER_DB_KEY = 'fh_producer_db'
+/** 标注库就绪（SW 启动时从 storage 异步恢复） */
+const fhProducerDbReady = (async (): Promise<void> => {
+  const raw = await storageGet<unknown>(FH_PRODUCER_DB_KEY)
+  fhProducerDb = loadFhProducerDb(raw)
+  logger.info('freeimage', '类群标注库已恢复', { total: Object.keys(fhProducerDb.entries).length })
+})()
+
+/** freeimage 结果数据类型（FH_RESULT data 联合） */
+type FhResultData =
+  | import('../lib/freeimage-types').FhImage[]
+  | import('../lib/freeimage-types').FhAlbum[]
+  | import('../lib/freeimage-types').FhOwner[]
+  | import('../lib/messages').ScanAlbumEntry[]
+  | import('../lib/messages').ExploreSearchProgress
+
+/** 向指定抓取页推送 freeimage 结果 */
+async function pushFhResult(
+  srcTabId: number,
+  kind: import('../lib/messages').FhResultKind,
+  data: FhResultData,
+  done: boolean,
+  error?: string,
+): Promise<void> {
+  const session = sessions.get(srcTabId)
+  if (!session) return
+  await sendToTab(session.grabTabId, { type: 'FH_RESULT', kind, data, done, error })
+}
+
+/** 探索检索批次执行（START/NEXT 共用）：抓取 → 合并入索引库（每轮持久化保存）→ 推送进度 */
+async function runSearchBatch(
+  srcTabId: number,
+  mode: import('../lib/messages').FhExploreMode,
+  list: import('../lib/messages').FhExploreType,
+  rounds: number,
+  intervalMs: number,
+): Promise<void> {
+  await fhAlbumIndexReady
+  const onRound = async (progress: import('../lib/messages').ExploreSearchProgress): Promise<void> => {
+    let added = 0
+    for (const e of progress.newEntries) {
+      const existing = fhAlbumIndex.entries[e.id]
+      if (!existing) {
+        fhAlbumIndex.entries[e.id] = e
+        added++
+      } else {
+        fhAlbumIndex.entries[e.id] = { ...existing, ...e, name: existing.name, collectedAt: existing.collectedAt }
+      }
+    }
+    fhAlbumIndex.updatedAt = Date.now()
+    await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex)
+    const total = Object.keys(fhAlbumIndex.entries).length
+    await pushFhResult(srcTabId, 'explore-search', { ...progress, added, total }, false)
+  }
+  try {
+    const { more } = await freeimage.runSearchBatch(rounds, intervalMs, onRound)
+    await pushFhResult(
+      srcTabId,
+      'explore-search',
+      {
+        round: rounds,
+        pageFrom: 0,
+        pageTo: 0,
+        added: 0,
+        total: Object.keys(fhAlbumIndex.entries).length,
+        newEntries: [],
+        mode,
+        type: list,
+        more,
+      },
+      true,
+    )
+  } catch (err) {
+    logger.error('freeimage', '探索检索批次失败', String(err))
+    await pushFhResult(
+      srcTabId,
+      'explore-search',
+      {
+        round: 0,
+        pageFrom: 0,
+        pageTo: 0,
+        added: 0,
+        total: Object.keys(fhAlbumIndex.entries).length,
+        newEntries: [],
+        mode,
+        type: list,
+        more: false,
+      },
+      true,
+      String(err),
+    )
+  }
+}
+
+// ---------- 相册索引记录库（FP-007 场景 D：仅文字信息） ----------
+
+let fhAlbumIndex: FhAlbumIndexDb = emptyFhAlbumIndexDb()
+const FH_ALBUM_INDEX_KEY = 'fh_album_index'
+/** 索引库就绪（SW 启动时从 storage 异步恢复） */
+const fhAlbumIndexReady = (async (): Promise<void> => {
+  const raw = await storageGet<unknown>(FH_ALBUM_INDEX_KEY)
+  fhAlbumIndex = loadFhAlbumIndexDb(raw)
+  logger.info('freeimage', '相册索引库已恢复', { total: Object.keys(fhAlbumIndex.entries).length })
+})()
+
+// ---------- freeimage 扩散引擎 + 生产者库（FP-007 迁移 imgbb FP-005） ----------
+
+const fhDiffuse = new FhDiffuseEngine()
+let fhDiffuseDb: ProducerDb = emptyDb()
+const FH_DIFFUSE_DB_KEY = 'fh_diffuse_db'
+/** 生产者库就绪（SW 启动时从 storage 异步恢复） */
+const fhDiffuseDbReady = (async (): Promise<void> => {
+  const raw = await storageGet<unknown>(FH_DIFFUSE_DB_KEY)
+  fhDiffuseDb = loadDb(raw)
+  logger.info('freeimage', 'freeimage 生产者库已恢复', { total: Object.keys(fhDiffuseDb.entries).length })
+})()
+/** 扩散状态持久化键（storage.session） */
+const FH_DIFFUSE_STATE_KEY = 'fh_diffuse_state'
+/** 评分批内停止标志 */
+let fhScoreBatchCancelled = false
+
+/** 恢复扩散状态（SW 重启后续跑） */
+async function ensureFhDiffuseRestored(): Promise<void> {
+  try {
+    const r = await chrome.storage.session.get(FH_DIFFUSE_STATE_KEY)
+    const state = r[FH_DIFFUSE_STATE_KEY] as import('./freeimage-diffuse').FhDiffusePersistState | undefined
+    if (state && Array.isArray(state.queue) && !fhDiffuse.isActive()) {
+      fhDiffuse.restore(state)
+      logger.info('freeimage', '扩散状态已从 session 恢复', { queueSize: state.queue.length, visited: state.visited.length })
+    }
+  } catch {
+    // session 存储不可用静默
+  }
+}
+
+/** 保存扩散状态 */
+async function saveFhDiffuseState(): Promise<void> {
+  try {
+    await chrome.storage.session.set({ [FH_DIFFUSE_STATE_KEY]: fhDiffuse.save() })
+  } catch {
+    // 忽略
+  }
+}
+
+/** 遍历 freeimage 用户全部相册分页（相册确认评分用） */
+async function fhFetchUserAlbums(
+  username: string,
+  maxPages: number,
+): Promise<{ albums: import('../lib/freeimage-types').FhAlbum[]; truncated: boolean }> {
+  const all: import('../lib/freeimage-types').FhAlbum[] = []
+  const seen = new Set<string>()
+  for (let page = 1; page <= maxPages; page++) {
+    try {
+      const albums = await freeimage.fetchAlbumsPage(username, 'views_desc', page)
+      let added = 0
+      for (const a of albums) {
+        if (!seen.has(a.id)) {
+          seen.add(a.id)
+          all.push(a)
+          added++
+        }
+      }
+      if (albums.length === 0 || added === 0) break
+    } catch (err) {
+      logger.warn('freeimage', '用户相册遍历失败（截断）', { username, page, error: String(err) })
+      return { albums: all, truncated: true }
+    }
+  }
+  return { albums: all, truncated: false }
+}
+
+/** freeimage 关注墙用户抓取（/followers + /following 用户项，去重） */
+async function fetchFhFollowingUsers(username: string, side: 'following' | 'followers' | 'both'): Promise<FhOwner[]> {
+  const urls: string[] = []
+  if (side === 'following' || side === 'both') {
+    urls.push(`https://freeimage.host/${encodeURIComponent(username)}/following`)
+  }
+  if (side === 'followers' || side === 'both') {
+    urls.push(`https://freeimage.host/${encodeURIComponent(username)}/followers`)
+  }
+  const htmls = await Promise.all(urls.map((u) => freeimage.fetchHtml(u)))
+  const users = htmls.flatMap((h) => parseExploreUsers(h))
+  const seen = new Set<string>()
+  return users.filter((u) => {
+    if (seen.has(u.username)) return false
+    seen.add(u.username)
+    return true
+  })
 }
 
 // ---------- buondua 适配器服务（FP-004） ----------
@@ -858,6 +1061,369 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
         })
       }
       return { ok: true }
+    }
+
+    // ---- freeimage 适配器（FP-007） ----
+    case 'FH_FETCH_USER': {
+      try {
+        const images = await freeimage.fetchUserPages(message.url, message.pageFrom, message.pageTo)
+        await pushFhResult(message.srcTabId, 'user', images, true)
+      } catch (err) {
+        logger.error('freeimage', '用户主页抓取失败', String(err))
+        await pushFhResult(message.srcTabId, 'user', [], true, String(err))
+      }
+      return { ok: true }
+    }
+
+    case 'FH_FETCH_ALBUM': {
+      try {
+        const { images, name } = await freeimage.fetchAlbumImages(message.albumUrl)
+        await pushFhResult(message.srcTabId, 'album', images, true)
+        return { ok: true, name: name || undefined }
+      } catch (err) {
+        logger.error('freeimage', '相册抓取失败', String(err))
+        await pushFhResult(message.srcTabId, 'album', [], true, String(err))
+        return { ok: false, error: String(err) }
+      }
+    }
+
+    case 'FH_FETCH_ALBUMS': {
+      try {
+        const albums = await freeimage.fetchAlbumsPage(message.username, message.sort, message.page)
+        await pushFhResult(message.srcTabId, 'albums', albums, true)
+      } catch (err) {
+        logger.error('freeimage', '相册列表抓取失败', String(err))
+        await pushFhResult(message.srcTabId, 'albums', [], true, String(err))
+      }
+      return { ok: true }
+    }
+
+    case 'FH_FETCH_EXPLORE': {
+      try {
+        const images = await freeimage.fetchExplorePages(message.pageFrom, message.pageTo)
+        await pushFhResult(message.srcTabId, 'explore', images, true)
+      } catch (err) {
+        logger.error('freeimage', '探索页抓取失败', String(err))
+        await pushFhResult(message.srcTabId, 'explore', [], true, String(err))
+      }
+      return { ok: true }
+    }
+
+    case 'FH_EXTRACT_OWNER': {
+      try {
+        const results = await freeimage.extractOwners(message.imageViewerUrls, message.samplePerPage, message.intervalMs)
+        const owners = results.map((r) => r.owner)
+        await pushFhResult(message.srcTabId, 'owners', owners, true)
+      } catch (err) {
+        logger.error('freeimage', '属主提取失败', String(err))
+        await pushFhResult(message.srcTabId, 'owners', [], true, String(err))
+      }
+      return { ok: true }
+    }
+
+    case 'FH_SCAN_PRODUCERS': {
+      try {
+        await fhProducerDbReady
+        const entries = []
+        for (const username of message.usernames) {
+          try {
+            const info = await freeimage.collectAlbumsForUser(username)
+            entries.push(info)
+          } catch (err) {
+            logger.warn('freeimage', '相册名采集失败（跳过）', { username, error: String(err) })
+          }
+          await new Promise((r) => setTimeout(r, message.intervalMs))
+        }
+        await pushFhResult(message.srcTabId, 'scan', entries, true)
+      } catch (err) {
+        logger.error('freeimage', '相册名采集失败', String(err))
+        await pushFhResult(message.srcTabId, 'scan', [], true, String(err))
+      }
+      return { ok: true }
+    }
+
+    case 'FH_PRODUCER_GET': {
+      await fhProducerDbReady
+      return { ok: true, fh: fhProducerDb }
+    }
+
+    case 'FH_PRODUCER_SAVE': {
+      await fhProducerDbReady
+      const existing = fhProducerDb.entries[message.username] ?? {
+        username: message.username,
+        status: null,
+        seenAt: Date.now(),
+      }
+      fhProducerDb.entries[message.username] = {
+        ...existing,
+        status: message.status,
+        reason: message.reason || undefined,
+        notedAt: Date.now(),
+      }
+      fhProducerDb.updatedAt = Date.now()
+      await storageSet(FH_PRODUCER_DB_KEY, fhProducerDb)
+      logger.info('freeimage', '标注已保存', { username: message.username, status: message.status })
+      return { ok: true }
+    }
+
+    case 'FH_PRODUCER_CLEAR': {
+      await fhProducerDbReady
+      delete fhProducerDb.entries[message.username]
+      fhProducerDb.updatedAt = Date.now()
+      await storageSet(FH_PRODUCER_DB_KEY, fhProducerDb)
+      logger.info('freeimage', '标注已清除', { username: message.username })
+      return { ok: true }
+    }
+
+    case 'FH_PRODUCER_EXPORT': {
+      await fhProducerDbReady
+      return { ok: true, json: JSON.stringify(fhProducerDb, null, 1) }
+    }
+
+    case 'FH_PRODUCER_IMPORT': {
+      await fhProducerDbReady
+      const imported = loadFhProducerDb(message.db)
+      const before = Object.keys(fhProducerDb.entries).length
+      // 合并：已存在条目以导入的为准（导入新标注），不存在则新增
+      for (const [username, e] of Object.entries(imported.entries)) {
+        fhProducerDb.entries[username] = e
+      }
+      fhProducerDb.updatedAt = Date.now()
+      await storageSet(FH_PRODUCER_DB_KEY, fhProducerDb)
+      const after = Object.keys(fhProducerDb.entries).length
+      logger.info('freeimage', '标注库已导入合并', { before, after })
+      return { ok: true, fhImported: { before, after } }
+    }
+
+    // ---- freeimage 探索检索（FP-007 场景 D v8：批次会话，每批自动保存） ----
+    case 'FH_EXPLORE_SEARCH_START': {
+      freeimage.startSearch(message.mode, message.list)
+      logger.info('freeimage', '探索检索开始新会话', { mode: message.mode, list: message.list, rounds: message.rounds })
+      await runSearchBatch(message.srcTabId, message.mode, message.list, message.rounds, message.intervalMs)
+      return { ok: true }
+    }
+
+    case 'FH_EXPLORE_SEARCH_NEXT': {
+      const info = freeimage.getSessionInfo()
+      if (!info) {
+        return { ok: false, error: '无活动检索会话（请先开始检索）' }
+      }
+      logger.info('freeimage', '探索检索下一批', { mode: info.mode, list: info.list, rounds: message.rounds })
+      await runSearchBatch(message.srcTabId, info.mode, info.list, message.rounds, message.intervalMs)
+      return { ok: true }
+    }
+
+    case 'FH_EXPLORE_STOP': {
+      freeimage.cancelExploreSearch()
+      logger.info('freeimage', '探索检索已请求停止')
+      return { ok: true }
+    }
+
+    // ---- freeimage 相册索引库 CRUD ----
+    case 'FH_ALBUM_INDEX_GET': {
+      await fhAlbumIndexReady
+      return { ok: true, fhIndex: fhAlbumIndex }
+    }
+    case 'FH_ALBUM_INDEX_EXPORT': {
+      await fhAlbumIndexReady
+      return { ok: true, json: JSON.stringify(fhAlbumIndex, null, 1) }
+    }
+    case 'FH_ALBUM_INDEX_CLEAR': {
+      await fhAlbumIndexReady
+      fhAlbumIndex = emptyFhAlbumIndexDb()
+      await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex)
+      logger.info('freeimage', '相册索引库已清空')
+      return { ok: true, fhIndexImported: { before: 0, after: 0 } }
+    }
+    case 'FH_ALBUM_INDEX_IMPORT': {
+      await fhAlbumIndexReady
+      const imported = loadFhAlbumIndexDb(message.db)
+      const before = Object.keys(fhAlbumIndex.entries).length
+      // 合并：以导入为准覆盖同 key，新增加入
+      for (const [id, e] of Object.entries(imported.entries)) {
+        fhAlbumIndex.entries[id] = e
+      }
+      fhAlbumIndex.updatedAt = Date.now()
+      await storageSet(FH_ALBUM_INDEX_KEY, fhAlbumIndex)
+      const after = Object.keys(fhAlbumIndex.entries).length
+      logger.info('freeimage', '相册索引库已导入合并', { before, after })
+      return { ok: true, fhIndexImported: { before, after } }
+    }
+
+    // ---- freeimage 关注墙（FP-007 迁移 imgbb 关注墙） ----
+    case 'FH_FETCH_FOLLOWING': {
+      try {
+        const users = await fetchFhFollowingUsers(message.username, message.side)
+        await pushFhResult(message.srcTabId, 'following', users, true)
+      } catch (err) {
+        logger.error('freeimage', '关注墙抓取失败', String(err))
+        await pushFhResult(message.srcTabId, 'following', [], true, String(err))
+      }
+      return { ok: true }
+    }
+
+    // ---- freeimage 扩散检索（FP-007 迁移 imgbb FP-005） ----
+    case 'FH_DIFFUSE_START': {
+      fhDiffuse.start(message.startUser)
+      await saveFhDiffuseState()
+      return { ok: true, snapshot: fhDiffuse.snapshot() }
+    }
+    case 'FH_DIFFUSE_BATCH': {
+      await ensureFhDiffuseRestored()
+      await fhDiffuseDbReady
+      if (fhDiffuse.is429Throttled) {
+        logger.warn('freeimage', '连续 429，已阻止继续扩散，请稍后再试')
+        return { ok: false, error: '连续 429 限流，请等待 30 秒后再继续' }
+      }
+      const result = await fhDiffuse.processBatch(message.batchSize, message.concurrency, message.intervalMs)
+      await saveFhDiffuseState()
+      const snapshot = fhDiffuse.snapshot()
+      if (Object.keys(result.inDegreeDelta).length > 0) {
+        fhDiffuseDb = mergeInDegree(fhDiffuseDb, result.inDegreeDelta, snapshot.startUser)
+        await storageSet(FH_DIFFUSE_DB_KEY, fhDiffuseDb)
+      }
+      return { ok: true, result, snapshot }
+    }
+    case 'FH_DIFFUSE_PROGRESS': {
+      await ensureFhDiffuseRestored()
+      return { ok: true, snapshot: fhDiffuse.snapshot() }
+    }
+    case 'FH_DIFFUSE_DB_GET': {
+      await fhDiffuseDbReady
+      const sum = dbSummary(fhDiffuseDb)
+      const dist = inDegreeDist(fhDiffuseDb)
+      const w1 = message.w1 ?? 0.6
+      const topN = message.topN ?? 100
+      return {
+        ok: true,
+        db: fhDiffuseDb,
+        total: sum.total,
+        confirmed: sum.confirmed,
+        producers: sum.producers,
+        maxInDegree: sum.maxInDegree,
+        dist,
+        rankScore: scoreTop(fhDiffuseDb, topN, w1, 1 - w1),
+        rankDegree: degreeTop(fhDiffuseDb, topN),
+        rankAlbum: albumTop(fhDiffuseDb, topN),
+      }
+    }
+    case 'FH_DIFFUSE_DB_SAVE': {
+      await fhDiffuseDbReady
+      await storageSet(FH_DIFFUSE_DB_KEY, fhDiffuseDb)
+      const sum = dbSummary(fhDiffuseDb)
+      logger.info('freeimage', 'freeimage 生产者库已保存', { total: sum.total, source: message.source })
+      return { ok: true, total: sum.total, confirmed: sum.confirmed, producers: sum.producers, maxInDegree: sum.maxInDegree }
+    }
+    case 'FH_DIFFUSE_DB_CLEAR': {
+      await fhDiffuseDbReady
+      fhDiffuseDb = emptyDb()
+      await storageSet(FH_DIFFUSE_DB_KEY, fhDiffuseDb)
+      logger.info('freeimage', 'freeimage 生产者库已清空')
+      return { ok: true, total: 0 }
+    }
+    case 'FH_DIFFUSE_DB_EXPORT': {
+      await fhDiffuseDbReady
+      return { ok: true, json: JSON.stringify(fhDiffuseDb, null, 1) }
+    }
+    case 'FH_DIFFUSE_DB_IMPORT': {
+      await fhDiffuseDbReady
+      const imported = loadDb(message.db)
+      const before = Object.keys(fhDiffuseDb.entries).length
+      fhDiffuseDb = mergeDb(fhDiffuseDb, imported)
+      await storageSet(FH_DIFFUSE_DB_KEY, fhDiffuseDb)
+      const after = Object.keys(fhDiffuseDb.entries).length
+      const sum = dbSummary(fhDiffuseDb)
+      logger.info('freeimage', 'freeimage 生产者库已导入合并', { before, after })
+      return { ok: true, total: after, confirmed: sum.confirmed, producers: sum.producers, maxInDegree: sum.maxInDegree, github: { message: `导入合并：${before} → ${after}` } }
+    }
+    case 'FH_DIFFUSE_DB_RESET_CONFIRM': {
+      await fhDiffuseDbReady
+      fhDiffuseDb = resetConfirmations(fhDiffuseDb)
+      await storageSet(FH_DIFFUSE_DB_KEY, fhDiffuseDb)
+      logger.info('freeimage', '确认状态已重置（保留入度），需重新确认评分')
+      return { ok: true, total: Object.keys(fhDiffuseDb.entries).length }
+    }
+    case 'FH_DIFFUSE_SCORE_BATCH': {
+      await fhDiffuseDbReady
+      fhScoreBatchCancelled = false
+      const candidates = unconfirmedCandidates(fhDiffuseDb, message.batchSize, message.order ?? 'inDegree', message.w1, message.w2)
+      if (candidates.length === 0) {
+        return { ok: true, score: { processed: 0, withAlbums: 0, zeroAlbums: 0, failed: 0, done: true } }
+      }
+      let withAlbums = 0
+      let zeroAlbums = 0
+      let failed = 0
+      let cursor = 0
+      const updated: Record<string, import('../lib/types').ProducerEntry> = {}
+      const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+      const worker = async (): Promise<void> => {
+        while (true) {
+          const idx = cursor++
+          if (idx >= candidates.length) return
+          const c = candidates[idx]
+          await sleep(message.intervalMs)
+          try {
+            const { albums: userAlbums, truncated } = await fhFetchUserAlbums(c.username, 10)
+            updated[c.username] = {
+              ...c,
+              albumCount: userAlbums.length,
+              albumsChecked: true,
+              albumsTruncated: truncated || undefined,
+              albums: userAlbums.map((a) => ({ name: a.name, url: a.url })),
+            }
+            if (userAlbums.length > 0) withAlbums++
+            else zeroAlbums++
+            const session = sessions.get(message.srcTabId)
+            if (session) {
+              await sendToTab(session.grabTabId, {
+                type: 'FH_DIFFUSE_SCORE_PROGRESS_FWD',
+                done: withAlbums + zeroAlbums + failed,
+                total: candidates.length,
+                username: c.username,
+                albumCount: userAlbums.length,
+                truncated: truncated || undefined,
+                failed,
+                cancelled: fhScoreBatchCancelled || undefined,
+              })
+            }
+          } catch (err) {
+            failed++
+            logger.warn('freeimage', 'albums 确认失败（跳过）', { user: c.username, error: String(err) })
+          }
+          if (fhScoreBatchCancelled) return
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(message.concurrency, candidates.length) }, () => worker()))
+      const entries = { ...fhDiffuseDb.entries }
+      for (const [u, e] of Object.entries(updated)) entries[u] = e
+      fhDiffuseDb = { ...fhDiffuseDb, updatedAt: Date.now(), entries }
+      await storageSet(FH_DIFFUSE_DB_KEY, fhDiffuseDb)
+      const unconfirmed = unconfirmedCount(fhDiffuseDb)
+      logger.info('freeimage', 'freeimage 确认批次完成', { processed: Object.keys(updated).length, withAlbums, zeroAlbums, failed, unconfirmed, cancelled: fhScoreBatchCancelled })
+      return {
+        ok: true,
+        score: { processed: Object.keys(updated).length, withAlbums, zeroAlbums, failed, done: !fhScoreBatchCancelled && unconfirmed === 0 },
+        unconfirmed,
+        cancelled: fhScoreBatchCancelled || undefined,
+      }
+    }
+    case 'FH_DIFFUSE_SCORE_STOP': {
+      fhScoreBatchCancelled = true
+      logger.info('freeimage', '确认已请求停止')
+      return { ok: true }
+    }
+    case 'FH_DIFFUSE_SEARCH_START': {
+      await fhDiffuseDbReady
+      const scored = confirmedScored(fhDiffuseDb, message.w1, message.w2)
+      const from = Math.min(scored.length, Math.floor((scored.length * message.fromPct) / 100))
+      const to = Math.min(scored.length, Math.floor((scored.length * message.toPct) / 100))
+      const keywords = message.keywords.map((k) => k.toLowerCase()).filter(Boolean)
+      const matches = scored
+        .slice(from, to)
+        .map((c) => ({ username: c.username, inDegree: c.inDegree, albums: matchAlbums(c, keywords) }))
+        .filter((m) => m.albums.length > 0)
+      logger.info('freeimage', 'freeimage 检索完成（全量）', { keywords, range: `0~${message.toPct}%`, candidates: to - from, hits: matches.length })
+      return { ok: true, search: { total: matches.length, processed: matches.length, matches, done: true }, unconfirmed: unconfirmedCount(fhDiffuseDb) }
     }
   }
 

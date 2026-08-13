@@ -1379,3 +1379,29 @@ body {
   font-size: 12px;
   flex-shrink: 0;
 }
+
+/* ========== freeimage 适配页（FP-007） ========== */
+.bd-batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.fh-hit-list,
+.fh-candidates,
+.fh-db-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.fh-hit-list .bd-link-card,
+.fh-candidates .bd-link-card,
+.fh-db-list .bd-link-card {
+  cursor: default;
+}
+.fh-db-filter {
+  font-size: 12px;
+  padding: 2px 10px;
+}
