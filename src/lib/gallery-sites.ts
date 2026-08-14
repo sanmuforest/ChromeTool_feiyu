@@ -106,9 +106,9 @@ export const GALLERY_SITES: GallerySiteConfig[] = [
       title
         .replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, '')
         .trim(),
-    // hitxhot 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004）
+    // hitxhot 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004）；gbv=1 强制基础 HTML 版
     searchUrl: (q, page) =>
-      `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.hitxhot.org${
+      `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.hitxhot.org&gbv=1${
         page > 1 ? `&start=${(page - 1) * 10}` : ''
       }`,
     searchAlbumPath: '/gallerys/',
@@ -137,9 +137,9 @@ export const GALLERY_SITES: GallerySiteConfig[] = [
         .replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第?\s*\d+\s*\/\s*\d+\s*页)\s*$/i, '')
         .trim(),
     // kaizty 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004，用户代理环境实测可用）
-    // 结果页为 Google 网页搜索直链（a.zReHs + h3），每页 10 条，翻页 &start={N}
+    // gbv=1 强制 Google 基础 HTML 版（无 JS 服务端渲染，h3.r > a 直链结构，插件 fetch 可解析）
     searchUrl: (q, page) =>
-      `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.kaizty.com${
+      `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.kaizty.com&gbv=1${
         page > 1 ? `&start=${(page - 1) * 10}` : ''
       }`,
     searchAlbumPath: '/photos/',

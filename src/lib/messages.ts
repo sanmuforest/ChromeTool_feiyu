@@ -160,7 +160,15 @@ export type MessageResponse =
       github?: { message: string; total?: number }
       json?: string
       // ---- 聚合搜索 Google 连接测试（FP-012） ----
-      google?: { ok: boolean; status?: number; blocked: boolean; ms: number; error?: string }
+      google?: {
+        ok: boolean
+        status?: number
+        blocked: boolean
+        ms: number
+        error?: string
+        /** 返回页诊断特征（089 增强）：长度/标题/是否含可解析结果/是否同意页 */
+        diag?: { len: number; title: string; hasH3: boolean; isConsent: boolean }
+      }
     }
   | { ok: false; error: string }
 

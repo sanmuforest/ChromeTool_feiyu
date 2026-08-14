@@ -4525,8 +4525,8 @@
         }
       },
       cleanTitle: (title) => title.replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
-      // hitxhot 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004）
-      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.hitxhot.org${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
+      // hitxhot 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004）；gbv=1 强制基础 HTML 版
+      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.hitxhot.org&gbv=1${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
       searchAlbumPath: "/gallerys/"
     },
     {
@@ -4548,8 +4548,8 @@
       },
       cleanTitle: (title) => title.replace(/^Kaizty Photos:\s*/i, "").replace(/^Kaizty 照片：\s*/i, "").replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第?\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
       // kaizty 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004，用户代理环境实测可用）
-      // 结果页为 Google 网页搜索直链（a.zReHs + h3），每页 10 条，翻页 &start={N}
-      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.kaizty.com${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
+      // gbv=1 强制 Google 基础 HTML 版（无 JS 服务端渲染，h3.r > a 直链结构，插件 fetch 可解析）
+      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.kaizty.com&gbv=1${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
       searchAlbumPath: "/photos/"
     },
     {
@@ -5197,12 +5197,13 @@
             return;
           }
           const g = res.google;
+          const diagText = g.diag ? ` [${(g.diag.len / 1024).toFixed(0)}KB, ${g.diag.hasH3 ? "\u542B\u7ED3\u679C" : "\u65E0\u7ED3\u679C\u6807\u8BB0"}${g.diag.isConsent ? ", \u540C\u610F\u9875" : ""}, ${g.diag.title.slice(0, 30)}]` : "";
           if (!g.ok) {
             setStatus(googleStatus, `\u8FDE\u63A5\u5931\u8D25\uFF1A${g.error}\uFF08${g.ms}ms\uFF09`, true);
           } else if (g.blocked) {
             setStatus(googleStatus, `\u53EF\u8FBE\u4F46\u89E6\u53D1\u9A8C\u8BC1\u9875\uFF08HTTP ${g.status} \xB7 ${g.ms}ms\uFF09\u2014\u2014\u4EE3\u7406/cookie \u53EF\u80FD\u672A\u751F\u6548`, true);
           } else {
-            setStatus(googleStatus, `\u8FDE\u63A5\u6B63\u5E38\uFF08HTTP ${g.status} \xB7 ${g.ms}ms\uFF09`);
+            setStatus(googleStatus, `\u8FDE\u63A5\u6B63\u5E38\uFF08HTTP ${g.status} \xB7 ${g.ms}ms\uFF09${diagText}`);
           }
         } catch (err) {
           setStatus(googleStatus, `\u6D4B\u8BD5\u5F02\u5E38\uFF1A${String(err)}`, true);
@@ -5446,7 +5447,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260814141957" : "dev";
+  var BUILD_TIME = true ? "20260814142323" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

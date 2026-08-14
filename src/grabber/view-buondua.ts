@@ -659,7 +659,18 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       googleTestBtn.disabled = true
       try {
         const res = await sendMessage<
-          { ok: true; google?: { ok: boolean; status?: number; blocked: boolean; ms: number; error?: string } } | { ok: false; error: string }
+          | {
+              ok: true
+              google?: {
+                ok: boolean
+                status?: number
+                blocked: boolean
+                ms: number
+                error?: string
+                diag?: { len: number; title: string; hasH3: boolean; isConsent: boolean }
+              }
+            }
+          | { ok: false; error: string }
         >({ type: 'BD_TEST_GOOGLE', srcTabId })
         if (!res.ok) {
           setStatus(googleStatus, `测试失败：${res.error}`, true)
@@ -670,12 +681,15 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           return
         }
         const g = res.google
+        const diagText = g.diag
+          ? ` [${(g.diag.len / 1024).toFixed(0)}KB, ${g.diag.hasH3 ? '含结果' : '无结果标记'}${g.diag.isConsent ? ', 同意页' : ''}, ${g.diag.title.slice(0, 30)}]`
+          : ''
         if (!g.ok) {
           setStatus(googleStatus, `连接失败：${g.error}（${g.ms}ms）`, true)
         } else if (g.blocked) {
           setStatus(googleStatus, `可达但触发验证页（HTTP ${g.status} · ${g.ms}ms）——代理/cookie 可能未生效`, true)
         } else {
-          setStatus(googleStatus, `连接正常（HTTP ${g.status} · ${g.ms}ms）`)
+          setStatus(googleStatus, `连接正常（HTTP ${g.status} · ${g.ms}ms）${diagText}`)
         }
       } catch (err) {
         setStatus(googleStatus, `测试异常：${String(err)}`, true)

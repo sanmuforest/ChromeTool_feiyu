@@ -244,11 +244,19 @@ export class BuonduaService {
     return `ID-buondua-${name}-${ts}`
   }
 
-  /** Google 连接测试（聚合搜索 Google 通道，FP-012）：请求 google 搜索，报告可达性/拦截/耗时 */
-  async testGoogleConnection(): Promise<{ ok: boolean; status?: number; blocked: boolean; ms: number; error?: string }> {
+  /** Google 连接测试（聚合搜索 Google 通道，FP-012/089）：请求 google 搜索（gbv=1 基础版），
+   *  报告可达性/拦截/耗时 + 返回页诊断特征（长度/标题/是否含 h3 结果/是否同意页） */
+  async testGoogleConnection(): Promise<{
+    ok: boolean
+    status?: number
+    blocked: boolean
+    ms: number
+    error?: string
+    diag?: { len: number; title: string; hasH3: boolean; isConsent: boolean }
+  }> {
     const start = Date.now()
     try {
-      const resp = await fetch('https://www.google.com/search?q=test', {
+      const resp = await fetch('https://www.google.com/search?q=test&gbv=1', {
         credentials: 'include',
         headers: {
           'User-Agent':
@@ -258,7 +266,16 @@ export class BuonduaService {
       })
       const html = await resp.text()
       const blocked = isBlockedPage(html)
-      return { ok: true, status: resp.status, blocked, ms: Date.now() - start }
+      const title = (html.match(/<title>([^<]*)<\/title>/) ?? [null, ''])[1].slice(0, 100)
+      const hasH3 = /<h3[^>]*class="[^"]*\br\b[^"]*"/.test(html) || /zReHs/.test(html)
+      const isConsent = /consent\.google\.com|google\.com\/consent/i.test(html)
+      return {
+        ok: true,
+        status: resp.status,
+        blocked,
+        ms: Date.now() - start,
+        diag: { len: html.length, title, hasH3, isConsent },
+      }
     } catch (err) {
       return { ok: false, blocked: false, ms: Date.now() - start, error: String(err) }
     }
@@ -276,34 +293,41 @@ function parseLinksForSite(siteId: string, html: string, base: string): BuonduaL
   return parseSitePostLinks(html, base, site?.hosts ?? [siteId])
 }
 
-/** Google 网页搜索结果解析（FP-012 预研 004，用户代理环境真实 HTML 校准，2026-08-14）：
- *  结构：结果块 <a class="zReHs" href="{真实直链}">…<h3>标题</h3></a>（现代 Google 直链，无 /url?q= 重定向）
+/** Google 网页搜索结果解析（FP-012，2026-08-14 两次校准）：
+ *  双模式兼容：
+ *  ① 现代 UI：结果块 <a class="zReHs" href="{真实直链}">…<h3>标题</h3></a>（用户保存的渲染后 DOM）
+ *  ② 基础 HTML（gbv=1，无 JS 服务端渲染，插件 fetch 视角）：<h3 class="r"><a href="{真实直链}">标题</a></h3>
  *  过滤：仅保留目标域且命中 searchAlbumPath（如 /photos/、/gallerys/）的相册链接；分类/标签页剔除
  *  链接清理：&amp; 实体还原、去 query（?m=1 移动版参数、&page=N 相册分页参数） */
 function parseGoogleResults(html: string, site: GallerySiteConfig): BuonduaLinkItem[] {
   const items: BuonduaLinkItem[] = []
   const seen = new Set<string>()
-  const re = /<a[^>]*class="[^"]*zReHs[^"]*"[^>]*href="([^"]+)"[^>]*>(?:(?!<\/a>)[\s\S])*?<h3[^>]*>([\s\S]*?)<\/h3>/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(html)) !== null) {
+  const add = (rawUrl: string, rawTitle: string): void => {
     try {
-      const url = m[1].replace(/&amp;/g, '&')
+      const url = rawUrl.replace(/&amp;/g, '&')
       const u = new URL(url)
       const host = u.hostname.replace(/^www\./, '')
       const hostOk = site.hosts.some((h) => host === h || host.endsWith(`.${h}`))
-      if (!hostOk) continue
-      if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) continue
+      if (!hostOk) return
+      if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) return
       u.search = ''
       u.hash = ''
       const cleanUrl = u.href
-      if (seen.has(cleanUrl)) continue
+      if (seen.has(cleanUrl)) return
       seen.add(cleanUrl)
-      const title = site.cleanTitle(m[2].replace(/<[^>]*>/g, '').trim()) || cleanUrl
+      const title = site.cleanTitle(rawTitle.replace(/<[^>]*>/g, '').trim()) || cleanUrl
       items.push({ url: cleanUrl, title, coverUrl: '', imageCount: undefined })
     } catch {
       // 忽略非法链接
     }
   }
+  // 模式 ①：现代 zReHs
+  const re1 = /<a[^>]*class="[^"]*zReHs[^"]*"[^>]*href="([^"]+)"[^>]*>(?:(?!<\/a>)[\s\S])*?<h3[^>]*>([\s\S]*?)<\/h3>/g
+  let m: RegExpExecArray | null
+  while ((m = re1.exec(html)) !== null) add(m[1], m[2])
+  // 模式 ②：基础 HTML（gbv=1）h3.r > a
+  const re2 = /<h3[^>]*class="[^"]*\br\b[^"]*"[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g
+  while ((m = re2.exec(html)) !== null) add(m[1], m[2])
   return items
 }
 

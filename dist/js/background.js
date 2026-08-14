@@ -1625,8 +1625,8 @@
         }
       },
       cleanTitle: (title) => title.replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
-      // hitxhot 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004）
-      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.hitxhot.org${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
+      // hitxhot 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004）；gbv=1 强制基础 HTML 版
+      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.hitxhot.org&gbv=1${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
       searchAlbumPath: "/gallerys/"
     },
     {
@@ -1648,8 +1648,8 @@
       },
       cleanTitle: (title) => title.replace(/^Kaizty Photos:\s*/i, "").replace(/^Kaizty 照片：\s*/i, "").replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第?\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
       // kaizty 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004，用户代理环境实测可用）
-      // 结果页为 Google 网页搜索直链（a.zReHs + h3），每页 10 条，翻页 &start={N}
-      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.kaizty.com${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
+      // gbv=1 强制 Google 基础 HTML 版（无 JS 服务端渲染，h3.r > a 直链结构，插件 fetch 可解析）
+      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.kaizty.com&gbv=1${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
       searchAlbumPath: "/photos/"
     },
     {
@@ -2188,11 +2188,12 @@
       const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
       return `ID-buondua-${name}-${ts}`;
     }
-    /** Google 连接测试（聚合搜索 Google 通道，FP-012）：请求 google 搜索，报告可达性/拦截/耗时 */
+    /** Google 连接测试（聚合搜索 Google 通道，FP-012/089）：请求 google 搜索（gbv=1 基础版），
+     *  报告可达性/拦截/耗时 + 返回页诊断特征（长度/标题/是否含 h3 结果/是否同意页） */
     async testGoogleConnection() {
       const start = Date.now();
       try {
-        const resp = await fetch("https://www.google.com/search?q=test", {
+        const resp = await fetch("https://www.google.com/search?q=test&gbv=1", {
           credentials: "include",
           headers: {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
@@ -2201,7 +2202,16 @@
         });
         const html = await resp.text();
         const blocked = isBlockedPage(html);
-        return { ok: true, status: resp.status, blocked, ms: Date.now() - start };
+        const title = (html.match(/<title>([^<]*)<\/title>/) ?? [null, ""])[1].slice(0, 100);
+        const hasH3 = /<h3[^>]*class="[^"]*\br\b[^"]*"/.test(html) || /zReHs/.test(html);
+        const isConsent = /consent\.google\.com|google\.com\/consent/i.test(html);
+        return {
+          ok: true,
+          status: resp.status,
+          blocked,
+          ms: Date.now() - start,
+          diag: { len: html.length, title, hasH3, isConsent }
+        };
       } catch (err) {
         return { ok: false, blocked: false, ms: Date.now() - start, error: String(err) };
       }
@@ -2219,26 +2229,29 @@
   function parseGoogleResults(html, site) {
     const items = [];
     const seen = /* @__PURE__ */ new Set();
-    const re = /<a[^>]*class="[^"]*zReHs[^"]*"[^>]*href="([^"]+)"[^>]*>(?:(?!<\/a>)[\s\S])*?<h3[^>]*>([\s\S]*?)<\/h3>/g;
-    let m;
-    while ((m = re.exec(html)) !== null) {
+    const add = (rawUrl, rawTitle) => {
       try {
-        const url = m[1].replace(/&amp;/g, "&");
+        const url = rawUrl.replace(/&amp;/g, "&");
         const u = new URL(url);
         const host = u.hostname.replace(/^www\./, "");
         const hostOk = site.hosts.some((h) => host === h || host.endsWith(`.${h}`));
-        if (!hostOk) continue;
-        if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) continue;
+        if (!hostOk) return;
+        if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) return;
         u.search = "";
         u.hash = "";
         const cleanUrl = u.href;
-        if (seen.has(cleanUrl)) continue;
+        if (seen.has(cleanUrl)) return;
         seen.add(cleanUrl);
-        const title = site.cleanTitle(m[2].replace(/<[^>]*>/g, "").trim()) || cleanUrl;
+        const title = site.cleanTitle(rawTitle.replace(/<[^>]*>/g, "").trim()) || cleanUrl;
         items.push({ url: cleanUrl, title, coverUrl: "", imageCount: void 0 });
       } catch {
       }
-    }
+    };
+    const re1 = /<a[^>]*class="[^"]*zReHs[^"]*"[^>]*href="([^"]+)"[^>]*>(?:(?!<\/a>)[\s\S])*?<h3[^>]*>([\s\S]*?)<\/h3>/g;
+    let m;
+    while ((m = re1.exec(html)) !== null) add(m[1], m[2]);
+    const re2 = /<h3[^>]*class="[^"]*\br\b[^"]*"[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+    while ((m = re2.exec(html)) !== null) add(m[1], m[2]);
     return items;
   }
   function enrichSearchItem(siteId, site, item) {
