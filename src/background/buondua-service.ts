@@ -30,6 +30,75 @@ const FETCH_ATTEMPTS = 2
 const CONCURRENCY = 3 // 批量抓取并发（用户确认）
 
 export class BuonduaService {
+  /** Google 通道：页面降级搜索（FP-012/093）——后台静默打开 Google 搜索标签（真实浏览器 JS 渲染），
+   *  提取渲染后结果（a.zReHs + h3 / h3.r > a），逐页进行，完成后关闭标签。
+   *  后台 fetch 拿不到新版 Google 结果（JS 渲染壳，gbv=1 已废弃），此通道与用户手动搜索等效。 */
+  async searchGoogleViaTab(
+    site: GallerySiteConfig,
+    query: string,
+    pagesPerSite: number,
+  ): Promise<BuonduaLinkItem[]> {
+    const items: BuonduaLinkItem[] = []
+    const seen = new Set<string>()
+    for (let page = 1; page <= pagesPerSite; page++) {
+      const url = site.searchUrl(query, page)
+      if (!url) break
+      const tab = await chrome.tabs.create({ url, active: false })
+      try {
+        const extracted = await this.extractGoogleTabResults(tab.id!)
+        logger.info('buondua', 'Google 标签页提取', { site: site.id, page, count: extracted.length })
+        if (extracted.length === 0) break // 无结果（验证页/无匹配）
+        for (const { url: rawUrl, title } of extracted) {
+          const clean = cleanGoogleResult(site, rawUrl, title)
+          if (clean && !seen.has(clean.url)) {
+            seen.add(clean.url)
+            items.push(clean)
+          }
+        }
+      } finally {
+        await chrome.tabs.remove(tab.id!).catch(() => {})
+      }
+    }
+    return items
+  }
+
+  /** 在 Google 搜索标签内等待 JS 渲染并提取结果（executeScript 注入，func 返回 Promise 会被等待） */
+  private extractGoogleTabResults(tabId: number): Promise<{ url: string; title: string }[]> {
+    return chrome.scripting
+      .executeScript({
+        target: { tabId },
+        func: async () => {
+          // 等待结果渲染（最多 ~12s，500ms 轮询）
+          for (let i = 0; i < 24; i++) {
+            if (document.querySelector('a.zReHs, h3.r')) break
+            if (document.title.includes('未找到') || /did not match|No results found/i.test(document.body?.innerText ?? '')) break
+            await new Promise((r) => setTimeout(r, 500))
+          }
+          const out: { url: string; title: string }[] = []
+          const seen = new Set<string>()
+          const push = (u: string, t: string): void => {
+            if (seen.has(u)) return
+            seen.add(u)
+            out.push({ url: u, title: t })
+          }
+          // 模式 ①：现代 zReHs（渲染后 DOM）
+          document.querySelectorAll('a.zReHs').forEach((a) => {
+            const h3 = a.querySelector('h3')
+            if (h3) push((a as HTMLAnchorElement).href, h3.textContent ?? '')
+          })
+          // 模式 ②：h3.r > a
+          if (out.length === 0) {
+            document.querySelectorAll('h3.r > a').forEach((a) => {
+              const anchor = a as HTMLAnchorElement
+              push(anchor.href, a.textContent ?? '')
+            })
+          }
+          return out
+        },
+      })
+      .then((res) => (res[0]?.result ?? []))
+  }
+
   /** fetch 单个页面 HTML（带 UA + 超时 + 重试 1 次） */
   async fetchHtml(url: string): Promise<string> {
     let lastErr: unknown
@@ -42,29 +111,6 @@ export class BuonduaService {
       }
     }
     throw lastErr
-  }
-
-  /** Google 搜索页抓取（FP-012/091）：跟随页内跳转（meta refresh / JS location），最多 4 跳，
-   *  返回最终可解析页面。Google 对无 JS fetch 可能返回中间跳转壳页。 */
-  async fetchGoogleSearch(url: string): Promise<string> {
-    let current = url
-    for (let hop = 0; hop < 4; hop++) {
-      const html = await this.fetchHtml(current)
-      const mr = html.match(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*content=["'][^"']*url=([^"']+)["']/i)
-      if (mr) {
-        current = new URL(mr[1].replace(/&amp;/g, '&'), current).href
-        logger.info('buondua', 'Google 跟随 meta refresh 跳转', { hop: hop + 1, to: current.slice(0, 120) })
-        continue
-      }
-      const js = html.match(/window\.location\.(?:replace|href)\s*=\s*["']([^"']+)["']/i)
-      if (js) {
-        current = new URL(js[1].replace(/&amp;/g, '&'), current).href
-        logger.info('buondua', 'Google 跟随 JS 跳转', { hop: hop + 1, to: current.slice(0, 120) })
-        continue
-      }
-      return html
-    }
-    throw new Error('Google 跳转次数过多')
   }
 
   private async fetchOnce(url: string): Promise<string> {
@@ -222,29 +268,35 @@ export class BuonduaService {
       let error: string | undefined
       let pagesFetched = 0
       try {
-        for (let page = 1; page <= pagesPerSite; page++) {
-          const url = site.searchUrl(query, page)
-          if (!url) break
-          // jrants 连续快速搜索触发反爬限流（实测 2026-08-13/14），页间强制间隔
-          if (siteId === 'jrants' && page > 1) await sleep(2000)
-          const html = site.searchAlbumPath ? await this.fetchGoogleSearch(url) : await this.fetchHtml(url)
-          pagesFetched++
-          if (isBlockedPage(html)) {
-            // 反爬拦截页：跳过该站（避免把热门/推荐链接当搜索结果）
-            error = '搜索被反爬拦截（限流），请稍后重试'
-            logger.warn('buondua', '站点搜索被反爬拦截', { site: siteId, len: html.length })
-            break
+        // Google 通道站点（searchAlbumPath）：后台 fetch 拿不到新版 Google 结果（JS 渲染壳），
+        // 改走页面降级通道（静默开标签渲染 + 提取，FP-012/093）
+        if (site.searchAlbumPath) {
+          const tabItems = await this.searchGoogleViaTab(site, query, pagesPerSite)
+          pagesFetched = Math.min(pagesPerSite, Math.max(1, tabItems.length > 0 ? 1 : 1))
+          for (const item of tabItems) items.push(item)
+          if (tabItems.length === 0) {
+            error = 'Google 标签页未提取到相册结果（可能验证页/无匹配，日志含诊断）'
           }
-          const parsed = parseLinksForSite(siteId, html, url)
-          if (parsed.length === 0) {
-            // Google 通道（searchAlbumPath 站点）第 1 页无结果：附完整页面诊断，便于日志定位
-            if (page === 1 && site.searchAlbumPath) {
-              error = 'Google 未返回可解析的相册结果（验证页/同意页/JS 渲染壳，详见日志诊断）'
-              logger.warn('buondua', 'Google 搜索无结果（诊断）', { site: siteId, ...diagGooglePage(html) })
+        } else {
+          for (let page = 1; page <= pagesPerSite; page++) {
+            const url = site.searchUrl(query, page)
+            if (!url) break
+            // jrants 连续快速搜索触发反爬限流（实测 2026-08-13/14），页间强制间隔
+            if (siteId === 'jrants' && page > 1) await sleep(2000)
+            const html = await this.fetchHtml(url)
+            pagesFetched++
+            if (isBlockedPage(html)) {
+              // 反爬拦截页：跳过该站（避免把热门/推荐链接当搜索结果）
+              error = '搜索被反爬拦截（限流），请稍后重试'
+              logger.warn('buondua', '站点搜索被反爬拦截', { site: siteId, len: html.length })
+              break
             }
-            break // 无更多结果
+            const parsed = parseLinksForSite(siteId, html, url)
+            if (parsed.length === 0) {
+              break // 无更多结果
+            }
+            items.push(...parsed)
           }
-          items.push(...parsed)
         }
       } catch (err) {
         error = String(err)
@@ -276,8 +328,8 @@ export class BuonduaService {
     return `ID-buondua-${name}-${ts}`
   }
 
-  /** Google 连接测试（聚合搜索 Google 通道，FP-012/090/091）：请求 google 搜索（gbv=1），跟随页内跳转，
-   *  报告可达性/拦截/耗时 + 返回页诊断（长度/标题/是否含 h3/同意页/meta refresh/0 结果文案/可见文本预览），结果写日志 */
+  /** Google 连接测试（FP-012/093）：页面降级通道验证——后台开 Google 搜索标签（真实渲染），
+   *  等待渲染后报告结果条数/标题/可见文本；结果写日志 */
   async testGoogleConnection(): Promise<{
     ok: boolean
     status?: number
@@ -297,38 +349,42 @@ export class BuonduaService {
   }> {
     const start = Date.now()
     try {
-      const { html, hops } = await this.fetchGoogleSearchWithHops('https://www.google.com/search?q=test&gbv=1')
-      const blocked = isBlockedPage(html)
-      const base = diagGooglePage(html)
-      const diag = { ...base, hops }
-      if (blocked) logger.warn('buondua', 'Google 连接测试：验证页拦截', { ...diag, ms: Date.now() - start })
-      else if (!base.hasH3) logger.warn('buondua', 'Google 连接测试：无结果标记', { ...diag, ms: Date.now() - start })
-      else logger.info('buondua', 'Google 连接测试正常', { ...diag, ms: Date.now() - start })
-      return { ok: true, status: 200, blocked, ms: Date.now() - start, diag }
+      const tab = await chrome.tabs.create({ url: 'https://www.google.com/search?q=test&gbv=1', active: false })
+      try {
+        const info = await chrome.scripting
+          .executeScript({
+            target: { tabId: tab.id! },
+            func: async () => {
+              for (let i = 0; i < 24; i++) {
+                if (document.querySelector('a.zReHs, h3.r') || /did not match|No results found|未找到/i.test(document.body?.innerText ?? '')) break
+                await new Promise((r) => setTimeout(r, 500))
+              }
+              const count = document.querySelectorAll('a.zReHs, h3.r').length
+              return { count, title: document.title, body: (document.body?.innerText ?? '').slice(0, 200) }
+            },
+          })
+          .then((res) => res[0]?.result ?? { count: 0, title: '', body: '' })
+        const diag = {
+          len: info.body.length,
+          title: info.title.slice(0, 100),
+          hasH3: info.count > 0,
+          isConsent: false,
+          hasMetaRefresh: false,
+          hasNoResultText: /did not match|No results found|未找到/i.test(info.body),
+          hops: 0,
+          bodyPreview: info.body,
+        }
+        const ms = Date.now() - start
+        if (diag.hasH3) logger.info('buondua', 'Google 标签页测试：正常', { ...diag, ms })
+        else logger.warn('buondua', 'Google 标签页测试：无结果', { ...diag, ms })
+        return { ok: true, status: 200, blocked: false, ms, diag }
+      } finally {
+        await chrome.tabs.remove(tab.id!).catch(() => {})
+      }
     } catch (err) {
-      logger.warn('buondua', 'Google 连接测试失败', { error: String(err), ms: Date.now() - start })
+      logger.warn('buondua', 'Google 标签页测试失败', { error: String(err), ms: Date.now() - start })
       return { ok: false, blocked: false, ms: Date.now() - start, error: String(err) }
     }
-  }
-
-  /** 跟随页内跳转并返回跳数（测试用；fetchGoogleSearch 的内部版本） */
-  private async fetchGoogleSearchWithHops(url: string): Promise<{ html: string; hops: number }> {
-    let current = url
-    for (let hop = 0; hop < 4; hop++) {
-      const html = await this.fetchHtml(current)
-      const mr = html.match(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*content=["'][^"']*url=([^"']+)["']/i)
-      if (mr) {
-        current = new URL(mr[1].replace(/&amp;/g, '&'), current).href
-        continue
-      }
-      const js = html.match(/window\.location\.(?:replace|href)\s*=\s*["']([^"']+)["']/i)
-      if (js) {
-        current = new URL(js[1].replace(/&amp;/g, '&'), current).href
-        continue
-      }
-      return { html, hops: hop }
-    }
-    throw new Error('Google 跳转次数过多')
   }
 }
 
@@ -343,6 +399,26 @@ function parseLinksForSite(siteId: string, html: string, base: string): BuonduaL
   return parseSitePostLinks(html, base, site?.hosts ?? [siteId])
 }
 
+/** Google 搜索结果项清洗（解析/tab 通道共用，FP-012/093）：
+ *  域名过滤 + searchAlbumPath 相册过滤 + &amp; 还原 + 去 query（?m=1/&page=N）+ cleanTitle */
+function cleanGoogleResult(site: GallerySiteConfig, rawUrl: string, rawTitle: string): BuonduaLinkItem | null {
+  try {
+    const url = rawUrl.replace(/&amp;/g, '&')
+    const u = new URL(url)
+    const host = u.hostname.replace(/^www\./, '')
+    const hostOk = site.hosts.some((h) => host === h || host.endsWith(`.${h}`))
+    if (!hostOk) return null
+    if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) return null
+    u.search = ''
+    u.hash = ''
+    const cleanUrl = u.href
+    const title = site.cleanTitle(rawTitle.replace(/<[^>]*>/g, '').trim()) || cleanUrl
+    return { url: cleanUrl, title, coverUrl: '', imageCount: undefined }
+  } catch {
+    return null
+  }
+}
+
 /** Google 网页搜索结果解析（FP-012，2026-08-14 两次校准）：
  *  双模式兼容：
  *  ① 现代 UI：结果块 <a class="zReHs" href="{真实直链}">…<h3>标题</h3></a>（用户保存的渲染后 DOM）
@@ -353,23 +429,10 @@ function parseGoogleResults(html: string, site: GallerySiteConfig): BuonduaLinkI
   const items: BuonduaLinkItem[] = []
   const seen = new Set<string>()
   const add = (rawUrl: string, rawTitle: string): void => {
-    try {
-      const url = rawUrl.replace(/&amp;/g, '&')
-      const u = new URL(url)
-      const host = u.hostname.replace(/^www\./, '')
-      const hostOk = site.hosts.some((h) => host === h || host.endsWith(`.${h}`))
-      if (!hostOk) return
-      if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) return
-      u.search = ''
-      u.hash = ''
-      const cleanUrl = u.href
-      if (seen.has(cleanUrl)) return
-      seen.add(cleanUrl)
-      const title = site.cleanTitle(rawTitle.replace(/<[^>]*>/g, '').trim()) || cleanUrl
-      items.push({ url: cleanUrl, title, coverUrl: '', imageCount: undefined })
-    } catch {
-      // 忽略非法链接
-    }
+    const clean = cleanGoogleResult(site, rawUrl, rawTitle)
+    if (!clean || seen.has(clean.url)) return
+    seen.add(clean.url)
+    items.push(clean)
   }
   // 模式 ①：现代 zReHs
   const re1 = /<a[^>]*class="[^"]*zReHs[^"]*"[^>]*href="([^"]+)"[^>]*>(?:(?!<\/a>)[\s\S])*?<h3[^>]*>([\s\S]*?)<\/h3>/g
@@ -414,34 +477,6 @@ function sleep(ms: number): Promise<void> {
  *  用 sorry 页专属文案（unusual traffic / recaptcha / enable JavaScript） */
 function isBlockedPage(html: string): boolean {
   return /search request blocked|正在进行安全验证|just a moment|cf-chl|cloudflare|turnstile|attention required|unusual traffic|enable JavaScript and cookies|recaptcha|our systems have detected/i.test(html)
-}
-
-/** Google 返回页诊断（日志/测试共用，FP-012/092）：长度/标题/是否含结果标记/同意页/meta 刷新/0 结果文案/可见文本预览 */
-function diagGooglePage(html: string): {
-  len: number
-  title: string
-  hasH3: boolean
-  isConsent: boolean
-  hasMetaRefresh: boolean
-  hasNoResultText: boolean
-  bodyPreview: string
-} {
-  const title = (html.match(/<title>([^<]*)<\/title>/) ?? [null, ''])[1].slice(0, 100)
-  const body = html
-    .replace(/<script[\s\S]*?<\/script>/g, ' ')
-    .replace(/<style[\s\S]*?<\/style>/g, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  return {
-    len: html.length,
-    title,
-    hasH3: /<h3[^>]*class="[^"]*\br\b[^"]*"/.test(html) || /zReHs/.test(html),
-    isConsent: /consent\.google\.com|google\.com\/consent/i.test(html),
-    hasMetaRefresh: /<meta[^>]*http-equiv=["']?refresh["']?/i.test(html),
-    hasNoResultText: /未找到任何匹配项|did not match any documents|no results found/i.test(html),
-    bodyPreview: body.slice(0, 200),
-  }
 }
 
 /** 按 URL 去重 */

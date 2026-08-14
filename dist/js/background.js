@@ -2003,6 +2003,65 @@
   var FETCH_ATTEMPTS = 2;
   var CONCURRENCY2 = 3;
   var BuonduaService = class {
+    /** Google 通道：页面降级搜索（FP-012/093）——后台静默打开 Google 搜索标签（真实浏览器 JS 渲染），
+     *  提取渲染后结果（a.zReHs + h3 / h3.r > a），逐页进行，完成后关闭标签。
+     *  后台 fetch 拿不到新版 Google 结果（JS 渲染壳，gbv=1 已废弃），此通道与用户手动搜索等效。 */
+    async searchGoogleViaTab(site, query, pagesPerSite) {
+      const items = [];
+      const seen = /* @__PURE__ */ new Set();
+      for (let page = 1; page <= pagesPerSite; page++) {
+        const url = site.searchUrl(query, page);
+        if (!url) break;
+        const tab = await chrome.tabs.create({ url, active: false });
+        try {
+          const extracted = await this.extractGoogleTabResults(tab.id);
+          logger4.info("buondua", "Google \u6807\u7B7E\u9875\u63D0\u53D6", { site: site.id, page, count: extracted.length });
+          if (extracted.length === 0) break;
+          for (const { url: rawUrl, title } of extracted) {
+            const clean = cleanGoogleResult(site, rawUrl, title);
+            if (clean && !seen.has(clean.url)) {
+              seen.add(clean.url);
+              items.push(clean);
+            }
+          }
+        } finally {
+          await chrome.tabs.remove(tab.id).catch(() => {
+          });
+        }
+      }
+      return items;
+    }
+    /** 在 Google 搜索标签内等待 JS 渲染并提取结果（executeScript 注入，func 返回 Promise 会被等待） */
+    extractGoogleTabResults(tabId) {
+      return chrome.scripting.executeScript({
+        target: { tabId },
+        func: async () => {
+          for (let i = 0; i < 24; i++) {
+            if (document.querySelector("a.zReHs, h3.r")) break;
+            if (document.title.includes("\u672A\u627E\u5230") || /did not match|No results found/i.test(document.body?.innerText ?? "")) break;
+            await new Promise((r) => setTimeout(r, 500));
+          }
+          const out = [];
+          const seen = /* @__PURE__ */ new Set();
+          const push = (u, t) => {
+            if (seen.has(u)) return;
+            seen.add(u);
+            out.push({ url: u, title: t });
+          };
+          document.querySelectorAll("a.zReHs").forEach((a) => {
+            const h3 = a.querySelector("h3");
+            if (h3) push(a.href, h3.textContent ?? "");
+          });
+          if (out.length === 0) {
+            document.querySelectorAll("h3.r > a").forEach((a) => {
+              const anchor = a;
+              push(anchor.href, a.textContent ?? "");
+            });
+          }
+          return out;
+        }
+      }).then((res) => res[0]?.result ?? []);
+    }
     /** fetch 单个页面 HTML（带 UA + 超时 + 重试 1 次） */
     async fetchHtml(url) {
       let lastErr;
@@ -2015,28 +2074,6 @@
         }
       }
       throw lastErr;
-    }
-    /** Google 搜索页抓取（FP-012/091）：跟随页内跳转（meta refresh / JS location），最多 4 跳，
-     *  返回最终可解析页面。Google 对无 JS fetch 可能返回中间跳转壳页。 */
-    async fetchGoogleSearch(url) {
-      let current = url;
-      for (let hop = 0; hop < 4; hop++) {
-        const html = await this.fetchHtml(current);
-        const mr = html.match(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*content=["'][^"']*url=([^"']+)["']/i);
-        if (mr) {
-          current = new URL(mr[1].replace(/&amp;/g, "&"), current).href;
-          logger4.info("buondua", "Google \u8DDF\u968F meta refresh \u8DF3\u8F6C", { hop: hop + 1, to: current.slice(0, 120) });
-          continue;
-        }
-        const js = html.match(/window\.location\.(?:replace|href)\s*=\s*["']([^"']+)["']/i);
-        if (js) {
-          current = new URL(js[1].replace(/&amp;/g, "&"), current).href;
-          logger4.info("buondua", "Google \u8DDF\u968F JS \u8DF3\u8F6C", { hop: hop + 1, to: current.slice(0, 120) });
-          continue;
-        }
-        return html;
-      }
-      throw new Error("Google \u8DF3\u8F6C\u6B21\u6570\u8FC7\u591A");
     }
     async fetchOnce(url) {
       const controller = new AbortController();
@@ -2171,26 +2208,31 @@
         let error;
         let pagesFetched = 0;
         try {
-          for (let page = 1; page <= pagesPerSite; page++) {
-            const url = site.searchUrl(query, page);
-            if (!url) break;
-            if (siteId === "jrants" && page > 1) await sleep(2e3);
-            const html = site.searchAlbumPath ? await this.fetchGoogleSearch(url) : await this.fetchHtml(url);
-            pagesFetched++;
-            if (isBlockedPage(html)) {
-              error = "\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A\uFF08\u9650\u6D41\uFF09\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5";
-              logger4.warn("buondua", "\u7AD9\u70B9\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A", { site: siteId, len: html.length });
-              break;
+          if (site.searchAlbumPath) {
+            const tabItems = await this.searchGoogleViaTab(site, query, pagesPerSite);
+            pagesFetched = Math.min(pagesPerSite, Math.max(1, tabItems.length > 0 ? 1 : 1));
+            for (const item of tabItems) items.push(item);
+            if (tabItems.length === 0) {
+              error = "Google \u6807\u7B7E\u9875\u672A\u63D0\u53D6\u5230\u76F8\u518C\u7ED3\u679C\uFF08\u53EF\u80FD\u9A8C\u8BC1\u9875/\u65E0\u5339\u914D\uFF0C\u65E5\u5FD7\u542B\u8BCA\u65AD\uFF09";
             }
-            const parsed = parseLinksForSite(siteId, html, url);
-            if (parsed.length === 0) {
-              if (page === 1 && site.searchAlbumPath) {
-                error = "Google \u672A\u8FD4\u56DE\u53EF\u89E3\u6790\u7684\u76F8\u518C\u7ED3\u679C\uFF08\u9A8C\u8BC1\u9875/\u540C\u610F\u9875/JS \u6E32\u67D3\u58F3\uFF0C\u8BE6\u89C1\u65E5\u5FD7\u8BCA\u65AD\uFF09";
-                logger4.warn("buondua", "Google \u641C\u7D22\u65E0\u7ED3\u679C\uFF08\u8BCA\u65AD\uFF09", { site: siteId, ...diagGooglePage(html) });
+          } else {
+            for (let page = 1; page <= pagesPerSite; page++) {
+              const url = site.searchUrl(query, page);
+              if (!url) break;
+              if (siteId === "jrants" && page > 1) await sleep(2e3);
+              const html = await this.fetchHtml(url);
+              pagesFetched++;
+              if (isBlockedPage(html)) {
+                error = "\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A\uFF08\u9650\u6D41\uFF09\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5";
+                logger4.warn("buondua", "\u7AD9\u70B9\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A", { site: siteId, len: html.length });
+                break;
               }
-              break;
+              const parsed = parseLinksForSite(siteId, html, url);
+              if (parsed.length === 0) {
+                break;
+              }
+              items.push(...parsed);
             }
-            items.push(...parsed);
           }
         } catch (err) {
           error = String(err);
@@ -2219,42 +2261,46 @@
       const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
       return `ID-buondua-${name}-${ts}`;
     }
-    /** Google 连接测试（聚合搜索 Google 通道，FP-012/090/091）：请求 google 搜索（gbv=1），跟随页内跳转，
-     *  报告可达性/拦截/耗时 + 返回页诊断（长度/标题/是否含 h3/同意页/meta refresh/0 结果文案/可见文本预览），结果写日志 */
+    /** Google 连接测试（FP-012/093）：页面降级通道验证——后台开 Google 搜索标签（真实渲染），
+     *  等待渲染后报告结果条数/标题/可见文本；结果写日志 */
     async testGoogleConnection() {
       const start = Date.now();
       try {
-        const { html, hops } = await this.fetchGoogleSearchWithHops("https://www.google.com/search?q=test&gbv=1");
-        const blocked = isBlockedPage(html);
-        const base = diagGooglePage(html);
-        const diag = { ...base, hops };
-        if (blocked) logger4.warn("buondua", "Google \u8FDE\u63A5\u6D4B\u8BD5\uFF1A\u9A8C\u8BC1\u9875\u62E6\u622A", { ...diag, ms: Date.now() - start });
-        else if (!base.hasH3) logger4.warn("buondua", "Google \u8FDE\u63A5\u6D4B\u8BD5\uFF1A\u65E0\u7ED3\u679C\u6807\u8BB0", { ...diag, ms: Date.now() - start });
-        else logger4.info("buondua", "Google \u8FDE\u63A5\u6D4B\u8BD5\u6B63\u5E38", { ...diag, ms: Date.now() - start });
-        return { ok: true, status: 200, blocked, ms: Date.now() - start, diag };
+        const tab = await chrome.tabs.create({ url: "https://www.google.com/search?q=test&gbv=1", active: false });
+        try {
+          const info = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: async () => {
+              for (let i = 0; i < 24; i++) {
+                if (document.querySelector("a.zReHs, h3.r") || /did not match|No results found|未找到/i.test(document.body?.innerText ?? "")) break;
+                await new Promise((r) => setTimeout(r, 500));
+              }
+              const count = document.querySelectorAll("a.zReHs, h3.r").length;
+              return { count, title: document.title, body: (document.body?.innerText ?? "").slice(0, 200) };
+            }
+          }).then((res) => res[0]?.result ?? { count: 0, title: "", body: "" });
+          const diag = {
+            len: info.body.length,
+            title: info.title.slice(0, 100),
+            hasH3: info.count > 0,
+            isConsent: false,
+            hasMetaRefresh: false,
+            hasNoResultText: /did not match|No results found|未找到/i.test(info.body),
+            hops: 0,
+            bodyPreview: info.body
+          };
+          const ms = Date.now() - start;
+          if (diag.hasH3) logger4.info("buondua", "Google \u6807\u7B7E\u9875\u6D4B\u8BD5\uFF1A\u6B63\u5E38", { ...diag, ms });
+          else logger4.warn("buondua", "Google \u6807\u7B7E\u9875\u6D4B\u8BD5\uFF1A\u65E0\u7ED3\u679C", { ...diag, ms });
+          return { ok: true, status: 200, blocked: false, ms, diag };
+        } finally {
+          await chrome.tabs.remove(tab.id).catch(() => {
+          });
+        }
       } catch (err) {
-        logger4.warn("buondua", "Google \u8FDE\u63A5\u6D4B\u8BD5\u5931\u8D25", { error: String(err), ms: Date.now() - start });
+        logger4.warn("buondua", "Google \u6807\u7B7E\u9875\u6D4B\u8BD5\u5931\u8D25", { error: String(err), ms: Date.now() - start });
         return { ok: false, blocked: false, ms: Date.now() - start, error: String(err) };
       }
-    }
-    /** 跟随页内跳转并返回跳数（测试用；fetchGoogleSearch 的内部版本） */
-    async fetchGoogleSearchWithHops(url) {
-      let current = url;
-      for (let hop = 0; hop < 4; hop++) {
-        const html = await this.fetchHtml(current);
-        const mr = html.match(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*content=["'][^"']*url=([^"']+)["']/i);
-        if (mr) {
-          current = new URL(mr[1].replace(/&amp;/g, "&"), current).href;
-          continue;
-        }
-        const js = html.match(/window\.location\.(?:replace|href)\s*=\s*["']([^"']+)["']/i);
-        if (js) {
-          current = new URL(js[1].replace(/&amp;/g, "&"), current).href;
-          continue;
-        }
-        return { html, hops: hop };
-      }
-      throw new Error("Google \u8DF3\u8F6C\u6B21\u6570\u8FC7\u591A");
     }
   };
   function parseLinksForSite(siteId, html, base) {
@@ -2266,26 +2312,31 @@
     if (site && site.searchAlbumPath) return parseGoogleResults(html, site);
     return parseSitePostLinks(html, base, site?.hosts ?? [siteId]);
   }
+  function cleanGoogleResult(site, rawUrl, rawTitle) {
+    try {
+      const url = rawUrl.replace(/&amp;/g, "&");
+      const u = new URL(url);
+      const host = u.hostname.replace(/^www\./, "");
+      const hostOk = site.hosts.some((h) => host === h || host.endsWith(`.${h}`));
+      if (!hostOk) return null;
+      if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) return null;
+      u.search = "";
+      u.hash = "";
+      const cleanUrl = u.href;
+      const title = site.cleanTitle(rawTitle.replace(/<[^>]*>/g, "").trim()) || cleanUrl;
+      return { url: cleanUrl, title, coverUrl: "", imageCount: void 0 };
+    } catch {
+      return null;
+    }
+  }
   function parseGoogleResults(html, site) {
     const items = [];
     const seen = /* @__PURE__ */ new Set();
     const add = (rawUrl, rawTitle) => {
-      try {
-        const url = rawUrl.replace(/&amp;/g, "&");
-        const u = new URL(url);
-        const host = u.hostname.replace(/^www\./, "");
-        const hostOk = site.hosts.some((h) => host === h || host.endsWith(`.${h}`));
-        if (!hostOk) return;
-        if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) return;
-        u.search = "";
-        u.hash = "";
-        const cleanUrl = u.href;
-        if (seen.has(cleanUrl)) return;
-        seen.add(cleanUrl);
-        const title = site.cleanTitle(rawTitle.replace(/<[^>]*>/g, "").trim()) || cleanUrl;
-        items.push({ url: cleanUrl, title, coverUrl: "", imageCount: void 0 });
-      } catch {
-      }
+      const clean = cleanGoogleResult(site, rawUrl, rawTitle);
+      if (!clean || seen.has(clean.url)) return;
+      seen.add(clean.url);
+      items.push(clean);
     };
     const re1 = /<a[^>]*class="[^"]*zReHs[^"]*"[^>]*href="([^"]+)"[^>]*>(?:(?!<\/a>)[\s\S])*?<h3[^>]*>([\s\S]*?)<\/h3>/g;
     let m;
@@ -2318,19 +2369,6 @@
   }
   function isBlockedPage(html) {
     return /search request blocked|正在进行安全验证|just a moment|cf-chl|cloudflare|turnstile|attention required|unusual traffic|enable JavaScript and cookies|recaptcha|our systems have detected/i.test(html);
-  }
-  function diagGooglePage(html) {
-    const title = (html.match(/<title>([^<]*)<\/title>/) ?? [null, ""])[1].slice(0, 100);
-    const body = html.replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    return {
-      len: html.length,
-      title,
-      hasH3: /<h3[^>]*class="[^"]*\br\b[^"]*"/.test(html) || /zReHs/.test(html),
-      isConsent: /consent\.google\.com|google\.com\/consent/i.test(html),
-      hasMetaRefresh: /<meta[^>]*http-equiv=["']?refresh["']?/i.test(html),
-      hasNoResultText: /未找到任何匹配项|did not match any documents|no results found/i.test(html),
-      bodyPreview: body.slice(0, 200)
-    };
   }
   function dedupeLinks2(items) {
     const seen = /* @__PURE__ */ new Set();
