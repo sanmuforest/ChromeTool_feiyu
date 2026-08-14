@@ -2182,6 +2182,24 @@
       const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
       return `ID-buondua-${name}-${ts}`;
     }
+    /** Google 连接测试（聚合搜索 Google 通道，FP-012）：请求 google 搜索，报告可达性/拦截/耗时 */
+    async testGoogleConnection() {
+      const start = Date.now();
+      try {
+        const resp = await fetch("https://www.google.com/search?q=test", {
+          credentials: "include",
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"
+          }
+        });
+        const html = await resp.text();
+        const blocked = isBlockedPage(html);
+        return { ok: true, status: resp.status, blocked, ms: Date.now() - start };
+      } catch (err) {
+        return { ok: false, blocked: false, ms: Date.now() - start, error: String(err) };
+      }
+    }
   };
   function parseLinksForSite(siteId, html, base) {
     if (siteId === "jrants") return parseJrantsPostLinks(html, base, {});
@@ -2937,6 +2955,13 @@
           await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "scan", data: [], done: true, error: String(err) });
         }
         return { ok: true };
+      }
+      case "BD_TEST_GOOGLE": {
+        try {
+          return { ok: true, google: await buondua.testGoogleConnection() };
+        } catch (err) {
+          return { ok: false, error: String(err) };
+        }
       }
       case "BD_SEARCH": {
         try {

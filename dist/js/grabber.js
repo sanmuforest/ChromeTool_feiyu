@@ -4708,10 +4708,12 @@
           <span id="bd-search-site-status" class="status-text"></span>
         </div>
         <div class="row">
-          <button class="btn bd-select-all">\u5168\u9009\u672C\u6279/\u53D6\u6D88</button>
+          <button id="bd-google-test" class="btn">\u6D4B\u8BD5 Google \u8FDE\u63A5</button>
+          <span id="bd-google-status" class="status-text"></span>
+        </div>
+        <div class="row">
+          <button class="btn bd-select-all">\u5168\u9009/\u53D6\u6D88</button>
           <button class="btn bd-fetch-selected">\u6293\u53D6\u9009\u4E2D</button>
-          <button class="btn bd-prev-batch">\u4E0A\u4E00\u6279</button>
-          <button class="btn bd-next-batch">\u4E0B\u4E00\u6279</button>
           <span class="bd-batch-info status-text"></span>
           <span class="bd-list-status status-text"></span>
         </div>
@@ -4968,9 +4970,9 @@
       const statusEl = panel.querySelector(".bd-list-status");
       const btnSelectAll = panel.querySelector(".bd-select-all");
       const btnFetch = panel.querySelector(".bd-fetch-selected");
-      const btnNext = panel.querySelector(".bd-next-batch");
-      const btnPrev = panel.querySelector(".bd-prev-batch");
       const batchInfo = panel.querySelector(".bd-batch-info");
+      const googleTestBtn = panel.querySelector("#bd-google-test");
+      const googleStatus = panel.querySelector("#bd-google-status");
       const searchable = GALLERY_SITES.filter((s) => s.searchUrl);
       const defaultChecked = /* @__PURE__ */ new Set(["jrants", "pixibb", "rrwsh"]);
       const googleChannel = /* @__PURE__ */ new Set(["hitxhot", "kaizty"]);
@@ -4991,106 +4993,109 @@
       const selectedSites = () => Array.from(siteBoxes.querySelectorAll('input[type="checkbox"]:checked')).map((c) => c.value);
       let items = [];
       let itemSites = [];
-      let page = 0;
+      const siteSeen = /* @__PURE__ */ new Map();
       const selected = /* @__PURE__ */ new Set();
-      const pageCount = () => Math.ceil(items.length / BATCH_SIZE);
       let pendingSites = 0;
+      function makeCard(item, globalIdx) {
+        const card = document.createElement("div");
+        card.className = "bd-search-card" + (selected.has(globalIdx) ? " selected" : "");
+        card.dataset.idx = String(globalIdx);
+        const badge = document.createElement("span");
+        badge.className = "bd-search-badge";
+        badge.textContent = itemSites[globalIdx] ?? "";
+        const check = document.createElement("input");
+        check.type = "checkbox";
+        check.className = "bd-search-check";
+        check.checked = selected.has(globalIdx);
+        check.title = "\u52FE\u9009\u4EE5\u6279\u91CF\u6293\u53D6";
+        check.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          if (selected.has(globalIdx)) selected.delete(globalIdx);
+          else selected.add(globalIdx);
+          card.classList.toggle("selected", selected.has(globalIdx));
+        });
+        const cover = document.createElement("div");
+        cover.className = "bd-search-cover";
+        cover.title = "\u70B9\u51FB\u6253\u5F00\u76F8\u518C\u9875";
+        const img = document.createElement("img");
+        img.loading = "lazy";
+        img.src = item.coverUrl || "";
+        img.alt = item.title;
+        img.draggable = false;
+        img.addEventListener("error", () => {
+          img.style.display = "none";
+          cover.classList.add("no-cover");
+        });
+        cover.appendChild(img);
+        const info = document.createElement("div");
+        info.className = "bd-search-info";
+        const title = document.createElement("div");
+        title.className = "bd-search-title";
+        title.textContent = item.title;
+        title.title = item.title;
+        const meta = document.createElement("div");
+        meta.className = "bd-search-meta";
+        meta.textContent = item.imageCount !== void 0 ? `${item.imageCount} \u5F20` : "\u5F20\u6570\u672A\u77E5";
+        info.append(title, meta);
+        card.append(check, badge, cover, info);
+        card.addEventListener("click", (ev) => {
+          const t = ev.target;
+          if (t.closest("input")) return;
+          window.open(item.url, "_blank", "noreferrer");
+        });
+        return card;
+      }
       function renderList() {
         listEl.innerHTML = "";
         if (items.length === 0) {
           listEl.innerHTML = '<div class="empty-tip">\u6682\u65E0\u7ED3\u679C\u3002\u8BF7\u8F93\u5165\u5173\u952E\u8BCD\u540E\u70B9\u51FB\u300C\u805A\u5408\u641C\u7D22\u300D\u3002</div>';
-          btnNext.disabled = true;
-          btnPrev.disabled = true;
           btnFetch.disabled = true;
           btnSelectAll.disabled = true;
           batchInfo.textContent = "";
           return;
         }
-        const start = page * BATCH_SIZE;
-        const slice = items.slice(start, start + BATCH_SIZE);
-        for (const [i, item] of slice.entries()) {
-          const globalIdx = start + i;
-          const card = document.createElement("div");
-          card.className = "bd-search-card" + (selected.has(globalIdx) ? " selected" : "");
-          card.dataset.idx = String(globalIdx);
-          const badge = document.createElement("span");
-          badge.className = "bd-search-badge";
-          badge.textContent = itemSites[globalIdx] ?? "";
-          const check = document.createElement("input");
-          check.type = "checkbox";
-          check.className = "bd-search-check";
-          check.checked = selected.has(globalIdx);
-          check.title = "\u52FE\u9009\u4EE5\u6279\u91CF\u6293\u53D6";
-          check.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            if (selected.has(globalIdx)) selected.delete(globalIdx);
-            else selected.add(globalIdx);
-            card.classList.toggle("selected", selected.has(globalIdx));
-          });
-          const cover = document.createElement("div");
-          cover.className = "bd-search-cover";
-          cover.title = "\u70B9\u51FB\u6253\u5F00\u76F8\u518C\u9875";
-          const img = document.createElement("img");
-          img.loading = "lazy";
-          img.src = item.coverUrl || "";
-          img.alt = item.title;
-          img.draggable = false;
-          img.addEventListener("error", () => {
-            img.style.display = "none";
-            cover.classList.add("no-cover");
-          });
-          cover.appendChild(img);
-          const info = document.createElement("div");
-          info.className = "bd-search-info";
-          const title = document.createElement("div");
-          title.className = "bd-search-title";
-          title.textContent = item.title;
-          title.title = item.title;
-          const meta = document.createElement("div");
-          meta.className = "bd-search-meta";
-          meta.textContent = item.imageCount !== void 0 ? `${item.imageCount} \u5F20` : "\u5F20\u6570\u672A\u77E5";
-          info.append(title, meta);
-          card.append(check, badge, cover, info);
-          card.addEventListener("click", (ev) => {
-            const t = ev.target;
-            if (t.closest("input")) return;
-            window.open(item.url, "_blank", "noreferrer");
-          });
-          listEl.appendChild(card);
+        const bySite = /* @__PURE__ */ new Map();
+        items.forEach((_item, idx) => {
+          const siteId = itemSites[idx] ?? "";
+          if (!bySite.has(siteId)) bySite.set(siteId, []);
+          bySite.get(siteId).push(idx);
+        });
+        const order = [...GALLERY_SITES.map((s) => s.id), ...bySite.keys()].filter(
+          (id, i, arr) => arr.indexOf(id) === i
+        );
+        for (const siteId of order) {
+          const indices = bySite.get(siteId);
+          if (!indices) continue;
+          const block = document.createElement("div");
+          block.className = "bd-search-site-block";
+          const head = document.createElement("div");
+          head.className = "bd-search-site-head";
+          head.textContent = `${siteId} \xB7 ${indices.length} \u6761`;
+          block.appendChild(head);
+          const grid = document.createElement("div");
+          grid.className = "bd-search-site-grid";
+          for (const globalIdx of indices) {
+            grid.appendChild(makeCard(items[globalIdx], globalIdx));
+          }
+          block.appendChild(grid);
+          listEl.appendChild(block);
         }
-        btnNext.disabled = page >= pageCount() - 1;
-        btnPrev.disabled = page <= 0;
         btnFetch.disabled = false;
         btnSelectAll.disabled = false;
-        batchInfo.textContent = `\u7B2C ${page + 1}/${pageCount()} \u6279\uFF08\u5171 ${items.length} \u4E2A\uFF0C\u672C\u6279 ${slice.length} \u4E2A\uFF09`;
+        batchInfo.textContent = `\u5171 ${items.length} \u4E2A\u7ED3\u679C\uFF08${bySite.size} \u7AD9\uFF09`;
       }
       function setBusy(busy) {
         searchBtn.disabled = busy;
         btnFetch.disabled = busy;
         btnSelectAll.disabled = busy;
-        btnNext.disabled = busy || page >= pageCount() - 1;
-        btnPrev.disabled = busy || page <= 0;
+        googleTestBtn.disabled = busy;
         searchBtn.textContent = busy ? "\u641C\u7D22\u4E2D\u2026" : "\u805A\u5408\u641C\u7D22";
       }
       btnSelectAll.addEventListener("click", () => {
-        const start = page * BATCH_SIZE;
-        for (let i = start; i < Math.min(start + BATCH_SIZE, items.length); i++) {
-          if (selected.has(i)) selected.delete(i);
-          else selected.add(i);
-        }
+        const allSelected = items.length > 0 && items.every((_i, idx) => selected.has(idx));
+        if (allSelected) selected.clear();
+        else items.forEach((_i, idx) => selected.add(idx));
         renderList();
-      });
-      btnNext.addEventListener("click", () => {
-        if (page < pageCount() - 1) {
-          page++;
-          renderList();
-        }
-      });
-      btnPrev.addEventListener("click", () => {
-        if (page > 0) {
-          page--;
-          renderList();
-        }
       });
       btnFetch.addEventListener("click", () => {
         if (btnFetch.disabled) return;
@@ -5143,6 +5148,37 @@
           }
         });
       });
+      googleTestBtn.addEventListener("click", async () => {
+        if (!await ensureHostPermission()) {
+          setStatus(googleStatus, "\u9700\u8981\u6388\u6743\u8BBF\u95EE <all_urls> \u540E\u624D\u80FD\u6D4B\u8BD5 Google", true);
+          return;
+        }
+        setStatus(googleStatus, "\u6D4B\u8BD5\u4E2D\u2026");
+        googleTestBtn.disabled = true;
+        try {
+          const res = await sendMessage({ type: "BD_TEST_GOOGLE", srcTabId: srcTabId2 });
+          if (!res.ok) {
+            setStatus(googleStatus, `\u6D4B\u8BD5\u5931\u8D25\uFF1A${res.error}`, true);
+            return;
+          }
+          if (!res.google) {
+            setStatus(googleStatus, "\u6D4B\u8BD5\u5931\u8D25\uFF1A\u65E0\u54CD\u5E94", true);
+            return;
+          }
+          const g = res.google;
+          if (!g.ok) {
+            setStatus(googleStatus, `\u8FDE\u63A5\u5931\u8D25\uFF1A${g.error}\uFF08${g.ms}ms\uFF09`, true);
+          } else if (g.blocked) {
+            setStatus(googleStatus, `\u53EF\u8FBE\u4F46\u89E6\u53D1\u9A8C\u8BC1\u9875\uFF08HTTP ${g.status} \xB7 ${g.ms}ms\uFF09\u2014\u2014\u4EE3\u7406/cookie \u53EF\u80FD\u672A\u751F\u6548`, true);
+          } else {
+            setStatus(googleStatus, `\u8FDE\u63A5\u6B63\u5E38\uFF08HTTP ${g.status} \xB7 ${g.ms}ms\uFF09`);
+          }
+        } catch (err) {
+          setStatus(googleStatus, `\u6D4B\u8BD5\u5F02\u5E38\uFF1A${String(err)}`, true);
+        } finally {
+          googleTestBtn.disabled = false;
+        }
+      });
       searchBtn.addEventListener("click", async () => {
         const query = queryInput.value.trim();
         if (!query) {
@@ -5160,7 +5196,7 @@
         }
         items = [];
         itemSites = [];
-        page = 0;
+        siteSeen.clear();
         selected.clear();
         pendingSites = sites.length;
         renderList();
@@ -5177,17 +5213,22 @@
       return {
         show: (list) => {
           items = list;
-          page = 0;
+          itemSites = list.map(() => "");
           selected.clear();
           renderList();
         },
         append: (list, error, siteId) => {
-          const seen = new Set(items.map((i) => i.url));
+          const key = siteId ?? "";
+          let seen = siteSeen.get(key);
+          if (!seen) {
+            seen = /* @__PURE__ */ new Set();
+            siteSeen.set(key, seen);
+          }
           for (const item of list) {
             if (!seen.has(item.url)) {
               seen.add(item.url);
               items.push(item);
-              itemSites.push(siteId ?? "");
+              itemSites.push(key);
             }
           }
           pendingSites = Math.max(0, pendingSites - 1);
@@ -5201,7 +5242,7 @@
         finish: () => {
           setBusy(false);
           siteStatus.textContent = `\u641C\u7D22\u5B8C\u6210\uFF1A${items.length} \u4E2A\u7ED3\u679C`;
-          setStatus(statusEl, `\u641C\u7D22\u5B8C\u6210\uFF1A\u5171 ${items.length} \u4E2A\u7ED3\u679C\uFF08\u53BB\u91CD\uFF09`);
+          setStatus(statusEl, `\u641C\u7D22\u5B8C\u6210\uFF1A\u5171 ${items.length} \u4E2A\u7ED3\u679C\uFF08\u6309\u7AD9\u70B9\u5206\u680F\u5C55\u793A\uFF09`);
         }
       };
     }
@@ -5373,7 +5414,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260814133318" : "dev";
+  var BUILD_TIME = true ? "20260814141055" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

@@ -101,6 +101,8 @@ export type Message =
   | { type: 'BD_FETCH_ALBUMS'; srcTabId: number; targets: BuonduaTarget[] }
   // ---- 多页图站聚合搜索（FP-010）：grabber → bg ----
   | { type: 'BD_SEARCH'; srcTabId: number; query: string; sites: string[]; pagesPerSite: number }
+  // ---- 聚合搜索：Google 连接测试（FP-012）：grabber → bg ----
+  | { type: 'BD_TEST_GOOGLE'; srcTabId: number }
   // ---- buondua 适配器：bg → grabber 推送 ----
   | { type: 'BD_RESULT'; kind: BuonduaResultKind; data: BuonduaImage[] | BuonduaLinkItem[] | BuonduaBatchItem | SearchSiteResult; done: boolean; error?: string }
   // ---- 多页站点：bg → content 页面内 fetch（带 Cookie 穿透反爬，hitxhot 等） ----
@@ -157,6 +159,8 @@ export type MessageResponse =
       config?: { repo: string; branch: string; configured: boolean }
       github?: { message: string; total?: number }
       json?: string
+      // ---- 聚合搜索 Google 连接测试（FP-012） ----
+      google?: { ok: boolean; status?: number; blocked: boolean; ms: number; error?: string }
     }
   | { ok: false; error: string }
 

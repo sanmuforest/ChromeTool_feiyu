@@ -121,10 +121,12 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           <span id="bd-search-site-status" class="status-text"></span>
         </div>
         <div class="row">
-          <button class="btn bd-select-all">全选本批/取消</button>
+          <button id="bd-google-test" class="btn">测试 Google 连接</button>
+          <span id="bd-google-status" class="status-text"></span>
+        </div>
+        <div class="row">
+          <button class="btn bd-select-all">全选/取消</button>
           <button class="btn bd-fetch-selected">抓取选中</button>
-          <button class="btn bd-prev-batch">上一批</button>
-          <button class="btn bd-next-batch">下一批</button>
           <span class="bd-batch-info status-text"></span>
           <span class="bd-list-status status-text"></span>
         </div>
@@ -415,9 +417,9 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     const statusEl = panel.querySelector('.bd-list-status') as HTMLElement
     const btnSelectAll = panel.querySelector('.bd-select-all') as HTMLButtonElement
     const btnFetch = panel.querySelector('.bd-fetch-selected') as HTMLButtonElement
-    const btnNext = panel.querySelector('.bd-next-batch') as HTMLButtonElement
-    const btnPrev = panel.querySelector('.bd-prev-batch') as HTMLButtonElement
     const batchInfo = panel.querySelector('.bd-batch-info') as HTMLElement
+    const googleTestBtn = panel.querySelector('#bd-google-test') as HTMLButtonElement
+    const googleStatus = panel.querySelector('#bd-google-status') as HTMLElement
 
     // 站点勾选：支持搜索的站点可选（默认勾选 jrants/pixibb/rrwsh；hitxhot/kaizty 为 Google 通道，请求较慢，默认不勾选）；
     // 不支持的灰显禁用并标注原因（FP-012）
@@ -447,112 +449,118 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     const selectedSites = (): string[] =>
       Array.from(siteBoxes.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')).map((c) => c.value)
 
-    let items: BuonduaLinkItem[] = []
-    let itemSites: string[] = [] // 与 items 同序：来源站点（徽标用）
-    let page = 0
+    let items: BuonduaLinkItem[] = [] // 平铺全站结果（跨站不去重，各站分栏展示）
+    let itemSites: string[] = [] // 与 items 同序：来源站点（徽标/分组用）
+    const siteSeen = new Map<string, Set<string>>() // 站内 URL 去重
     const selected = new Set<number>()
-    const pageCount = () => Math.ceil(items.length / BATCH_SIZE)
     let pendingSites = 0
+
+    /** 创建结果卡片（大封面网格）：勾选框独立选中，点卡片打开相册页 */
+    function makeCard(item: BuonduaLinkItem, globalIdx: number): HTMLDivElement {
+      const card = document.createElement('div')
+      card.className = 'bd-search-card' + (selected.has(globalIdx) ? ' selected' : '')
+      card.dataset.idx = String(globalIdx)
+      const badge = document.createElement('span')
+      badge.className = 'bd-search-badge'
+      badge.textContent = itemSites[globalIdx] ?? ''
+      const check = document.createElement('input')
+      check.type = 'checkbox'
+      check.className = 'bd-search-check'
+      check.checked = selected.has(globalIdx)
+      check.title = '勾选以批量抓取'
+      check.addEventListener('click', (ev) => {
+        ev.stopPropagation()
+        if (selected.has(globalIdx)) selected.delete(globalIdx)
+        else selected.add(globalIdx)
+        card.classList.toggle('selected', selected.has(globalIdx))
+      })
+      const cover = document.createElement('div')
+      cover.className = 'bd-search-cover'
+      cover.title = '点击打开相册页'
+      const img = document.createElement('img')
+      img.loading = 'lazy'
+      img.src = item.coverUrl || ''
+      img.alt = item.title
+      img.draggable = false
+      img.addEventListener('error', () => {
+        img.style.display = 'none'
+        cover.classList.add('no-cover')
+      })
+      cover.appendChild(img)
+      const info = document.createElement('div')
+      info.className = 'bd-search-info'
+      const title = document.createElement('div')
+      title.className = 'bd-search-title'
+      title.textContent = item.title
+      title.title = item.title
+      const meta = document.createElement('div')
+      meta.className = 'bd-search-meta'
+      meta.textContent = item.imageCount !== undefined ? `${item.imageCount} 张` : '张数未知'
+      info.append(title, meta)
+      card.append(check, badge, cover, info)
+      card.addEventListener('click', (ev) => {
+        const t = ev.target as HTMLElement
+        if (t.closest('input')) return
+        window.open(item.url, '_blank', 'noreferrer')
+      })
+      return card
+    }
 
     function renderList(): void {
       listEl.innerHTML = ''
       if (items.length === 0) {
         listEl.innerHTML = '<div class="empty-tip">暂无结果。请输入关键词后点击「聚合搜索」。</div>'
-        btnNext.disabled = true
-        btnPrev.disabled = true
         btnFetch.disabled = true
         btnSelectAll.disabled = true
         batchInfo.textContent = ''
         return
       }
-      const start = page * BATCH_SIZE
-      const slice = items.slice(start, start + BATCH_SIZE)
-      for (const [i, item] of slice.entries()) {
-        const globalIdx = start + i
-        // 大封面卡片（网格一行 6 个）：勾选框独立选中，点卡片打开相册页
-        const card = document.createElement('div')
-        card.className = 'bd-search-card' + (selected.has(globalIdx) ? ' selected' : '')
-        card.dataset.idx = String(globalIdx)
-        const badge = document.createElement('span')
-        badge.className = 'bd-search-badge'
-        badge.textContent = itemSites[globalIdx] ?? ''
-        const check = document.createElement('input')
-        check.type = 'checkbox'
-        check.className = 'bd-search-check'
-        check.checked = selected.has(globalIdx)
-        check.title = '勾选以批量抓取'
-        check.addEventListener('click', (ev) => {
-          ev.stopPropagation()
-          if (selected.has(globalIdx)) selected.delete(globalIdx)
-          else selected.add(globalIdx)
-          card.classList.toggle('selected', selected.has(globalIdx))
-        })
-        const cover = document.createElement('div')
-        cover.className = 'bd-search-cover'
-        cover.title = '点击打开相册页'
-        const img = document.createElement('img')
-        img.loading = 'lazy'
-        img.src = item.coverUrl || ''
-        img.alt = item.title
-        img.draggable = false
-        img.addEventListener('error', () => {
-          img.style.display = 'none'
-          cover.classList.add('no-cover')
-        })
-        cover.appendChild(img)
-        const info = document.createElement('div')
-        info.className = 'bd-search-info'
-        const title = document.createElement('div')
-        title.className = 'bd-search-title'
-        title.textContent = item.title
-        title.title = item.title
-        const meta = document.createElement('div')
-        meta.className = 'bd-search-meta'
-        meta.textContent = item.imageCount !== undefined ? `${item.imageCount} 张` : '张数未知'
-        info.append(title, meta)
-        card.append(check, badge, cover, info)
-        card.addEventListener('click', (ev) => {
-          const t = ev.target as HTMLElement
-          if (t.closest('input')) return
-          window.open(item.url, '_blank', 'noreferrer')
-        })
-        listEl.appendChild(card)
+      // 分站点分组（FP-012）：各站独立区块展示（顺序按 GALLERY_SITES 配置，含结果的站）
+      const bySite = new Map<string, number[]>()
+      items.forEach((_item, idx) => {
+        const siteId = itemSites[idx] ?? ''
+        if (!bySite.has(siteId)) bySite.set(siteId, [])
+        bySite.get(siteId)!.push(idx)
+      })
+      const order = [...GALLERY_SITES.map((s) => s.id), ...bySite.keys()].filter(
+        (id, i, arr) => arr.indexOf(id) === i,
+      )
+      for (const siteId of order) {
+        const indices = bySite.get(siteId)
+        if (!indices) continue
+        const block = document.createElement('div')
+        block.className = 'bd-search-site-block'
+        const head = document.createElement('div')
+        head.className = 'bd-search-site-head'
+        head.textContent = `${siteId} · ${indices.length} 条`
+        block.appendChild(head)
+        const grid = document.createElement('div')
+        grid.className = 'bd-search-site-grid'
+        for (const globalIdx of indices) {
+          grid.appendChild(makeCard(items[globalIdx], globalIdx))
+        }
+        block.appendChild(grid)
+        listEl.appendChild(block)
       }
-      btnNext.disabled = page >= pageCount() - 1
-      btnPrev.disabled = page <= 0
       btnFetch.disabled = false
       btnSelectAll.disabled = false
-      batchInfo.textContent = `第 ${page + 1}/${pageCount()} 批（共 ${items.length} 个，本批 ${slice.length} 个）`
+      batchInfo.textContent = `共 ${items.length} 个结果（${bySite.size} 站）`
     }
 
     function setBusy(busy: boolean): void {
       searchBtn.disabled = busy
       btnFetch.disabled = busy
       btnSelectAll.disabled = busy
-      btnNext.disabled = busy || page >= pageCount() - 1
-      btnPrev.disabled = busy || page <= 0
+      googleTestBtn.disabled = busy
       searchBtn.textContent = busy ? '搜索中…' : '聚合搜索'
     }
 
     btnSelectAll.addEventListener('click', () => {
-      const start = page * BATCH_SIZE
-      for (let i = start; i < Math.min(start + BATCH_SIZE, items.length); i++) {
-        if (selected.has(i)) selected.delete(i)
-        else selected.add(i)
-      }
+      // 全选/取消全部（跨站）
+      const allSelected = items.length > 0 && items.every((_i, idx) => selected.has(idx))
+      if (allSelected) selected.clear()
+      else items.forEach((_i, idx) => selected.add(idx))
       renderList()
-    })
-    btnNext.addEventListener('click', () => {
-      if (page < pageCount() - 1) {
-        page++
-        renderList()
-      }
-    })
-    btnPrev.addEventListener('click', () => {
-      if (page > 0) {
-        page--
-        renderList()
-      }
     })
     btnFetch.addEventListener('click', () => {
       if (btnFetch.disabled) return
@@ -608,6 +616,41 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       })
     })
 
+    // ---------- Google 连接测试（FP-012） ----------
+    googleTestBtn.addEventListener('click', async () => {
+      if (!(await ensureHostPermission())) {
+        setStatus(googleStatus, '需要授权访问 <all_urls> 后才能测试 Google', true)
+        return
+      }
+      setStatus(googleStatus, '测试中…')
+      googleTestBtn.disabled = true
+      try {
+        const res = await sendMessage<
+          { ok: true; google?: { ok: boolean; status?: number; blocked: boolean; ms: number; error?: string } } | { ok: false; error: string }
+        >({ type: 'BD_TEST_GOOGLE', srcTabId })
+        if (!res.ok) {
+          setStatus(googleStatus, `测试失败：${res.error}`, true)
+          return
+        }
+        if (!res.google) {
+          setStatus(googleStatus, '测试失败：无响应', true)
+          return
+        }
+        const g = res.google
+        if (!g.ok) {
+          setStatus(googleStatus, `连接失败：${g.error}（${g.ms}ms）`, true)
+        } else if (g.blocked) {
+          setStatus(googleStatus, `可达但触发验证页（HTTP ${g.status} · ${g.ms}ms）——代理/cookie 可能未生效`, true)
+        } else {
+          setStatus(googleStatus, `连接正常（HTTP ${g.status} · ${g.ms}ms）`)
+        }
+      } catch (err) {
+        setStatus(googleStatus, `测试异常：${String(err)}`, true)
+      } finally {
+        googleTestBtn.disabled = false
+      }
+    })
+
     searchBtn.addEventListener('click', async () => {
       const query = queryInput.value.trim()
       if (!query) {
@@ -625,7 +668,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       }
       items = []
       itemSites = []
-      page = 0
+      siteSeen.clear()
       selected.clear()
       pendingSites = sites.length
       renderList()
@@ -643,17 +686,22 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     return {
       show: (list) => {
         items = list
-        page = 0
+        itemSites = list.map(() => '')
         selected.clear()
         renderList()
       },
       append: (list, error, siteId) => {
-        const seen = new Set(items.map((i) => i.url))
+        const key = siteId ?? ''
+        let seen = siteSeen.get(key)
+        if (!seen) {
+          seen = new Set()
+          siteSeen.set(key, seen)
+        }
         for (const item of list) {
           if (!seen.has(item.url)) {
             seen.add(item.url)
             items.push(item)
-            itemSites.push(siteId ?? '')
+            itemSites.push(key)
           }
         }
         pendingSites = Math.max(0, pendingSites - 1)
@@ -667,7 +715,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       finish: () => {
         setBusy(false)
         siteStatus.textContent = `搜索完成：${items.length} 个结果`
-        setStatus(statusEl, `搜索完成：共 ${items.length} 个结果（去重）`)
+        setStatus(statusEl, `搜索完成：共 ${items.length} 个结果（按站点分栏展示）`)
       },
     }
   }

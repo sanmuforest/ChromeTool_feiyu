@@ -830,6 +830,15 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       return { ok: true }
     }
 
+    // ---- 聚合搜索：Google 连接测试（FP-012） ----
+    case 'BD_TEST_GOOGLE': {
+      try {
+        return { ok: true, google: await buondua.testGoogleConnection() }
+      } catch (err) {
+        return { ok: false, error: String(err) }
+      }
+    }
+
     // ---- 多页图站聚合搜索（FP-010） ----
     case 'BD_SEARCH': {
       try {

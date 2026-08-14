@@ -1423,12 +1423,24 @@ body {
   color: var(--muted, #888);
 }
 
-/* 聚合搜索结果：大封面卡片网格（一行 6 个），点击打开相册页，勾选框独立选中 */
-.bd-search-list {
+/* 聚合搜索结果：按站点分栏展示（FP-012），每站独立区块（标题 + 网格） */
+.bd-search-site-block {
+  margin-bottom: 14px;
+}
+.bd-search-site-head {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #ddd);
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  background: rgba(74, 158, 255, 0.1);
+  border-left: 3px solid var(--accent, #4a9eff);
+  border-radius: 4px;
+}
+.bd-search-site-grid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
   gap: 10px;
-  margin-top: 8px;
 }
 .bd-search-card {
   position: relative;

@@ -236,6 +236,26 @@ export class BuonduaService {
     const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
     return `ID-buondua-${name}-${ts}`
   }
+
+  /** Google 连接测试（聚合搜索 Google 通道，FP-012）：请求 google 搜索，报告可达性/拦截/耗时 */
+  async testGoogleConnection(): Promise<{ ok: boolean; status?: number; blocked: boolean; ms: number; error?: string }> {
+    const start = Date.now()
+    try {
+      const resp = await fetch('https://www.google.com/search?q=test', {
+        credentials: 'include',
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        },
+      })
+      const html = await resp.text()
+      const blocked = isBlockedPage(html)
+      return { ok: true, status: resp.status, blocked, ms: Date.now() - start }
+    } catch (err) {
+      return { ok: false, blocked: false, ms: Date.now() - start, error: String(err) }
+    }
+  }
 }
 
 /** 按站点路由搜索页链接解析：jrants/pixibb 用专用解析器，其余用通用解析 */
