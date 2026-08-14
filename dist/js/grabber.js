@@ -4503,7 +4503,8 @@
       // rrwsh 为 4khd 镜像：搜索页可达（curl 200，实测 2026-08-14），结果链接指向 4khd.com
       // 4khd.com 相册页被反爬网关拦截（302 → y5gx.uuss.uk/4khd.php），但 rrwsh.uuss.uk 同路径直接可达
       // → 结果 URL 改写为 rrwsh 域（rewriteUrl），抓取/分页（/content/N/slug.html/2）均正常
-      searchUrl: (q, page) => `https://rrwsh.uuss.uk/search/${encodeURIComponent(q)}${page > 1 ? `/${page}` : ""}`,
+      // 搜索无分页（实测 2026-08-14：/search/{q}/2 为空白页，页面无分页链接），每页固定 4 条
+      searchUrl: (q, page) => page > 1 ? null : `https://rrwsh.uuss.uk/search/${encodeURIComponent(q)}`,
       rewriteUrl: (url) => url.replace(/https?:\/\/(?:www\.)?4khd\.com/i, "https://rrwsh.uuss.uk")
     },
     {
@@ -4567,8 +4568,8 @@
         }
       },
       cleanTitle: (title) => title.trim(),
-      // WP 标准搜索（?s= + paged）
-      searchUrl: (q, page) => `https://jrants.com/?s=${encodeURIComponent(q)}${page > 1 ? `&paged=${page}` : ""}`
+      // WP 搜索：路径式分页（实测 2026-08-14：/page/2?s={q}，&paged= 无效）
+      searchUrl: (q, page) => page <= 1 ? `https://jrants.com/?s=${encodeURIComponent(q)}` : `https://jrants.com/page/${page}?s=${encodeURIComponent(q)}`
     },
     {
       id: "pixibb",
@@ -4589,8 +4590,8 @@
         }
       },
       cleanTitle: (title) => title.trim(),
-      // WP 标准搜索（?s= + paged）；主内容子域 sexy
-      searchUrl: (q, page) => `https://sexy.pixibb.com/?s=${encodeURIComponent(q)}${page > 1 ? `&paged=${page}` : ""}`
+      // WP 搜索：路径式分页（实测 2026-08-14：/page/N/?s={q}，&paged= 无效；主内容子域 sexy）
+      searchUrl: (q, page) => page <= 1 ? `https://sexy.pixibb.com/?s=${encodeURIComponent(q)}` : `https://sexy.pixibb.com/page/${page}/?s=${encodeURIComponent(q)}`
     }
   ];
   function matchGallerySite(url) {
@@ -4969,9 +4970,22 @@
       const batchInfo = panel.querySelector(".bd-batch-info");
       const searchable = GALLERY_SITES.filter((s) => s.searchUrl);
       const defaultChecked = /* @__PURE__ */ new Set(["jrants", "pixibb", "rrwsh"]);
-      siteBoxes.innerHTML = searchable.map(
-        (s) => `<label class="bd-site-check"><input type="checkbox" value="${s.id}" ${defaultChecked.has(s.id) ? "checked" : ""}> ${s.id}</label>`
-      ).join("");
+      const disabledNotes = {
+        buondua: "\u7AD9\u70B9\u4E0D\u53EF\u8FBE",
+        hitxhot: "\u65E0\u7AD9\u5185\u641C\u7D22\uFF08Google \u901A\u9053\u5F85\u8FED\u4EE3\uFF09",
+        kaizty: "\u65E0\u7AD9\u5185\u641C\u7D22\uFF08Google \u901A\u9053\u5F85\u8FED\u4EE3\uFF09",
+        imgbb: "\u65E0\u641C\u7D22\uFF08\u56FE\u5E8A\uFF09"
+      };
+      const renderSiteBoxes = () => {
+        const ok = searchable.map(
+          (s) => `<label class="bd-site-check"><input type="checkbox" value="${s.id}" ${defaultChecked.has(s.id) ? "checked" : ""}> ${s.id}</label>`
+        ).join("");
+        const disabled = [...GALLERY_SITES.filter((s) => !s.searchUrl), { id: "imgbb" }].map(
+          (s) => `<label class="bd-site-check disabled" title="${disabledNotes[s.id] ?? "\u4E0D\u652F\u6301\u641C\u7D22"}"><input type="checkbox" disabled> ${s.id}<span class="bd-site-note">\uFF08${disabledNotes[s.id] ?? "\u4E0D\u652F\u6301"}\uFF09</span></label>`
+        ).join("");
+        siteBoxes.innerHTML = ok + disabled;
+      };
+      renderSiteBoxes();
       const selectedSites = () => Array.from(siteBoxes.querySelectorAll('input[type="checkbox"]:checked')).map((c) => c.value);
       let items = [];
       let itemSites = [];
@@ -5357,7 +5371,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260814125124" : "dev";
+  var BUILD_TIME = true ? "20260814131828" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

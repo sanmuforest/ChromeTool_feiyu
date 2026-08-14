@@ -1410,6 +1410,18 @@ body {
 .bd-site-check input {
   margin: 0;
 }
+/* 不支持的搜索站点：灰显禁用（FP-012） */
+.bd-site-check.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.bd-site-check.disabled input {
+  cursor: not-allowed;
+}
+.bd-site-note {
+  font-size: 10px;
+  color: var(--muted, #888);
+}
 
 /* 聚合搜索结果：大封面卡片网格（一行 6 个），点击打开相册页，勾选框独立选中 */
 .bd-search-list {
