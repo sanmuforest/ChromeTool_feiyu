@@ -1,7 +1,7 @@
 // 构建脚本：esbuild 多入口 IIFE 打包 + 静态资源复制到 dist/
 // 用法：node scripts/build.mjs [--watch]
 import { build } from 'esbuild'
-import { cpSync, mkdirSync } from 'node:fs'
+import { cpSync, mkdirSync, readFileSync } from 'node:fs'
 
 const WATCH = process.argv.includes('--watch')
 
@@ -17,6 +17,11 @@ const STATIC_FILES = [
   'src/grabber/grabber.css',
   'src/assets/icons',
 ]
+
+function reportVersion() {
+  const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'))
+  console.log(`[build] 当前版本: v${manifest.version}`)
+}
 
 function copyStatic() {
   mkdirSync('dist', { recursive: true })
@@ -45,7 +50,7 @@ async function buildAll() {
     options.watch = {
       onRebuild: (err) => {
         if (err) console.error('[build] rebuild failed', err)
-        else { console.log('[build] rebuilt'); copyStatic() }
+        else { console.log('[build] rebuilt'); copyStatic(); reportVersion() }
       },
     }
   }
@@ -58,6 +63,7 @@ async function buildAll() {
   } else {
     console.log('[build] done')
   }
+  reportVersion()
 }
 
 buildAll().catch((err) => {
