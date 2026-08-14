@@ -254,18 +254,18 @@ function enrichSearchItem(siteId: string, site: GallerySiteConfig, item: Buondua
   return { ...item, url, imageCount: item.imageCount ?? extractSearchImageCount(siteId, item, url) }
 }
 
-/** 搜索结果张数提取：jrants 标题 (NNNP)/[NNNP]；pixibb slug -NNN-photos；rrwsh 标题 [..NNNphotos] */
+/** 搜索结果张数提取：jrants 标题 (NNNP)/[NNNP]；pixibb slug -NNN-photos（videos 段可选）；rrwsh 标题 [..NNNphotos]（括号形式兼容） */
 function extractSearchImageCount(siteId: string, item: BuonduaLinkItem, finalUrl: string): number | undefined {
   if (siteId === 'jrants') {
     const m = item.title.match(/[(\[]\s*(\d+)\s*P\s*[)\]]/i)
     return m ? Number(m[1]) : undefined
   }
   if (siteId === 'pixibb') {
-    const m = finalUrl.match(/-(\d+)-photos\/?$/i)
+    const m = finalUrl.match(/-(\d+)-photos/i)
     return m ? Number(m[1]) : undefined
   }
   if (siteId === 'rrwsh') {
-    const m = item.title.match(/\[[^\]]*?(\d+)\s*photos/i)
+    const m = item.title.match(/[\[(][^\]()]*?(\d+)\s*photos/i)
     return m ? Number(m[1]) : undefined
   }
   return undefined

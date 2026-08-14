@@ -1937,7 +1937,7 @@
     const items = [];
     const seen = /* @__PURE__ */ new Set();
     const collect = (block) => {
-      const re = /<a[^>]*href="(https:\/\/[a-z0-9-]+\.pixibb\.com\/[a-z0-9-]+-\d+-photos-\d+-videos\/)"[^>]*>/g;
+      const re = /<a[^>]*href="(https:\/\/[a-z0-9-]+\.pixibb\.com\/[a-z0-9-]+-\d+-photos(?:-\d+-videos?)?\/)"[^>]*>/g;
       let m;
       while ((m = re.exec(block)) !== null) {
         const url = m[1];
@@ -1968,7 +1968,7 @@
       }
     };
     if (onlyRecommended) {
-      const re = /<h2[^>]*class="[^"]*post-title[^"]*"[^>]*>\s*<a[^>]*href="(https:\/\/[a-z0-9-]+\.pixibb\.com\/[a-z0-9-]+-\d+-photos-\d+-videos\/)"[^>]*>([^<]+)<\/a>/g;
+      const re = /<h2[^>]*class="[^"]*post-title[^"]*"[^>]*>\s*<a[^>]*href="(https:\/\/[a-z0-9-]+\.pixibb\.com\/[a-z0-9-]+-\d+-photos(?:-\d+-videos?)?\/)"[^>]*>([^<]+)<\/a>/g;
       let m;
       while ((m = re.exec(html)) !== null) {
         const url = m[1];
@@ -2197,11 +2197,11 @@
       return m ? Number(m[1]) : void 0;
     }
     if (siteId === "pixibb") {
-      const m = finalUrl.match(/-(\d+)-photos\/?$/i);
+      const m = finalUrl.match(/-(\d+)-photos/i);
       return m ? Number(m[1]) : void 0;
     }
     if (siteId === "rrwsh") {
-      const m = item.title.match(/\[[^\]]*?(\d+)\s*photos/i);
+      const m = item.title.match(/[\[(][^\]()]*?(\d+)\s*photos/i);
       return m ? Number(m[1]) : void 0;
     }
     return void 0;

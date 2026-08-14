@@ -21,7 +21,8 @@ export function parsePixibbPostLinks(
   const seen = new Set<string>()
 
   const collect = (block: string): void => {
-    const re = /<a[^>]*href="(https:\/\/[a-z0-9-]+\.pixibb\.com\/[a-z0-9-]+-\d+-photos-\d+-videos\/)"[^>]*>/g
+    // URL 格式：/{slug}-{N}-photos(/-{M}-videos?)?/ —— videos 段可选且单复数不定（FP-012 实测搜索页有纯 photos 结果）
+    const re = /<a[^>]*href="(https:\/\/[a-z0-9-]+\.pixibb\.com\/[a-z0-9-]+-\d+-photos(?:-\d+-videos?)?\/)"[^>]*>/g
     let m: RegExpExecArray | null
     while ((m = re.exec(block)) !== null) {
       const url = m[1]
@@ -57,7 +58,7 @@ export function parsePixibbPostLinks(
 
   if (onlyRecommended) {
     // 前后文章导航：post-title 区块（URL + 标题），封面向前 2000 字符内取（post-thumb 在其前）
-    const re = /<h2[^>]*class="[^"]*post-title[^"]*"[^>]*>\s*<a[^>]*href="(https:\/\/[a-z0-9-]+\.pixibb\.com\/[a-z0-9-]+-\d+-photos-\d+-videos\/)"[^>]*>([^<]+)<\/a>/g
+    const re = /<h2[^>]*class="[^"]*post-title[^"]*"[^>]*>\s*<a[^>]*href="(https:\/\/[a-z0-9-]+\.pixibb\.com\/[a-z0-9-]+-\d+-photos(?:-\d+-videos?)?\/)"[^>]*>([^<]+)<\/a>/g
     let m: RegExpExecArray | null
     while ((m = re.exec(html)) !== null) {
       const url = m[1]
