@@ -45,6 +45,11 @@ export class BuonduaService {
       if (!url) break
       const tab = await chrome.tabs.create({ url, active: false })
       try {
+        const ok = await this.waitForTabComplete(tab.id!)
+        if (!ok) {
+          logger.warn('buondua', 'Google 标签页加载超时', { site: site.id, page })
+          break
+        }
         const extracted = await this.extractGoogleTabResults(tab.id!)
         logger.info('buondua', 'Google 标签页提取', { site: site.id, page, count: extracted.length })
         if (extracted.length === 0) break // 无结果（验证页/无匹配）
@@ -60,6 +65,21 @@ export class BuonduaService {
       }
     }
     return items
+  }
+
+  /** 等待标签页加载完成（tabs.create 后页面加载是异步的，未加载完 executeScript 会失败） */
+  private async waitForTabComplete(tabId: number, timeoutMs = 20000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      try {
+        const tab = await chrome.tabs.get(tabId)
+        if (tab.status === 'complete' && (tab.url ?? '').startsWith('http')) return true
+      } catch {
+        return false // 标签页已关闭
+      }
+      await new Promise((r) => setTimeout(r, 300))
+    }
+    return false
   }
 
   /** 在 Google 搜索标签内等待 JS 渲染并提取结果（executeScript 注入，func 返回 Promise 会被等待） */
@@ -97,6 +117,10 @@ export class BuonduaService {
         },
       })
       .then((res) => (res[0]?.result ?? []))
+      .catch((err) => {
+        logger.warn('buondua', 'Google 标签页注入失败', { tabId, error: String(err) })
+        return []
+      })
   }
 
   /** fetch 单个页面 HTML（带 UA + 超时 + 重试 1 次） */
@@ -351,6 +375,7 @@ export class BuonduaService {
     try {
       const tab = await chrome.tabs.create({ url: 'https://www.google.com/search?q=test&gbv=1', active: false })
       try {
+        await this.waitForTabComplete(tab.id!)
         const info = await chrome.scripting
           .executeScript({
             target: { tabId: tab.id! },
@@ -472,11 +497,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-/** 反爬/错误页检测（搜索时跳过，避免把热门/推荐链接当搜索结果）
- *  注意：Google 页面脚本内含 /sorry/index 字符串（iframe 兜底），不能作为拦截特征；
- *  用 sorry 页专属文案（unusual traffic / recaptcha / enable JavaScript） */
+/** 反爬/错误页检测（站内站点搜索用）：使用 challenge 页专属特征
+ *  注意：① 不能用裸 "cloudflare"——正常页面会引用 /cdn-cgi/.../cloudflare-static/rocket-loader.min.js 资源（实测误判 pixibb 2026-08-14）
+ *  ② Google 页面脚本内含 /sorry/index 字符串（iframe 兜底），不能作为拦截特征 */
 function isBlockedPage(html: string): boolean {
-  return /search request blocked|正在进行安全验证|just a moment|cf-chl|cloudflare|turnstile|attention required|unusual traffic|enable JavaScript and cookies|recaptcha|our systems have detected/i.test(html)
+  return /search request blocked|正在进行安全验证|just a moment|cf-chl|turnstile|attention required|unusual traffic|enable JavaScript and cookies|recaptcha|our systems have detected/i.test(html)
 }
 
 /** 按 URL 去重 */

@@ -2014,6 +2014,11 @@
         if (!url) break;
         const tab = await chrome.tabs.create({ url, active: false });
         try {
+          const ok = await this.waitForTabComplete(tab.id);
+          if (!ok) {
+            logger4.warn("buondua", "Google \u6807\u7B7E\u9875\u52A0\u8F7D\u8D85\u65F6", { site: site.id, page });
+            break;
+          }
           const extracted = await this.extractGoogleTabResults(tab.id);
           logger4.info("buondua", "Google \u6807\u7B7E\u9875\u63D0\u53D6", { site: site.id, page, count: extracted.length });
           if (extracted.length === 0) break;
@@ -2030,6 +2035,20 @@
         }
       }
       return items;
+    }
+    /** 等待标签页加载完成（tabs.create 后页面加载是异步的，未加载完 executeScript 会失败） */
+    async waitForTabComplete(tabId, timeoutMs = 2e4) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          if (tab.status === "complete" && (tab.url ?? "").startsWith("http")) return true;
+        } catch {
+          return false;
+        }
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      return false;
     }
     /** 在 Google 搜索标签内等待 JS 渲染并提取结果（executeScript 注入，func 返回 Promise 会被等待） */
     extractGoogleTabResults(tabId) {
@@ -2060,7 +2079,10 @@
           }
           return out;
         }
-      }).then((res) => res[0]?.result ?? []);
+      }).then((res) => res[0]?.result ?? []).catch((err) => {
+        logger4.warn("buondua", "Google \u6807\u7B7E\u9875\u6CE8\u5165\u5931\u8D25", { tabId, error: String(err) });
+        return [];
+      });
     }
     /** fetch 单个页面 HTML（带 UA + 超时 + 重试 1 次） */
     async fetchHtml(url) {
@@ -2268,6 +2290,7 @@
       try {
         const tab = await chrome.tabs.create({ url: "https://www.google.com/search?q=test&gbv=1", active: false });
         try {
+          await this.waitForTabComplete(tab.id);
           const info = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             func: async () => {
@@ -2368,7 +2391,7 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
   function isBlockedPage(html) {
-    return /search request blocked|正在进行安全验证|just a moment|cf-chl|cloudflare|turnstile|attention required|unusual traffic|enable JavaScript and cookies|recaptcha|our systems have detected/i.test(html);
+    return /search request blocked|正在进行安全验证|just a moment|cf-chl|turnstile|attention required|unusual traffic|enable JavaScript and cookies|recaptcha|our systems have detected/i.test(html);
   }
   function dedupeLinks2(items) {
     const seen = /* @__PURE__ */ new Set();
