@@ -419,20 +419,20 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     const btnPrev = panel.querySelector('.bd-prev-batch') as HTMLButtonElement
     const batchInfo = panel.querySelector('.bd-batch-info') as HTMLElement
 
-    // 站点勾选：支持搜索的站点可选（默认全勾 jrants/pixibb/rrwsh）；不支持的灰显禁用并标注原因（FP-012）
+    // 站点勾选：支持搜索的站点可选（默认勾选 jrants/pixibb/rrwsh；hitxhot/kaizty 为 Google 通道，请求较慢，默认不勾选）；
+    // 不支持的灰显禁用并标注原因（FP-012）
     const searchable = GALLERY_SITES.filter((s) => s.searchUrl)
     const defaultChecked = new Set(['jrants', 'pixibb', 'rrwsh'])
+    const googleChannel = new Set(['hitxhot', 'kaizty'])
     const disabledNotes: Record<string, string> = {
       buondua: '站点不可达',
-      hitxhot: '无站内搜索（Google 通道待迭代）',
-      kaizty: '无站内搜索（Google 通道待迭代）',
       imgbb: '无搜索（图床）',
     }
     const renderSiteBoxes = (): void => {
       const ok = searchable
         .map(
           (s) =>
-            `<label class="bd-site-check"><input type="checkbox" value="${s.id}" ${defaultChecked.has(s.id) ? 'checked' : ''}> ${s.id}</label>`,
+            `<label class="bd-site-check"><input type="checkbox" value="${s.id}" ${defaultChecked.has(s.id) ? 'checked' : ''}> ${s.id}${googleChannel.has(s.id) ? '<span class="bd-site-note">（Google）</span>' : ''}</label>`,
         )
         .join('')
       const disabled = [...GALLERY_SITES.filter((s) => !s.searchUrl), { id: 'imgbb' }]

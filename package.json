@@ -1,7 +1,7 @@
 {
   "name": "fat-fish-grabber",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "module",
   "description": "肥鱼抓兔 - 网页图片抓取插件（Chrome 扩展 MV3，变体独立演进）",
   "scripts": {

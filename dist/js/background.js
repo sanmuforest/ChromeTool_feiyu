@@ -1625,8 +1625,9 @@
         }
       },
       cleanTitle: (title) => title.replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
-      // hitxhot 无搜索入口（?s= 返回首页，实测 2026-08-13），不支持聚合搜索
-      searchUrl: () => null
+      // hitxhot 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004）
+      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.hitxhot.org${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
+      searchAlbumPath: "/gallerys/"
     },
     {
       id: "kaizty",
@@ -1645,9 +1646,11 @@
           return url;
         }
       },
-      cleanTitle: (title) => title.replace(/^Kaizty Photos:\s*/i, "").replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
-      // kaizty 无搜索入口（同 hitxhot 模板），不支持聚合搜索
-      searchUrl: () => null
+      cleanTitle: (title) => title.replace(/^Kaizty Photos:\s*/i, "").replace(/^Kaizty 照片：\s*/i, "").replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第?\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
+      // kaizty 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004，用户代理环境实测可用）
+      // 结果页为 Google 网页搜索直链（a.zReHs + h3），每页 10 条，翻页 &start={N}
+      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.kaizty.com${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
+      searchAlbumPath: "/photos/"
     },
     {
       id: "jrants",
@@ -2186,7 +2189,33 @@
     if (siteId === "kaizty") return parseKaiztyPostLinks(html, base);
     if (siteId === "rrwsh") return parseRrwshSearchLinks(html, base);
     const site = GALLERY_SITES.find((s) => s.id === siteId);
+    if (site && site.searchAlbumPath) return parseGoogleResults(html, site);
     return parseSitePostLinks(html, base, site?.hosts ?? [siteId]);
+  }
+  function parseGoogleResults(html, site) {
+    const items = [];
+    const seen = /* @__PURE__ */ new Set();
+    const re = /<a[^>]*class="[^"]*zReHs[^"]*"[^>]*href="([^"]+)"[^>]*>(?:(?!<\/a>)[\s\S])*?<h3[^>]*>([\s\S]*?)<\/h3>/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      try {
+        const url = m[1].replace(/&amp;/g, "&");
+        const u = new URL(url);
+        const host = u.hostname.replace(/^www\./, "");
+        const hostOk = site.hosts.some((h) => host === h || host.endsWith(`.${h}`));
+        if (!hostOk) continue;
+        if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) continue;
+        u.search = "";
+        u.hash = "";
+        const cleanUrl = u.href;
+        if (seen.has(cleanUrl)) continue;
+        seen.add(cleanUrl);
+        const title = site.cleanTitle(m[2].replace(/<[^>]*>/g, "").trim()) || cleanUrl;
+        items.push({ url: cleanUrl, title, coverUrl: "", imageCount: void 0 });
+      } catch {
+      }
+    }
+    return items;
   }
   function enrichSearchItem(siteId, site, item) {
     const url = site.rewriteUrl ? site.rewriteUrl(item.url) : item.url;
@@ -2211,7 +2240,7 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
   function isBlockedPage(html) {
-    return /search request blocked|正在进行安全验证|just a moment|cf-chl|cloudflare|turnstile|attention required/i.test(html);
+    return /search request blocked|正在进行安全验证|just a moment|cf-chl|cloudflare|turnstile|attention required|unusual traffic|enable JavaScript and cookies|recaptcha|our systems have detected/i.test(html);
   }
   function dedupeLinks2(items) {
     const seen = /* @__PURE__ */ new Set();

@@ -4525,8 +4525,9 @@
         }
       },
       cleanTitle: (title) => title.replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
-      // hitxhot 无搜索入口（?s= 返回首页，实测 2026-08-13），不支持聚合搜索
-      searchUrl: () => null
+      // hitxhot 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004）
+      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.hitxhot.org${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
+      searchAlbumPath: "/gallerys/"
     },
     {
       id: "kaizty",
@@ -4545,9 +4546,11 @@
           return url;
         }
       },
-      cleanTitle: (title) => title.replace(/^Kaizty Photos:\s*/i, "").replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
-      // kaizty 无搜索入口（同 hitxhot 模板），不支持聚合搜索
-      searchUrl: () => null
+      cleanTitle: (title) => title.replace(/^Kaizty Photos:\s*/i, "").replace(/^Kaizty 照片：\s*/i, "").replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第?\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
+      // kaizty 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004，用户代理环境实测可用）
+      // 结果页为 Google 网页搜索直链（a.zReHs + h3），每页 10 条，翻页 &start={N}
+      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.kaizty.com${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
+      searchAlbumPath: "/photos/"
     },
     {
       id: "jrants",
@@ -4970,15 +4973,14 @@
       const batchInfo = panel.querySelector(".bd-batch-info");
       const searchable = GALLERY_SITES.filter((s) => s.searchUrl);
       const defaultChecked = /* @__PURE__ */ new Set(["jrants", "pixibb", "rrwsh"]);
+      const googleChannel = /* @__PURE__ */ new Set(["hitxhot", "kaizty"]);
       const disabledNotes = {
         buondua: "\u7AD9\u70B9\u4E0D\u53EF\u8FBE",
-        hitxhot: "\u65E0\u7AD9\u5185\u641C\u7D22\uFF08Google \u901A\u9053\u5F85\u8FED\u4EE3\uFF09",
-        kaizty: "\u65E0\u7AD9\u5185\u641C\u7D22\uFF08Google \u901A\u9053\u5F85\u8FED\u4EE3\uFF09",
         imgbb: "\u65E0\u641C\u7D22\uFF08\u56FE\u5E8A\uFF09"
       };
       const renderSiteBoxes = () => {
         const ok = searchable.map(
-          (s) => `<label class="bd-site-check"><input type="checkbox" value="${s.id}" ${defaultChecked.has(s.id) ? "checked" : ""}> ${s.id}</label>`
+          (s) => `<label class="bd-site-check"><input type="checkbox" value="${s.id}" ${defaultChecked.has(s.id) ? "checked" : ""}> ${s.id}${googleChannel.has(s.id) ? '<span class="bd-site-note">\uFF08Google\uFF09</span>' : ""}</label>`
         ).join("");
         const disabled = [...GALLERY_SITES.filter((s) => !s.searchUrl), { id: "imgbb" }].map(
           (s) => `<label class="bd-site-check disabled" title="${disabledNotes[s.id] ?? "\u4E0D\u652F\u6301\u641C\u7D22"}"><input type="checkbox" disabled> ${s.id}<span class="bd-site-note">\uFF08${disabledNotes[s.id] ?? "\u4E0D\u652F\u6301"}\uFF09</span></label>`
@@ -5371,7 +5373,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260814132042" : "dev";
+  var BUILD_TIME = true ? "20260814133318" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

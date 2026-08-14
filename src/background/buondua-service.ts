@@ -245,7 +245,39 @@ function parseLinksForSite(siteId: string, html: string, base: string): BuonduaL
   if (siteId === 'kaizty') return parseKaiztyPostLinks(html, base)
   if (siteId === 'rrwsh') return parseRrwshSearchLinks(html, base)
   const site = GALLERY_SITES.find((s) => s.id === siteId)
+  if (site && site.searchAlbumPath) return parseGoogleResults(html, site)
   return parseSitePostLinks(html, base, site?.hosts ?? [siteId])
+}
+
+/** Google 网页搜索结果解析（FP-012 预研 004，用户代理环境真实 HTML 校准，2026-08-14）：
+ *  结构：结果块 <a class="zReHs" href="{真实直链}">…<h3>标题</h3></a>（现代 Google 直链，无 /url?q= 重定向）
+ *  过滤：仅保留目标域且命中 searchAlbumPath（如 /photos/、/gallerys/）的相册链接；分类/标签页剔除
+ *  链接清理：&amp; 实体还原、去 query（?m=1 移动版参数、&page=N 相册分页参数） */
+function parseGoogleResults(html: string, site: GallerySiteConfig): BuonduaLinkItem[] {
+  const items: BuonduaLinkItem[] = []
+  const seen = new Set<string>()
+  const re = /<a[^>]*class="[^"]*zReHs[^"]*"[^>]*href="([^"]+)"[^>]*>(?:(?!<\/a>)[\s\S])*?<h3[^>]*>([\s\S]*?)<\/h3>/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(html)) !== null) {
+    try {
+      const url = m[1].replace(/&amp;/g, '&')
+      const u = new URL(url)
+      const host = u.hostname.replace(/^www\./, '')
+      const hostOk = site.hosts.some((h) => host === h || host.endsWith(`.${h}`))
+      if (!hostOk) continue
+      if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) continue
+      u.search = ''
+      u.hash = ''
+      const cleanUrl = u.href
+      if (seen.has(cleanUrl)) continue
+      seen.add(cleanUrl)
+      const title = site.cleanTitle(m[2].replace(/<[^>]*>/g, '').trim()) || cleanUrl
+      items.push({ url: cleanUrl, title, coverUrl: '', imageCount: undefined })
+    } catch {
+      // 忽略非法链接
+    }
+  }
+  return items
 }
 
 /** 搜索项站点后处理：URL 改写（rrwsh 4khd→rrwsh 域）+ 张数提取（FP-012） */
@@ -276,9 +308,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-/** 反爬/错误页检测（搜索时跳过，避免把热门/推荐链接当搜索结果） */
+/** 反爬/错误页检测（搜索时跳过，避免把热门/推荐链接当搜索结果）
+ *  注意：Google 页面脚本内含 /sorry/index 字符串（iframe 兜底），不能作为拦截特征；
+ *  用 sorry 页专属文案（unusual traffic / recaptcha / enable JavaScript） */
 function isBlockedPage(html: string): boolean {
-  return /search request blocked|正在进行安全验证|just a moment|cf-chl|cloudflare|turnstile|attention required/i.test(html)
+  return /search request blocked|正在进行安全验证|just a moment|cf-chl|cloudflare|turnstile|attention required|unusual traffic|enable JavaScript and cookies|recaptcha|our systems have detected/i.test(html)
 }
 
 /** 按 URL 去重 */

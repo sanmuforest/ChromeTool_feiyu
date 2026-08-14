@@ -30,6 +30,8 @@ export interface GallerySiteConfig {
   searchUrl: (q: string, page: number) => string | null
   /** 搜索结果 URL 改写（如 4khd.com → rrwsh.uuss.uk 绕过反爬网关）；返回原样表示不改写 */
   rewriteUrl?: (url: string) => string
+  /** 搜索结果相册路径前缀（Google 通道过滤用，如 /photos/）；无则不过滤路径 */
+  searchAlbumPath?: string
 }
 
 export const GALLERY_SITES: GallerySiteConfig[] = [
@@ -104,8 +106,12 @@ export const GALLERY_SITES: GallerySiteConfig[] = [
       title
         .replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, '')
         .trim(),
-    // hitxhot 无搜索入口（?s= 返回首页，实测 2026-08-13），不支持聚合搜索
-    searchUrl: () => null,
+    // hitxhot 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004）
+    searchUrl: (q, page) =>
+      `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.hitxhot.org${
+        page > 1 ? `&start=${(page - 1) * 10}` : ''
+      }`,
+    searchAlbumPath: '/gallerys/',
   },
   {
     id: 'kaizty',
@@ -127,10 +133,16 @@ export const GALLERY_SITES: GallerySiteConfig[] = [
     cleanTitle: (title) =>
       title
         .replace(/^Kaizty Photos:\s*/i, '')
-        .replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, '')
+        .replace(/^Kaizty 照片：\s*/i, '')
+        .replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第?\s*\d+\s*\/\s*\d+\s*页)\s*$/i, '')
         .trim(),
-    // kaizty 无搜索入口（同 hitxhot 模板），不支持聚合搜索
-    searchUrl: () => null,
+    // kaizty 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004，用户代理环境实测可用）
+    // 结果页为 Google 网页搜索直链（a.zReHs + h3），每页 10 条，翻页 &start={N}
+    searchUrl: (q, page) =>
+      `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.kaizty.com${
+        page > 1 ? `&start=${(page - 1) * 10}` : ''
+      }`,
+    searchAlbumPath: '/photos/',
   },
   {
     id: 'jrants',
