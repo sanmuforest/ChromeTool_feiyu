@@ -244,15 +244,15 @@ export class BuonduaService {
     return `ID-buondua-${name}-${ts}`
   }
 
-  /** Google 连接测试（聚合搜索 Google 通道，FP-012/089）：请求 google 搜索（gbv=1 基础版），
-   *  报告可达性/拦截/耗时 + 返回页诊断特征（长度/标题/是否含 h3 结果/是否同意页） */
+  /** Google 连接测试（聚合搜索 Google 通道，FP-012/090）：请求 google 搜索（gbv=1 基础版），
+   *  报告可达性/拦截/耗时 + 返回页诊断（长度/标题/是否含 h3/是否同意页/可见文本预览） */
   async testGoogleConnection(): Promise<{
     ok: boolean
     status?: number
     blocked: boolean
     ms: number
     error?: string
-    diag?: { len: number; title: string; hasH3: boolean; isConsent: boolean }
+    diag?: { len: number; title: string; hasH3: boolean; isConsent: boolean; bodyPreview: string }
   }> {
     const start = Date.now()
     try {
@@ -269,12 +269,13 @@ export class BuonduaService {
       const title = (html.match(/<title>([^<]*)<\/title>/) ?? [null, ''])[1].slice(0, 100)
       const hasH3 = /<h3[^>]*class="[^"]*\br\b[^"]*"/.test(html) || /zReHs/.test(html)
       const isConsent = /consent\.google\.com|google\.com\/consent/i.test(html)
+      const body = (html.replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<style[\s\S]*?<\/style>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')).trim()
       return {
         ok: true,
         status: resp.status,
         blocked,
         ms: Date.now() - start,
-        diag: { len: html.length, title, hasH3, isConsent },
+        diag: { len: html.length, title, hasH3, isConsent, bodyPreview: body.slice(0, 220) },
       }
     } catch (err) {
       return { ok: false, blocked: false, ms: Date.now() - start, error: String(err) }

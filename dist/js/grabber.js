@@ -5197,7 +5197,7 @@
             return;
           }
           const g = res.google;
-          const diagText = g.diag ? ` [${(g.diag.len / 1024).toFixed(0)}KB, ${g.diag.hasH3 ? "\u542B\u7ED3\u679C" : "\u65E0\u7ED3\u679C\u6807\u8BB0"}${g.diag.isConsent ? ", \u540C\u610F\u9875" : ""}, ${g.diag.title.slice(0, 30)}]` : "";
+          const diagText = g.diag ? ` [${(g.diag.len / 1024).toFixed(0)}KB, ${g.diag.hasH3 ? "\u542B\u7ED3\u679C" : "\u65E0\u7ED3\u679C\u6807\u8BB0"}${g.diag.isConsent ? ", \u540C\u610F\u9875" : ""}, ${g.diag.title.slice(0, 30)}] \u9875\u9762: ${g.diag.bodyPreview.slice(0, 120)}` : "";
           if (!g.ok) {
             setStatus(googleStatus, `\u8FDE\u63A5\u5931\u8D25\uFF1A${g.error}\uFF08${g.ms}ms\uFF09`, true);
           } else if (g.blocked) {
@@ -5447,7 +5447,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260814142323" : "dev";
+  var BUILD_TIME = true ? "20260814142538" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
