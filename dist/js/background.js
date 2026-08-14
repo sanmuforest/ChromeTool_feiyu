@@ -2009,6 +2009,7 @@
     async searchGoogleViaTab(site, query, pagesPerSite) {
       const items = [];
       const seen = /* @__PURE__ */ new Set();
+      let pagesFetched = 0;
       for (let page = 1; page <= pagesPerSite; page++) {
         const url = site.searchUrl(query, page);
         if (!url) break;
@@ -2022,6 +2023,7 @@
           const extracted = await this.extractGoogleTabResults(tab.id);
           logger4.info("buondua", "Google \u6807\u7B7E\u9875\u63D0\u53D6", { site: site.id, page, count: extracted.length });
           if (extracted.length === 0) break;
+          pagesFetched++;
           for (const { url: rawUrl, title } of extracted) {
             const clean = cleanGoogleResult(site, rawUrl, title);
             if (clean && !seen.has(clean.url)) {
@@ -2034,7 +2036,7 @@
           });
         }
       }
-      return items;
+      return { items, pages: pagesFetched };
     }
     /** 等待标签页加载完成（tabs.create 后页面加载是异步的，未加载完 executeScript 会失败） */
     async waitForTabComplete(tabId, timeoutMs = 2e4) {
@@ -2231,10 +2233,10 @@
         let pagesFetched = 0;
         try {
           if (site.searchAlbumPath) {
-            const tabItems = await this.searchGoogleViaTab(site, query, pagesPerSite);
-            pagesFetched = Math.min(pagesPerSite, Math.max(1, tabItems.length > 0 ? 1 : 1));
-            for (const item of tabItems) items.push(item);
-            if (tabItems.length === 0) {
+            const tabRes = await this.searchGoogleViaTab(site, query, pagesPerSite);
+            pagesFetched = tabRes.pages;
+            for (const item of tabRes.items) items.push(item);
+            if (tabRes.items.length === 0) {
               error = "Google \u6807\u7B7E\u9875\u672A\u63D0\u53D6\u5230\u76F8\u518C\u7ED3\u679C\uFF08\u53EF\u80FD\u9A8C\u8BC1\u9875/\u65E0\u5339\u914D\uFF0C\u65E5\u5FD7\u542B\u8BCA\u65AD\uFF09";
             }
           } else {

@@ -37,9 +37,10 @@ export class BuonduaService {
     site: GallerySiteConfig,
     query: string,
     pagesPerSite: number,
-  ): Promise<BuonduaLinkItem[]> {
+  ): Promise<{ items: BuonduaLinkItem[]; pages: number }> {
     const items: BuonduaLinkItem[] = []
     const seen = new Set<string>()
+    let pagesFetched = 0
     for (let page = 1; page <= pagesPerSite; page++) {
       const url = site.searchUrl(query, page)
       if (!url) break
@@ -53,6 +54,7 @@ export class BuonduaService {
         const extracted = await this.extractGoogleTabResults(tab.id!)
         logger.info('buondua', 'Google 标签页提取', { site: site.id, page, count: extracted.length })
         if (extracted.length === 0) break // 无结果（验证页/无匹配）
+        pagesFetched++
         for (const { url: rawUrl, title } of extracted) {
           const clean = cleanGoogleResult(site, rawUrl, title)
           if (clean && !seen.has(clean.url)) {
@@ -64,7 +66,7 @@ export class BuonduaService {
         await chrome.tabs.remove(tab.id!).catch(() => {})
       }
     }
-    return items
+    return { items, pages: pagesFetched }
   }
 
   /** 等待标签页加载完成（tabs.create 后页面加载是异步的，未加载完 executeScript 会失败） */
@@ -295,10 +297,10 @@ export class BuonduaService {
         // Google 通道站点（searchAlbumPath）：后台 fetch 拿不到新版 Google 结果（JS 渲染壳），
         // 改走页面降级通道（静默开标签渲染 + 提取，FP-012/093）
         if (site.searchAlbumPath) {
-          const tabItems = await this.searchGoogleViaTab(site, query, pagesPerSite)
-          pagesFetched = Math.min(pagesPerSite, Math.max(1, tabItems.length > 0 ? 1 : 1))
-          for (const item of tabItems) items.push(item)
-          if (tabItems.length === 0) {
+          const tabRes = await this.searchGoogleViaTab(site, query, pagesPerSite)
+          pagesFetched = tabRes.pages
+          for (const item of tabRes.items) items.push(item)
+          if (tabRes.items.length === 0) {
             error = 'Google 标签页未提取到相册结果（可能验证页/无匹配，日志含诊断）'
           }
         } else {
