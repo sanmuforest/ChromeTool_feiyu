@@ -28,6 +28,8 @@ export interface GallerySiteConfig {
   cleanTitle: (title: string) => string
   /** 搜索 URL 构造（聚合搜索用）；返回 null 表示该站不支持搜索 */
   searchUrl: (q: string, page: number) => string | null
+  /** 搜索结果 URL 改写（如 4khd.com → rrwsh.uuss.uk 绕过反爬网关）；返回原样表示不改写 */
+  rewriteUrl?: (url: string) => string
 }
 
 export const GALLERY_SITES: GallerySiteConfig[] = [
@@ -74,9 +76,12 @@ export const GALLERY_SITES: GallerySiteConfig[] = [
         .replace(/\s*[-–—]\s*Page\s+\d+\s+of\s+\d+\s*[-–—]\s*[^-]*$/i, '')
         .replace(/\s*[-–—]\s*4KHD\s*$/i, '')
         .trim(),
-    // rrwsh 为 4khd 镜像：4khd.com 相册页被反爬网关拦截（302 → y5gx.uuss.uk/4khd.php，实测 2026-08-13），
-    // 搜索结果打不开，暂不支持聚合搜索
-    searchUrl: () => null,
+    // rrwsh 为 4khd 镜像：搜索页可达（curl 200，实测 2026-08-14），结果链接指向 4khd.com
+    // 4khd.com 相册页被反爬网关拦截（302 → y5gx.uuss.uk/4khd.php），但 rrwsh.uuss.uk 同路径直接可达
+    // → 结果 URL 改写为 rrwsh 域（rewriteUrl），抓取/分页（/content/N/slug.html/2）均正常
+    searchUrl: (q, page) =>
+      `https://rrwsh.uuss.uk/search/${encodeURIComponent(q)}${page > 1 ? `/${page}` : ''}`,
+    rewriteUrl: (url) => url.replace(/https?:\/\/(?:www\.)?4khd\.com/i, 'https://rrwsh.uuss.uk'),
   },
   {
     id: 'hitxhot',
@@ -332,6 +337,32 @@ export function parseKaiztyPostLinks(html: string, _baseUrl: string): BuonduaLin
     const countMatch = title.match(/Page\s+(\d+)\s*\/\s*(\d+)/i)
     void countMatch // kaizty 标题含 Page X/Y 为页数非张数，imageCount 留空
     items.push({ url: abs, title: title || abs, coverUrl: '', imageCount: undefined })
+  }
+  return items
+}
+
+/** rrwsh（4khd 镜像）搜索页专用解析（FP-012）：逐 li.wp-block-post 卡片提取
+ *  结构（实测 2026-08-14）：封面 <figure class="wp-block-post-featured-image"><a href=文章><img src=封面></a></figure>
+ *  标题 <h2 class="wp-block-post-title"><a href=文章>标题[NNNMB-NNNphotos]</a></h2>（同 href，完美配对） */
+export function parseRrwshSearchLinks(html: string, _baseUrl: string): BuonduaLinkItem[] {
+  const items: BuonduaLinkItem[] = []
+  const seen = new Set<string>()
+  const cardRe = /<li\b[^>]*class="[^"]*wp-block-post[^"]*"[^>]*>([\s\S]*?)<\/li>/g
+  let m: RegExpExecArray | null
+  while ((m = cardRe.exec(html)) !== null) {
+    const card = m[1]
+    const lm = card.match(/<a[^>]*href="(https?:\/\/(?:www\.)?(?:4khd\.com|rrwsh\.uuss\.uk)[^"]*\/content\/[^"]+)"[^>]*>/i)
+    if (!lm) continue
+    const url = lm[1]
+    if (seen.has(url)) continue
+    let title = ''
+    const tm = card.match(/<h2[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i)
+    if (tm) title = tm[1].replace(/<[^>]*>/g, '').trim()
+    let cover = ''
+    const im = card.match(/<img[^>]+src="(https?:\/\/[^"]+)"/i)
+    if (im) cover = im[1]
+    items.push({ url, title: title || url, coverUrl: cover, imageCount: undefined })
+    seen.add(url)
   }
   return items
 }

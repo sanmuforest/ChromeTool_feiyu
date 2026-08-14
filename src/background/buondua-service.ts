@@ -15,7 +15,9 @@ import {
   parseGalleryMaxPage,
   parseGalleryPageTitle,
   parseKaiztyPostLinks,
+  parseRrwshSearchLinks,
   parseSitePostLinks,
+  type GallerySiteConfig,
 } from '../lib/gallery-sites'
 import { parseJrantsPostLinks } from '../lib/jrants-parse'
 import { parsePixibbPostLinks } from '../lib/pixibb-parse'
@@ -198,6 +200,8 @@ export class BuonduaService {
         for (let page = 1; page <= pagesPerSite; page++) {
           const url = site.searchUrl(query, page)
           if (!url) break
+          // jrants 连续快速搜索触发反爬限流（实测 2026-08-13/14），页间强制间隔
+          if (siteId === 'jrants' && page > 1) await sleep(2000)
           const html = await this.fetchHtml(url)
           if (isBlockedPage(html)) {
             // 反爬拦截页：跳过该站（避免把热门/推荐链接当搜索结果）
@@ -213,7 +217,8 @@ export class BuonduaService {
         error = String(err)
         logger.warn('buondua', '站点搜索失败', { site: siteId, error })
       }
-      const unique = dedupeLinks(items)
+      // 站点后处理：URL 改写（rrwsh 网关绕过）+ 张数提取（jrants 标题 / pixibb slug / rrwsh 标题）
+      const unique = dedupeLinks(items.map((item) => enrichSearchItem(siteId, site, item)))
       for (const item of unique) {
         if (!mergedMap.has(item.url)) mergedMap.set(item.url, item)
       }
@@ -238,8 +243,37 @@ function parseLinksForSite(siteId: string, html: string, base: string): BuonduaL
   if (siteId === 'jrants') return parseJrantsPostLinks(html, base, {})
   if (siteId === 'pixibb') return parsePixibbPostLinks(html, base, {})
   if (siteId === 'kaizty') return parseKaiztyPostLinks(html, base)
+  if (siteId === 'rrwsh') return parseRrwshSearchLinks(html, base)
   const site = GALLERY_SITES.find((s) => s.id === siteId)
   return parseSitePostLinks(html, base, site?.hosts ?? [siteId])
+}
+
+/** 搜索项站点后处理：URL 改写（rrwsh 4khd→rrwsh 域）+ 张数提取（FP-012） */
+function enrichSearchItem(siteId: string, site: GallerySiteConfig, item: BuonduaLinkItem): BuonduaLinkItem {
+  const url = site.rewriteUrl ? site.rewriteUrl(item.url) : item.url
+  return { ...item, url, imageCount: item.imageCount ?? extractSearchImageCount(siteId, item, url) }
+}
+
+/** 搜索结果张数提取：jrants 标题 (NNNP)/[NNNP]；pixibb slug -NNN-photos；rrwsh 标题 [..NNNphotos] */
+function extractSearchImageCount(siteId: string, item: BuonduaLinkItem, finalUrl: string): number | undefined {
+  if (siteId === 'jrants') {
+    const m = item.title.match(/[(\[]\s*(\d+)\s*P\s*[)\]]/i)
+    return m ? Number(m[1]) : undefined
+  }
+  if (siteId === 'pixibb') {
+    const m = finalUrl.match(/-(\d+)-photos\/?$/i)
+    return m ? Number(m[1]) : undefined
+  }
+  if (siteId === 'rrwsh') {
+    const m = item.title.match(/\[[^\]]*?(\d+)\s*photos/i)
+    return m ? Number(m[1]) : undefined
+  }
+  return undefined
+}
+
+/** 请求间隔（jrants 反爬限流用） */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /** 反爬/错误页检测（搜索时跳过，避免把热门/推荐链接当搜索结果） */

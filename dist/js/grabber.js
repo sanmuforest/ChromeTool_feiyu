@@ -4500,9 +4500,11 @@
         }
       },
       cleanTitle: (title) => title.replace(/\s*[-–—]\s*Page\s+\d+\s+of\s+\d+\s*[-–—]\s*[^-]*$/i, "").replace(/\s*[-–—]\s*4KHD\s*$/i, "").trim(),
-      // rrwsh 为 4khd 镜像：4khd.com 相册页被反爬网关拦截（302 → y5gx.uuss.uk/4khd.php，实测 2026-08-13），
-      // 搜索结果打不开，暂不支持聚合搜索
-      searchUrl: () => null
+      // rrwsh 为 4khd 镜像：搜索页可达（curl 200，实测 2026-08-14），结果链接指向 4khd.com
+      // 4khd.com 相册页被反爬网关拦截（302 → y5gx.uuss.uk/4khd.php），但 rrwsh.uuss.uk 同路径直接可达
+      // → 结果 URL 改写为 rrwsh 域（rewriteUrl），抓取/分页（/content/N/slug.html/2）均正常
+      searchUrl: (q, page) => `https://rrwsh.uuss.uk/search/${encodeURIComponent(q)}${page > 1 ? `/${page}` : ""}`,
+      rewriteUrl: (url) => url.replace(/https?:\/\/(?:www\.)?4khd\.com/i, "https://rrwsh.uuss.uk")
     },
     {
       id: "hitxhot",
@@ -4688,27 +4690,24 @@
       </div>
 
       <div id="sub-bd-search" class="adapter-panel">
-        <div class="row bd-search-disabled">
-          \u26A0\uFE0F \u805A\u5408\u641C\u7D22\u6682\u4E0D\u53EF\u7528\uFF1Ajrants \u641C\u7D22\u89E6\u53D1\u53CD\u722C\u62E6\u622A\uFF0Cpixibb \u7ED3\u679C\u4E0D\u7A33\u5B9A\uFF08\u7AD9\u70B9\u53CD\u722C\u9650\u5236\uFF09\u3002\u5F85\u7AD9\u70B9\u7B56\u7565\u53D8\u5316\u6216\u9002\u914D\u4F18\u5316\u540E\u6062\u590D\u3002
-        </div>
         <div class="row">
-          <input id="bd-search-q" class="text-input" placeholder="\u5173\u952E\u8BCD\uFF08\u805A\u5408\u641C\u7D22\u591A\u7AD9\u70B9\uFF09" disabled>
-          <select id="bd-search-pages" class="num-input" title="\u6BCF\u7AD9\u641C\u7D22\u9875\u6570" disabled>
+          <input id="bd-search-q" class="text-input" placeholder="\u5173\u952E\u8BCD\uFF08\u805A\u5408\u641C\u7D22\u591A\u7AD9\u70B9\uFF09">
+          <select id="bd-search-pages" class="num-input" title="\u6BCF\u7AD9\u641C\u7D22\u9875\u6570">
             <option value="1">1 \u9875/\u7AD9</option>
             <option value="2" selected>2 \u9875/\u7AD9</option>
             <option value="3">3 \u9875/\u7AD9</option>
           </select>
-          <button id="bd-search-go" class="btn primary" disabled title="\u805A\u5408\u641C\u7D22\u6682\u4E0D\u53EF\u7528">\u805A\u5408\u641C\u7D22</button>
+          <button id="bd-search-go" class="btn primary">\u805A\u5408\u641C\u7D22</button>
         </div>
         <div class="row">
           <div id="bd-search-sites" class="bd-search-sites"></div>
           <span id="bd-search-site-status" class="status-text"></span>
         </div>
         <div class="row">
-          <button class="btn bd-select-all" disabled>\u5168\u9009\u672C\u6279/\u53D6\u6D88</button>
-          <button class="btn bd-fetch-selected" disabled>\u6293\u53D6\u9009\u4E2D</button>
-          <button class="btn bd-prev-batch" disabled>\u4E0A\u4E00\u6279</button>
-          <button class="btn bd-next-batch" disabled>\u4E0B\u4E00\u6279</button>
+          <button class="btn bd-select-all">\u5168\u9009\u672C\u6279/\u53D6\u6D88</button>
+          <button class="btn bd-fetch-selected">\u6293\u53D6\u9009\u4E2D</button>
+          <button class="btn bd-prev-batch">\u4E0A\u4E00\u6279</button>
+          <button class="btn bd-next-batch">\u4E0B\u4E00\u6279</button>
           <span class="bd-batch-info status-text"></span>
           <span class="bd-list-status status-text"></span>
         </div>
@@ -4969,12 +4968,13 @@
       const btnPrev = panel.querySelector(".bd-prev-batch");
       const batchInfo = panel.querySelector(".bd-batch-info");
       const searchable = GALLERY_SITES.filter((s) => s.searchUrl);
-      const defaultChecked = /* @__PURE__ */ new Set(["jrants", "pixibb"]);
+      const defaultChecked = /* @__PURE__ */ new Set(["jrants", "pixibb", "rrwsh"]);
       siteBoxes.innerHTML = searchable.map(
         (s) => `<label class="bd-site-check"><input type="checkbox" value="${s.id}" ${defaultChecked.has(s.id) ? "checked" : ""}> ${s.id}</label>`
       ).join("");
       const selectedSites = () => Array.from(siteBoxes.querySelectorAll('input[type="checkbox"]:checked')).map((c) => c.value);
       let items = [];
+      let itemSites = [];
       let page = 0;
       const selected = /* @__PURE__ */ new Set();
       const pageCount = () => Math.ceil(items.length / BATCH_SIZE);
@@ -4997,6 +4997,9 @@
           const card = document.createElement("div");
           card.className = "bd-search-card" + (selected.has(globalIdx) ? " selected" : "");
           card.dataset.idx = String(globalIdx);
+          const badge = document.createElement("span");
+          badge.className = "bd-search-badge";
+          badge.textContent = itemSites[globalIdx] ?? "";
           const check = document.createElement("input");
           check.type = "checkbox";
           check.className = "bd-search-check";
@@ -5031,7 +5034,7 @@
           meta.className = "bd-search-meta";
           meta.textContent = item.imageCount !== void 0 ? `${item.imageCount} \u5F20` : "\u5F20\u6570\u672A\u77E5";
           info.append(title, meta);
-          card.append(check, cover, info);
+          card.append(check, badge, cover, info);
           card.addEventListener("click", (ev) => {
             const t = ev.target;
             if (t.closest("input")) return;
@@ -5140,6 +5143,7 @@
           return;
         }
         items = [];
+        itemSites = [];
         page = 0;
         selected.clear();
         pendingSites = sites.length;
@@ -5167,6 +5171,7 @@
             if (!seen.has(item.url)) {
               seen.add(item.url);
               items.push(item);
+              itemSites.push(siteId ?? "");
             }
           }
           pendingSites = Math.max(0, pendingSites - 1);
@@ -5352,7 +5357,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260814115830" : "dev";
+  var BUILD_TIME = true ? "20260814124943" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

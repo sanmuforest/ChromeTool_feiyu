@@ -107,27 +107,24 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       </div>
 
       <div id="sub-bd-search" class="adapter-panel">
-        <div class="row bd-search-disabled">
-          ⚠️ 聚合搜索暂不可用：jrants 搜索触发反爬拦截，pixibb 结果不稳定（站点反爬限制）。待站点策略变化或适配优化后恢复。
-        </div>
         <div class="row">
-          <input id="bd-search-q" class="text-input" placeholder="关键词（聚合搜索多站点）" disabled>
-          <select id="bd-search-pages" class="num-input" title="每站搜索页数" disabled>
+          <input id="bd-search-q" class="text-input" placeholder="关键词（聚合搜索多站点）">
+          <select id="bd-search-pages" class="num-input" title="每站搜索页数">
             <option value="1">1 页/站</option>
             <option value="2" selected>2 页/站</option>
             <option value="3">3 页/站</option>
           </select>
-          <button id="bd-search-go" class="btn primary" disabled title="聚合搜索暂不可用">聚合搜索</button>
+          <button id="bd-search-go" class="btn primary">聚合搜索</button>
         </div>
         <div class="row">
           <div id="bd-search-sites" class="bd-search-sites"></div>
           <span id="bd-search-site-status" class="status-text"></span>
         </div>
         <div class="row">
-          <button class="btn bd-select-all" disabled>全选本批/取消</button>
-          <button class="btn bd-fetch-selected" disabled>抓取选中</button>
-          <button class="btn bd-prev-batch" disabled>上一批</button>
-          <button class="btn bd-next-batch" disabled>下一批</button>
+          <button class="btn bd-select-all">全选本批/取消</button>
+          <button class="btn bd-fetch-selected">抓取选中</button>
+          <button class="btn bd-prev-batch">上一批</button>
+          <button class="btn bd-next-batch">下一批</button>
           <span class="bd-batch-info status-text"></span>
           <span class="bd-list-status status-text"></span>
         </div>
@@ -422,9 +419,9 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     const btnPrev = panel.querySelector('.bd-prev-batch') as HTMLButtonElement
     const batchInfo = panel.querySelector('.bd-batch-info') as HTMLElement
 
-    // 站点勾选：仅列出支持搜索的站点；默认勾选已验证的 jrants/pixibb（rrwsh 待站点恢复后手动勾选）
+    // 站点勾选：仅列出支持搜索的站点（FP-012：jrants/pixibb/rrwsh 已适配；hitxhot/kaizty Google 通道、buondua 不可达、imgbb 无搜索，不列出）
     const searchable = GALLERY_SITES.filter((s) => s.searchUrl)
-    const defaultChecked = new Set(['jrants', 'pixibb'])
+    const defaultChecked = new Set(['jrants', 'pixibb', 'rrwsh'])
     siteBoxes.innerHTML = searchable
       .map(
         (s) =>
@@ -435,6 +432,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       Array.from(siteBoxes.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')).map((c) => c.value)
 
     let items: BuonduaLinkItem[] = []
+    let itemSites: string[] = [] // 与 items 同序：来源站点（徽标用）
     let page = 0
     const selected = new Set<number>()
     const pageCount = () => Math.ceil(items.length / BATCH_SIZE)
@@ -459,6 +457,9 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         const card = document.createElement('div')
         card.className = 'bd-search-card' + (selected.has(globalIdx) ? ' selected' : '')
         card.dataset.idx = String(globalIdx)
+        const badge = document.createElement('span')
+        badge.className = 'bd-search-badge'
+        badge.textContent = itemSites[globalIdx] ?? ''
         const check = document.createElement('input')
         check.type = 'checkbox'
         check.className = 'bd-search-check'
@@ -493,7 +494,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         meta.className = 'bd-search-meta'
         meta.textContent = item.imageCount !== undefined ? `${item.imageCount} 张` : '张数未知'
         info.append(title, meta)
-        card.append(check, cover, info)
+        card.append(check, badge, cover, info)
         card.addEventListener('click', (ev) => {
           const t = ev.target as HTMLElement
           if (t.closest('input')) return
@@ -607,6 +608,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         return
       }
       items = []
+      itemSites = []
       page = 0
       selected.clear()
       pendingSites = sites.length
@@ -635,6 +637,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           if (!seen.has(item.url)) {
             seen.add(item.url)
             items.push(item)
+            itemSites.push(siteId ?? '')
           }
         }
         pendingSites = Math.max(0, pendingSites - 1)

@@ -569,14 +569,14 @@
       let failed = 0;
       let newUsers = 0;
       const inDegreeDelta = {};
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
       const worker = async () => {
         while (true) {
           const idx = cursor++;
           if (idx >= batch.length) return;
           const user = batch[idx];
           this.totalRequests++;
-          await sleep(intervalMs);
+          await sleep2(intervalMs);
           const tReq = Date.now();
           try {
             const html = await this.fetchFollowingPage(user);
@@ -1600,9 +1600,11 @@
         }
       },
       cleanTitle: (title) => title.replace(/\s*[-–—]\s*Page\s+\d+\s+of\s+\d+\s*[-–—]\s*[^-]*$/i, "").replace(/\s*[-–—]\s*4KHD\s*$/i, "").trim(),
-      // rrwsh 为 4khd 镜像：4khd.com 相册页被反爬网关拦截（302 → y5gx.uuss.uk/4khd.php，实测 2026-08-13），
-      // 搜索结果打不开，暂不支持聚合搜索
-      searchUrl: () => null
+      // rrwsh 为 4khd 镜像：搜索页可达（curl 200，实测 2026-08-14），结果链接指向 4khd.com
+      // 4khd.com 相册页被反爬网关拦截（302 → y5gx.uuss.uk/4khd.php），但 rrwsh.uuss.uk 同路径直接可达
+      // → 结果 URL 改写为 rrwsh 域（rewriteUrl），抓取/分页（/content/N/slug.html/2）均正常
+      searchUrl: (q, page) => `https://rrwsh.uuss.uk/search/${encodeURIComponent(q)}${page > 1 ? `/${page}` : ""}`,
+      rewriteUrl: (url) => url.replace(/https?:\/\/(?:www\.)?4khd\.com/i, "https://rrwsh.uuss.uk")
     },
     {
       id: "hitxhot",
@@ -1822,6 +1824,28 @@
       }
       const countMatch = title.match(/Page\s+(\d+)\s*\/\s*(\d+)/i);
       items.push({ url: abs, title: title || abs, coverUrl: "", imageCount: void 0 });
+    }
+    return items;
+  }
+  function parseRrwshSearchLinks(html, _baseUrl) {
+    const items = [];
+    const seen = /* @__PURE__ */ new Set();
+    const cardRe = /<li\b[^>]*class="[^"]*wp-block-post[^"]*"[^>]*>([\s\S]*?)<\/li>/g;
+    let m;
+    while ((m = cardRe.exec(html)) !== null) {
+      const card = m[1];
+      const lm = card.match(/<a[^>]*href="(https?:\/\/(?:www\.)?(?:4khd\.com|rrwsh\.uuss\.uk)[^"]*\/content\/[^"]+)"[^>]*>/i);
+      if (!lm) continue;
+      const url = lm[1];
+      if (seen.has(url)) continue;
+      let title = "";
+      const tm = card.match(/<h2[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i);
+      if (tm) title = tm[1].replace(/<[^>]*>/g, "").trim();
+      let cover = "";
+      const im = card.match(/<img[^>]+src="(https?:\/\/[^"]+)"/i);
+      if (im) cover = im[1];
+      items.push({ url, title: title || url, coverUrl: cover, imageCount: void 0 });
+      seen.add(url);
     }
     return items;
   }
@@ -2122,6 +2146,7 @@
           for (let page = 1; page <= pagesPerSite; page++) {
             const url = site.searchUrl(query, page);
             if (!url) break;
+            if (siteId === "jrants" && page > 1) await sleep(2e3);
             const html = await this.fetchHtml(url);
             if (isBlockedPage(html)) {
               error = "\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A\uFF08\u9650\u6D41\uFF09\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5";
@@ -2136,7 +2161,7 @@
           error = String(err);
           logger4.warn("buondua", "\u7AD9\u70B9\u641C\u7D22\u5931\u8D25", { site: siteId, error });
         }
-        const unique = dedupeLinks2(items);
+        const unique = dedupeLinks2(items.map((item) => enrichSearchItem(siteId, site, item)));
         for (const item of unique) {
           if (!mergedMap.has(item.url)) mergedMap.set(item.url, item);
         }
@@ -2158,8 +2183,31 @@
     if (siteId === "jrants") return parseJrantsPostLinks(html, base, {});
     if (siteId === "pixibb") return parsePixibbPostLinks(html, base, {});
     if (siteId === "kaizty") return parseKaiztyPostLinks(html, base);
+    if (siteId === "rrwsh") return parseRrwshSearchLinks(html, base);
     const site = GALLERY_SITES.find((s) => s.id === siteId);
     return parseSitePostLinks(html, base, site?.hosts ?? [siteId]);
+  }
+  function enrichSearchItem(siteId, site, item) {
+    const url = site.rewriteUrl ? site.rewriteUrl(item.url) : item.url;
+    return { ...item, url, imageCount: item.imageCount ?? extractSearchImageCount(siteId, item, url) };
+  }
+  function extractSearchImageCount(siteId, item, finalUrl) {
+    if (siteId === "jrants") {
+      const m = item.title.match(/[(\[]\s*(\d+)\s*P\s*[)\]]/i);
+      return m ? Number(m[1]) : void 0;
+    }
+    if (siteId === "pixibb") {
+      const m = finalUrl.match(/-(\d+)-photos\/?$/i);
+      return m ? Number(m[1]) : void 0;
+    }
+    if (siteId === "rrwsh") {
+      const m = item.title.match(/\[[^\]]*?(\d+)\s*photos/i);
+      return m ? Number(m[1]) : void 0;
+    }
+    return void 0;
+  }
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
   function isBlockedPage(html) {
     return /search request blocked|正在进行安全验证|just a moment|cf-chl|cloudflare|turnstile|attention required/i.test(html);
@@ -2664,13 +2712,13 @@
         let failed = 0;
         let cursor = 0;
         const updated = {};
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
         const worker = async () => {
           while (true) {
             const idx = cursor++;
             if (idx >= candidates.length) return;
             const c = candidates[idx];
-            await sleep(message.intervalMs);
+            await sleep2(message.intervalMs);
             try {
               const { albums: userAlbums, truncated } = await fetchUserAlbums(c.username, SCORE_MAX_PAGES);
               updated[c.username] = {
