@@ -211,6 +211,7 @@ export class BuonduaService {
     onSite: (siteId: string, items: BuonduaLinkItem[], error?: string) => Promise<void> | void,
   ): Promise<BuonduaLinkItem[]> {
     const mergedMap = new Map<string, BuonduaLinkItem>()
+    const siteStats: Record<string, { count: number; pages: number; error?: string }> = {}
     for (const siteId of sites) {
       const site = GALLERY_SITES.find((s) => s.id === siteId)
       if (!site || !site.searchUrl) {
@@ -219,26 +220,27 @@ export class BuonduaService {
       }
       const items: BuonduaLinkItem[] = []
       let error: string | undefined
+      let pagesFetched = 0
       try {
         for (let page = 1; page <= pagesPerSite; page++) {
           const url = site.searchUrl(query, page)
           if (!url) break
           // jrants 连续快速搜索触发反爬限流（实测 2026-08-13/14），页间强制间隔
           if (siteId === 'jrants' && page > 1) await sleep(2000)
-          // Google 通道站点走页内跳转跟随（meta refresh / JS location）
           const html = site.searchAlbumPath ? await this.fetchGoogleSearch(url) : await this.fetchHtml(url)
+          pagesFetched++
           if (isBlockedPage(html)) {
             // 反爬拦截页：跳过该站（避免把热门/推荐链接当搜索结果）
             error = '搜索被反爬拦截（限流），请稍后重试'
-            logger.warn('buondua', '站点搜索被反爬拦截', { site: siteId })
+            logger.warn('buondua', '站点搜索被反爬拦截', { site: siteId, len: html.length })
             break
           }
           const parsed = parseLinksForSite(siteId, html, url)
           if (parsed.length === 0) {
-            // Google 通道（searchAlbumPath 站点）第 1 页无结果：多半是验证/同意页，给出明确提示
+            // Google 通道（searchAlbumPath 站点）第 1 页无结果：附完整页面诊断，便于日志定位
             if (page === 1 && site.searchAlbumPath) {
-              error = 'Google 未返回可解析的相册结果（可能被验证页/同意页拦截，请用「测试 Google 连接」确认）'
-              logger.warn('buondua', 'Google 搜索无结果', { site: siteId })
+              error = 'Google 未返回可解析的相册结果（验证页/同意页/JS 渲染壳，详见日志诊断）'
+              logger.warn('buondua', 'Google 搜索无结果（诊断）', { site: siteId, ...diagGooglePage(html) })
             }
             break // 无更多结果
           }
@@ -253,9 +255,15 @@ export class BuonduaService {
       for (const item of unique) {
         if (!mergedMap.has(item.url)) mergedMap.set(item.url, item)
       }
+      siteStats[siteId] = { count: unique.length, pages: pagesFetched, ...(error ? { error } : {}) }
       await onSite(siteId, unique, error)
     }
-    logger.info('buondua', '聚合搜索完成', { query, sites: sites.length, merged: mergedMap.size })
+    logger.info('buondua', '聚合搜索完成', {
+      query,
+      sites: sites.length,
+      merged: mergedMap.size,
+      perSite: siteStats,
+    })
     return [...mergedMap.values()]
   }
 
@@ -269,7 +277,7 @@ export class BuonduaService {
   }
 
   /** Google 连接测试（聚合搜索 Google 通道，FP-012/090/091）：请求 google 搜索（gbv=1），跟随页内跳转，
-   *  报告可达性/拦截/耗时 + 返回页诊断（长度/标题/是否含 h3/同意页/meta refresh/0 结果文案/可见文本预览） */
+   *  报告可达性/拦截/耗时 + 返回页诊断（长度/标题/是否含 h3/同意页/meta refresh/0 结果文案/可见文本预览），结果写日志 */
   async testGoogleConnection(): Promise<{
     ok: boolean
     status?: number
@@ -291,20 +299,14 @@ export class BuonduaService {
     try {
       const { html, hops } = await this.fetchGoogleSearchWithHops('https://www.google.com/search?q=test&gbv=1')
       const blocked = isBlockedPage(html)
-      const title = (html.match(/<title>([^<]*)<\/title>/) ?? [null, ''])[1].slice(0, 100)
-      const hasH3 = /<h3[^>]*class="[^"]*\br\b[^"]*"/.test(html) || /zReHs/.test(html)
-      const isConsent = /consent\.google\.com|google\.com\/consent/i.test(html)
-      const hasMetaRefresh = /<meta[^>]*http-equiv=["']?refresh["']?/i.test(html)
-      const hasNoResultText = /未找到任何匹配项|did not match any documents|no results found/i.test(html)
-      const body = (html.replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<style[\s\S]*?<\/style>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')).trim()
-      return {
-        ok: true,
-        status: 200,
-        blocked,
-        ms: Date.now() - start,
-        diag: { len: html.length, title, hasH3, isConsent, hasMetaRefresh, hasNoResultText, hops, bodyPreview: body.slice(0, 220) },
-      }
+      const base = diagGooglePage(html)
+      const diag = { ...base, hops }
+      if (blocked) logger.warn('buondua', 'Google 连接测试：验证页拦截', { ...diag, ms: Date.now() - start })
+      else if (!base.hasH3) logger.warn('buondua', 'Google 连接测试：无结果标记', { ...diag, ms: Date.now() - start })
+      else logger.info('buondua', 'Google 连接测试正常', { ...diag, ms: Date.now() - start })
+      return { ok: true, status: 200, blocked, ms: Date.now() - start, diag }
     } catch (err) {
+      logger.warn('buondua', 'Google 连接测试失败', { error: String(err), ms: Date.now() - start })
       return { ok: false, blocked: false, ms: Date.now() - start, error: String(err) }
     }
   }
@@ -412,6 +414,34 @@ function sleep(ms: number): Promise<void> {
  *  用 sorry 页专属文案（unusual traffic / recaptcha / enable JavaScript） */
 function isBlockedPage(html: string): boolean {
   return /search request blocked|正在进行安全验证|just a moment|cf-chl|cloudflare|turnstile|attention required|unusual traffic|enable JavaScript and cookies|recaptcha|our systems have detected/i.test(html)
+}
+
+/** Google 返回页诊断（日志/测试共用，FP-012/092）：长度/标题/是否含结果标记/同意页/meta 刷新/0 结果文案/可见文本预览 */
+function diagGooglePage(html: string): {
+  len: number
+  title: string
+  hasH3: boolean
+  isConsent: boolean
+  hasMetaRefresh: boolean
+  hasNoResultText: boolean
+  bodyPreview: string
+} {
+  const title = (html.match(/<title>([^<]*)<\/title>/) ?? [null, ''])[1].slice(0, 100)
+  const body = html
+    .replace(/<script[\s\S]*?<\/script>/g, ' ')
+    .replace(/<style[\s\S]*?<\/style>/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return {
+    len: html.length,
+    title,
+    hasH3: /<h3[^>]*class="[^"]*\br\b[^"]*"/.test(html) || /zReHs/.test(html),
+    isConsent: /consent\.google\.com|google\.com\/consent/i.test(html),
+    hasMetaRefresh: /<meta[^>]*http-equiv=["']?refresh["']?/i.test(html),
+    hasNoResultText: /未找到任何匹配项|did not match any documents|no results found/i.test(html),
+    bodyPreview: body.slice(0, 200),
+  }
 }
 
 /** 按 URL 去重 */

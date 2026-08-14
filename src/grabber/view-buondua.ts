@@ -460,6 +460,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     const selected = new Set<number>()
     const pageCount = () => Math.max(1, Math.ceil(items.length / BATCH_SIZE))
     let pendingSites = 0
+    let lastQuery = '' // 最近一次搜索关键词（日志用）
 
     /** 创建结果卡片（大封面网格）：勾选框独立选中，点卡片打开相册页 */
     function makeCard(item: BuonduaLinkItem, globalIdx: number): HTMLDivElement {
@@ -719,6 +720,8 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         setStatus(statusEl, '请至少勾选一个搜索站点', true)
         return
       }
+      lastQuery = query
+      logger.info('view', '聚合搜索发起', { query, sites, pagesPerSite: Number(pagesInput.value) || 2 })
       if (!(await ensureHostPermission())) {
         setStatus(statusEl, '需要授权访问多页图站（<all_urls>）后才能搜索', true)
         return
@@ -774,6 +777,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         setBusy(false)
         siteStatus.textContent = `搜索完成：${items.length} 个结果`
         setStatus(statusEl, `搜索完成：共 ${items.length} 个结果（按站点分栏展示）`)
+        logger.info('view', '聚合搜索完成', { query: lastQuery, total: items.length, sites: new Set(itemSites).size })
       },
     }
   }

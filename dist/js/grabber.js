@@ -5002,6 +5002,7 @@
       const selected = /* @__PURE__ */ new Set();
       const pageCount = () => Math.max(1, Math.ceil(items.length / BATCH_SIZE));
       let pendingSites = 0;
+      let lastQuery = "";
       function makeCard(item, globalIdx) {
         const card = document.createElement("div");
         card.className = "bd-search-card" + (selected.has(globalIdx) ? " selected" : "");
@@ -5223,6 +5224,8 @@
           setStatus(statusEl, "\u8BF7\u81F3\u5C11\u52FE\u9009\u4E00\u4E2A\u641C\u7D22\u7AD9\u70B9", true);
           return;
         }
+        lastQuery = query;
+        logger5.info("view", "\u805A\u5408\u641C\u7D22\u53D1\u8D77", { query, sites, pagesPerSite: Number(pagesInput.value) || 2 });
         if (!await ensureHostPermission()) {
           setStatus(statusEl, "\u9700\u8981\u6388\u6743\u8BBF\u95EE\u591A\u9875\u56FE\u7AD9\uFF08<all_urls>\uFF09\u540E\u624D\u80FD\u641C\u7D22", true);
           return;
@@ -5277,6 +5280,7 @@
           setBusy(false);
           siteStatus.textContent = `\u641C\u7D22\u5B8C\u6210\uFF1A${items.length} \u4E2A\u7ED3\u679C`;
           setStatus(statusEl, `\u641C\u7D22\u5B8C\u6210\uFF1A\u5171 ${items.length} \u4E2A\u7ED3\u679C\uFF08\u6309\u7AD9\u70B9\u5206\u680F\u5C55\u793A\uFF09`);
+          logger5.info("view", "\u805A\u5408\u641C\u7D22\u5B8C\u6210", { query: lastQuery, total: items.length, sites: new Set(itemSites).size });
         }
       };
     }
@@ -5448,7 +5452,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260814142830" : "dev";
+  var BUILD_TIME = true ? "20260814142946" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

@@ -2160,6 +2160,7 @@
      *  onSite：每站完成后回调（推送该站结果，增量展示）；返回全部合并去重结果 */
     async searchSites(query, sites, pagesPerSite, onSite) {
       const mergedMap = /* @__PURE__ */ new Map();
+      const siteStats = {};
       for (const siteId of sites) {
         const site = GALLERY_SITES.find((s) => s.id === siteId);
         if (!site || !site.searchUrl) {
@@ -2168,22 +2169,24 @@
         }
         const items = [];
         let error;
+        let pagesFetched = 0;
         try {
           for (let page = 1; page <= pagesPerSite; page++) {
             const url = site.searchUrl(query, page);
             if (!url) break;
             if (siteId === "jrants" && page > 1) await sleep(2e3);
             const html = site.searchAlbumPath ? await this.fetchGoogleSearch(url) : await this.fetchHtml(url);
+            pagesFetched++;
             if (isBlockedPage(html)) {
               error = "\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A\uFF08\u9650\u6D41\uFF09\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5";
-              logger4.warn("buondua", "\u7AD9\u70B9\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A", { site: siteId });
+              logger4.warn("buondua", "\u7AD9\u70B9\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A", { site: siteId, len: html.length });
               break;
             }
             const parsed = parseLinksForSite(siteId, html, url);
             if (parsed.length === 0) {
               if (page === 1 && site.searchAlbumPath) {
-                error = "Google \u672A\u8FD4\u56DE\u53EF\u89E3\u6790\u7684\u76F8\u518C\u7ED3\u679C\uFF08\u53EF\u80FD\u88AB\u9A8C\u8BC1\u9875/\u540C\u610F\u9875\u62E6\u622A\uFF0C\u8BF7\u7528\u300C\u6D4B\u8BD5 Google \u8FDE\u63A5\u300D\u786E\u8BA4\uFF09";
-                logger4.warn("buondua", "Google \u641C\u7D22\u65E0\u7ED3\u679C", { site: siteId });
+                error = "Google \u672A\u8FD4\u56DE\u53EF\u89E3\u6790\u7684\u76F8\u518C\u7ED3\u679C\uFF08\u9A8C\u8BC1\u9875/\u540C\u610F\u9875/JS \u6E32\u67D3\u58F3\uFF0C\u8BE6\u89C1\u65E5\u5FD7\u8BCA\u65AD\uFF09";
+                logger4.warn("buondua", "Google \u641C\u7D22\u65E0\u7ED3\u679C\uFF08\u8BCA\u65AD\uFF09", { site: siteId, ...diagGooglePage(html) });
               }
               break;
             }
@@ -2197,9 +2200,15 @@
         for (const item of unique) {
           if (!mergedMap.has(item.url)) mergedMap.set(item.url, item);
         }
+        siteStats[siteId] = { count: unique.length, pages: pagesFetched, ...error ? { error } : {} };
         await onSite(siteId, unique, error);
       }
-      logger4.info("buondua", "\u805A\u5408\u641C\u7D22\u5B8C\u6210", { query, sites: sites.length, merged: mergedMap.size });
+      logger4.info("buondua", "\u805A\u5408\u641C\u7D22\u5B8C\u6210", {
+        query,
+        sites: sites.length,
+        merged: mergedMap.size,
+        perSite: siteStats
+      });
       return [...mergedMap.values()];
     }
     /** 相册文件夹名：ID-buondua-{相册名}-{时间戳} */
@@ -2211,26 +2220,20 @@
       return `ID-buondua-${name}-${ts}`;
     }
     /** Google 连接测试（聚合搜索 Google 通道，FP-012/090/091）：请求 google 搜索（gbv=1），跟随页内跳转，
-     *  报告可达性/拦截/耗时 + 返回页诊断（长度/标题/是否含 h3/同意页/meta refresh/0 结果文案/可见文本预览） */
+     *  报告可达性/拦截/耗时 + 返回页诊断（长度/标题/是否含 h3/同意页/meta refresh/0 结果文案/可见文本预览），结果写日志 */
     async testGoogleConnection() {
       const start = Date.now();
       try {
         const { html, hops } = await this.fetchGoogleSearchWithHops("https://www.google.com/search?q=test&gbv=1");
         const blocked = isBlockedPage(html);
-        const title = (html.match(/<title>([^<]*)<\/title>/) ?? [null, ""])[1].slice(0, 100);
-        const hasH3 = /<h3[^>]*class="[^"]*\br\b[^"]*"/.test(html) || /zReHs/.test(html);
-        const isConsent = /consent\.google\.com|google\.com\/consent/i.test(html);
-        const hasMetaRefresh = /<meta[^>]*http-equiv=["']?refresh["']?/i.test(html);
-        const hasNoResultText = /未找到任何匹配项|did not match any documents|no results found/i.test(html);
-        const body = html.replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-        return {
-          ok: true,
-          status: 200,
-          blocked,
-          ms: Date.now() - start,
-          diag: { len: html.length, title, hasH3, isConsent, hasMetaRefresh, hasNoResultText, hops, bodyPreview: body.slice(0, 220) }
-        };
+        const base = diagGooglePage(html);
+        const diag = { ...base, hops };
+        if (blocked) logger4.warn("buondua", "Google \u8FDE\u63A5\u6D4B\u8BD5\uFF1A\u9A8C\u8BC1\u9875\u62E6\u622A", { ...diag, ms: Date.now() - start });
+        else if (!base.hasH3) logger4.warn("buondua", "Google \u8FDE\u63A5\u6D4B\u8BD5\uFF1A\u65E0\u7ED3\u679C\u6807\u8BB0", { ...diag, ms: Date.now() - start });
+        else logger4.info("buondua", "Google \u8FDE\u63A5\u6D4B\u8BD5\u6B63\u5E38", { ...diag, ms: Date.now() - start });
+        return { ok: true, status: 200, blocked, ms: Date.now() - start, diag };
       } catch (err) {
+        logger4.warn("buondua", "Google \u8FDE\u63A5\u6D4B\u8BD5\u5931\u8D25", { error: String(err), ms: Date.now() - start });
         return { ok: false, blocked: false, ms: Date.now() - start, error: String(err) };
       }
     }
@@ -2315,6 +2318,19 @@
   }
   function isBlockedPage(html) {
     return /search request blocked|正在进行安全验证|just a moment|cf-chl|cloudflare|turnstile|attention required|unusual traffic|enable JavaScript and cookies|recaptcha|our systems have detected/i.test(html);
+  }
+  function diagGooglePage(html) {
+    const title = (html.match(/<title>([^<]*)<\/title>/) ?? [null, ""])[1].slice(0, 100);
+    const body = html.replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    return {
+      len: html.length,
+      title,
+      hasH3: /<h3[^>]*class="[^"]*\br\b[^"]*"/.test(html) || /zReHs/.test(html),
+      isConsent: /consent\.google\.com|google\.com\/consent/i.test(html),
+      hasMetaRefresh: /<meta[^>]*http-equiv=["']?refresh["']?/i.test(html),
+      hasNoResultText: /未找到任何匹配项|did not match any documents|no results found/i.test(html),
+      bodyPreview: body.slice(0, 200)
+    };
   }
   function dedupeLinks2(items) {
     const seen = /* @__PURE__ */ new Set();
