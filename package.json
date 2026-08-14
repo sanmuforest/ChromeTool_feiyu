@@ -1,13 +1,14 @@
 {
   "name": "fat-fish-grabber",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.001",
   "type": "module",
   "description": "肥鱼抓兔 - 网页图片抓取插件（Chrome 扩展 MV3，变体独立演进）",
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "node scripts/build.mjs --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "bump": "node scripts/bump-version.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",

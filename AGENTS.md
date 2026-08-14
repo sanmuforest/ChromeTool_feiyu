@@ -68,7 +68,7 @@
 
 - **变体身份**：肥鱼抓兔（`fat-fish-grabber`，Chrome 显示名「肥鱼抓兔 - 图片下载器」）。由原工程「图片下载器」（`F:\独游探索\浏览器插件`，pi 维护）复制而来，**变体独立演进，改动不回传原工程**；如需回传需人工合并
 - **git 仓库**：`https://github.com/sanmuforest/ChromeTool_feiyu.git`（变体独立仓库，与原工程 `ChromeTool.git` 无推送关联）
-- **版本**：v0.1.0（2026-08-14 变体独立起步，替代继承的 v0.2.1）
+- **版本**：v0.1.001（2026-08-14 起步。规则：每轮功能更新后执行 `npm run bump`，末位 +1：001 → 002 → 003 ...）
 - 技术基线：**Manifest V3**（`manifest_version: 3`）、TypeScript、esbuild 构建、无远程代码、权限最小化
 - pi 专属资源放在 `.pi/` 目录：
   - **Skills**：`.pi/skills/`（9 个：extension-dev/review/prototype/content-scripts/popup-ui/security/perf/testing/publish；game-design 已归档至 `归档/game-design-skill-2026-08-14-归档/`）
