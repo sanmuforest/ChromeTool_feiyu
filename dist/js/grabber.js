@@ -4712,8 +4712,10 @@
           <span id="bd-google-status" class="status-text"></span>
         </div>
         <div class="row">
-          <button class="btn bd-select-all">\u5168\u9009/\u53D6\u6D88</button>
+          <button class="btn bd-select-all">\u5168\u9009\u672C\u6279/\u53D6\u6D88</button>
           <button class="btn bd-fetch-selected">\u6293\u53D6\u9009\u4E2D</button>
+          <button class="btn bd-prev-batch">\u4E0A\u4E00\u6279</button>
+          <button class="btn bd-next-batch">\u4E0B\u4E00\u6279</button>
           <span class="bd-batch-info status-text"></span>
           <span class="bd-list-status status-text"></span>
         </div>
@@ -4973,6 +4975,8 @@
       const batchInfo = panel.querySelector(".bd-batch-info");
       const googleTestBtn = panel.querySelector("#bd-google-test");
       const googleStatus = panel.querySelector("#bd-google-status");
+      const btnNext = panel.querySelector(".bd-next-batch");
+      const btnPrev = panel.querySelector(".bd-prev-batch");
       const searchable = GALLERY_SITES.filter((s) => s.searchUrl);
       const defaultChecked = /* @__PURE__ */ new Set(["jrants", "pixibb", "rrwsh"]);
       const googleChannel = /* @__PURE__ */ new Set(["hitxhot", "kaizty"]);
@@ -4994,7 +4998,9 @@
       let items = [];
       let itemSites = [];
       const siteSeen = /* @__PURE__ */ new Map();
+      let page = 0;
       const selected = /* @__PURE__ */ new Set();
+      const pageCount = () => Math.max(1, Math.ceil(items.length / BATCH_SIZE));
       let pendingSites = 0;
       function makeCard(item, globalIdx) {
         const card = document.createElement("div");
@@ -5051,14 +5057,19 @@
           listEl.innerHTML = '<div class="empty-tip">\u6682\u65E0\u7ED3\u679C\u3002\u8BF7\u8F93\u5165\u5173\u952E\u8BCD\u540E\u70B9\u51FB\u300C\u805A\u5408\u641C\u7D22\u300D\u3002</div>';
           btnFetch.disabled = true;
           btnSelectAll.disabled = true;
+          btnNext.disabled = true;
+          btnPrev.disabled = true;
           batchInfo.textContent = "";
           return;
         }
+        const start = page * BATCH_SIZE;
+        const slice = items.slice(start, start + BATCH_SIZE);
         const bySite = /* @__PURE__ */ new Map();
-        items.forEach((_item, idx) => {
-          const siteId = itemSites[idx] ?? "";
+        slice.forEach((_item, i) => {
+          const globalIdx = start + i;
+          const siteId = itemSites[globalIdx] ?? "";
           if (!bySite.has(siteId)) bySite.set(siteId, []);
-          bySite.get(siteId).push(idx);
+          bySite.get(siteId).push(globalIdx);
         });
         const order = [...GALLERY_SITES.map((s) => s.id), ...bySite.keys()].filter(
           (id, i, arr) => arr.indexOf(id) === i
@@ -5082,20 +5093,40 @@
         }
         btnFetch.disabled = false;
         btnSelectAll.disabled = false;
-        batchInfo.textContent = `\u5171 ${items.length} \u4E2A\u7ED3\u679C\uFF08${bySite.size} \u7AD9\uFF09`;
+        btnNext.disabled = page >= pageCount() - 1;
+        btnPrev.disabled = page <= 0;
+        batchInfo.textContent = `\u7B2C ${page + 1}/${pageCount()} \u6279\uFF08\u5171 ${items.length} \u4E2A\uFF0C\u672C\u6279 ${slice.length} \u4E2A\uFF09`;
       }
       function setBusy(busy) {
         searchBtn.disabled = busy;
         btnFetch.disabled = busy;
         btnSelectAll.disabled = busy;
         googleTestBtn.disabled = busy;
+        btnNext.disabled = busy || page >= pageCount() - 1;
+        btnPrev.disabled = busy || page <= 0;
         searchBtn.textContent = busy ? "\u641C\u7D22\u4E2D\u2026" : "\u805A\u5408\u641C\u7D22";
       }
       btnSelectAll.addEventListener("click", () => {
-        const allSelected = items.length > 0 && items.every((_i, idx) => selected.has(idx));
-        if (allSelected) selected.clear();
-        else items.forEach((_i, idx) => selected.add(idx));
+        const start = page * BATCH_SIZE;
+        const batchAll = items.slice(start, start + BATCH_SIZE).every((_i, idx) => selected.has(start + idx));
+        if (batchAll) {
+          for (let i = start; i < Math.min(start + BATCH_SIZE, items.length); i++) selected.delete(i);
+        } else {
+          for (let i = start; i < Math.min(start + BATCH_SIZE, items.length); i++) selected.add(i);
+        }
         renderList();
+      });
+      btnNext.addEventListener("click", () => {
+        if (page < pageCount() - 1) {
+          page++;
+          renderList();
+        }
+      });
+      btnPrev.addEventListener("click", () => {
+        if (page > 0) {
+          page--;
+          renderList();
+        }
       });
       btnFetch.addEventListener("click", () => {
         if (btnFetch.disabled) return;
@@ -5197,6 +5228,7 @@
         items = [];
         itemSites = [];
         siteSeen.clear();
+        page = 0;
         selected.clear();
         pendingSites = sites.length;
         renderList();
@@ -5414,7 +5446,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260814141055" : "dev";
+  var BUILD_TIME = true ? "20260814141957" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

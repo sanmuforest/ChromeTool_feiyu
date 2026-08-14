@@ -2158,8 +2158,14 @@
               break;
             }
             const parsed = parseLinksForSite(siteId, html, url);
+            if (parsed.length === 0) {
+              if (page === 1 && site.searchAlbumPath) {
+                error = "Google \u672A\u8FD4\u56DE\u53EF\u89E3\u6790\u7684\u76F8\u518C\u7ED3\u679C\uFF08\u53EF\u80FD\u88AB\u9A8C\u8BC1\u9875/\u540C\u610F\u9875\u62E6\u622A\uFF0C\u8BF7\u7528\u300C\u6D4B\u8BD5 Google \u8FDE\u63A5\u300D\u786E\u8BA4\uFF09";
+                logger4.warn("buondua", "Google \u641C\u7D22\u65E0\u7ED3\u679C", { site: siteId });
+              }
+              break;
+            }
             items.push(...parsed);
-            if (parsed.length === 0) break;
           }
         } catch (err) {
           error = String(err);

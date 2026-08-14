@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<!-- saved from url=(0083)chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663 -->
+<html lang="zh-CN"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>图片下载器</title>
+  <link rel="stylesheet" href="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.css">
+</head>
+<body>
+  <div class="app">
+    <header class="grab-header">
+      <div class="header-top">
+        <div class="tab-bar">
+          <button class="grab-tab" data-panel="images">抓取</button>
+          <button class="grab-tab" data-panel="logs">日志</button>
+          <button class="grab-tab" data-panel="imgbb">imgbb</button>
+          <button class="grab-tab active" data-panel="buondua">多页图站</button>
+          <button class="grab-tab" data-panel="template">站点适配模板</button>
+        </div>
+        <div class="header-controls">
+          <span class="ctrl-label">下载并发</span>
+          <input id="dl-concurrency" class="num-input" type="number" min="1" max="24" value="12" title="同时下载的图片数（1~24），imgbb 大相册可调高">
+          <button id="dl-concurrency-set" class="btn">设置</button>
+          <div id="version-badge" class="version-badge">v0.1.6 · 20260814141055</div>
+        </div>
+      </div>
+      <div class="page-info" id="page-info">抓取：<b>您的存储库</b>（github.com）<br>保存到文件夹：<span class="folder">您的存储库</span></div>
+    </header>
+
+    <main class="main">
+      <section id="panel-images" class="panel">
+    <div class="images-view">
+      <div class="toolbar">
+        <div class="group">
+          <button id="gv-reparse" class="btn">重新解析</button>
+          <button id="gv-load-more" class="btn" disabled="">加载下一批</button>
+          <button id="gv-dedupe" class="btn active">去重：开</button>
+          <button id="gv-small-filter" class="btn active">小图过滤：开</button>
+        </div>
+        <div class="group">
+          <button id="gv-select-all" class="btn">全选</button>
+          <button id="gv-select-none" class="btn">取消选择</button>
+          <span id="gv-stat" class="stat-text">共 3 张（去重 1）（小图剔除 1），显示 1 张，选中 1 张</span>
+        </div>
+        <div class="group">
+          <button id="gv-download" class="btn primary">下载选中</button>
+          <button id="gv-zip" class="btn">打包下载</button>
+          <button id="gv-folder" class="btn">打开文件夹</button>
+        </div>
+      </div>
+      <div class="size-filter-bar">
+        <span class="size-filter-label">尺寸筛选</span>
+        <div id="gv-size-btns" class="size-btns"><button class="size-btn" title="覆盖范围 128×128；点击筛选不小于该范围的图片，再点一次清除">≥128×128（1）</button></div>
+      </div>
+      <div class="progress-area">
+        <div class="progress-row" id="gv-parse-row">
+          <span class="progress-label">解析</span>
+          <div class="progress-bar"><div id="gv-parse-fill" class="progress-fill done" style="width: 100%;"></div></div>
+          <span id="gv-parse-text" class="progress-text">解析完成，共 3 张</span>
+          <button id="gv-parse-cancel" class="btn danger" disabled="">取消</button>
+        </div>
+        <div class="progress-row" id="gv-dl-row" style="display:none">
+          <span class="progress-label" id="gv-dl-label">下载</span>
+          <div class="progress-bar"><div id="gv-dl-fill" class="progress-fill"></div></div>
+          <span id="gv-dl-text" class="progress-text"></span>
+          <button id="gv-dl-cancel" class="btn danger">取消</button>
+        </div>
+      </div>
+      <div class="grid" id="gv-grid"><div class="img-card selected" data-url="https://avatars.githubusercontent.com/u/66452347?v=4"><img class="thumb" loading="lazy" decoding="async" draggable="false" src="./图片下载器_files/66452347"><div class="size-tag">128×128</div><div class="check-mark">✓</div></div></div>
+      <div class="failed-area" id="gv-failed" style="display:none"></div>
+    </div>
+  </section>
+      <section id="panel-logs" class="panel">
+    <div class="log-panel">
+      <div class="log-toolbar">
+        <label>日志等级</label>
+        <select id="level-select">
+          <option value="debug">debug（详细）</option>
+          <option value="info" selected="">info（默认）</option>
+          <option value="warn">warn</option>
+          <option value="error">error</option>
+        </select>
+        <button id="btn-refresh" class="btn">刷新</button>
+        <button id="btn-clear" class="btn danger">清空</button>
+        <button id="btn-copy" class="btn">复制</button>
+        <button id="btn-export" class="btn">导出</button>
+      </div>
+      <div class="log-filter">
+        <button data-filter="all" class="chip active">全部</button>
+        <button data-filter="debug" class="chip">debug</button>
+        <button data-filter="info" class="chip">info</button>
+        <button data-filter="warn" class="chip warn">warn</button>
+        <button data-filter="error" class="chip error">error</button>
+      </div>
+      <div id="log-list" class="log-list"><div class="log-entry"><span class="ts">11:55:55.211</span><span class="level info">info</span><span class="ctx">[grabber/log-panel]</span><span class="msg">日志已清空</span></div><div class="log-entry"><span class="ts">11:58:44.382</span><span class="level info">info</span><span class="ctx">[background/diffuse]</span><span class="msg">生产者库已恢复</span><div class="data">{
+  "total": 0
+}</div></div><div class="log-entry"><span class="ts">11:59:08.309</span><span class="level info">info</span><span class="ctx">[background/diffuse]</span><span class="msg">生产者库已恢复</span><div class="data">{
+  "total": 0
+}</div></div><div class="log-entry"><span class="ts">11:59:13.106</span><span class="level info">info</span><span class="ctx">[background/action]</span><span class="msg">已创建抓取页</span><div class="data">{
+  "grabTabId": 551211670,
+  "srcTabId": 551211534
+}</div></div><div class="log-entry"><span class="ts">11:59:13.133</span><span class="level info">info</span><span class="ctx">[grabber/grabber]</span><span class="msg">开始初始化</span><div class="data">{
+  "grabTabId": 551211670,
+  "srcTabId": 551211534
+}</div></div><div class="log-entry"><span class="ts">11:59:13.133</span><span class="level info">info</span><span class="ctx">[background/session]</span><span class="msg">会话已注册</span><div class="data">{
+  "folderName": "(69 封私信 _ 80 条消息) 如何评价《欢迎来龙餐馆》这部电影？ - 知乎",
+  "grabTabId": 551211670,
+  "srcTabId": 551211534
+}</div></div><div class="log-entry"><span class="ts">11:59:13.136</span><span class="level info">info</span><span class="ctx">[grabber/log-panel]</span><span class="msg">日志面板已挂载</span></div><div class="log-entry"><span class="ts">11:59:13.138</span><span class="level info">info</span><span class="ctx">[grabber/grabber]</span><span class="msg">抓取页就绪，已请求解析</span><div class="data">{
+  "srcTabId": 551211534,
+  "title": "(69 封私信 / 80 条消息) 如何评价《欢迎来龙餐馆》这部电影？ - 知乎"
+}</div></div><div class="log-entry"><span class="ts">11:59:13.141</span><span class="level info">info</span><span class="ctx">[background/parse]</span><span class="msg">解析已启动</span><div class="data">{
+  "srcTabId": 551211534
+}</div></div><div class="log-entry"><span class="ts">11:59:13.150</span><span class="level info">info</span><span class="ctx">[grabber/view]</span><span class="msg">解析完成（默认全选）</span><div class="data">{
+  "count": 12
+}</div></div><div class="log-entry"><span class="ts">12:02:28.624</span><span class="level info">info</span><span class="ctx">[background/diffuse]</span><span class="msg">生产者库已恢复</span><div class="data">{
+  "total": 0
+}</div></div><div class="log-entry"><span class="ts">12:55:51.827</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">background 初始化完成</span></div><div class="log-entry"><span class="ts">12:55:51.828</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">插件已安装/更新</span><div class="data">{
+  "reason": "update",
+  "version": "0.1.003"
+}</div></div><div class="log-entry"><span class="ts">12:55:56.117</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">background 初始化完成</span></div><div class="log-entry"><span class="ts">12:55:56.120</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">插件已安装/更新</span><div class="data">{
+  "reason": "update",
+  "version": "0.1.003"
+}</div></div><div class="log-entry"><span class="ts">12:55:57.696</span><span class="level info">info</span><span class="ctx">[background/action]</span><span class="msg">已创建抓取页</span><div class="data">{
+  "grabTabId": 551211672,
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">12:55:57.725</span><span class="level info">info</span><span class="ctx">[background/session]</span><span class="msg">会话已注册</span><div class="data">{
+  "folderName": "您的存储库",
+  "grabTabId": 551211672,
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">12:55:57.726</span><span class="level info">info</span><span class="ctx">[grabber/log-panel]</span><span class="msg">日志面板已挂载</span></div><div class="log-entry"><span class="ts">12:55:57.728</span><span class="level info">info</span><span class="ctx">[grabber/grabber]</span><span class="msg">抓取页就绪，已请求解析</span><div class="data">{
+  "srcTabId": 551211663,
+  "title": "您的存储库"
+}</div></div><div class="log-entry"><span class="ts">12:55:57.733</span><span class="level info">info</span><span class="ctx">[background/parse]</span><span class="msg">解析已启动</span><div class="data">{
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">12:55:57.734</span><span class="level info">info</span><span class="ctx">[grabber/view]</span><span class="msg">解析完成（默认全选）</span><div class="data">{
+  "count": 3
+}</div></div><div class="log-entry"><span class="ts">12:56:37.483</span><span class="level warn">warn</span><span class="ctx">[background/buondua]</span><span class="msg">站点搜索被反爬拦截</span><div class="data">{
+  "site": "pixibb"
+}</div></div><div class="log-entry"><span class="ts">12:56:37.484</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 72,
+  "query": "喵",
+  "sites": 4
+}</div></div><div class="log-entry"><span class="ts">12:56:48.357</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 0,
+  "query": "小",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">12:56:57.397</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 12,
+  "query": "小",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">12:57:13.555</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 60,
+  "query": "小",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">12:57:21.720</span><span class="level warn">warn</span><span class="ctx">[background/buondua]</span><span class="msg">站点搜索被反爬拦截</span><div class="data">{
+  "site": "pixibb"
+}</div></div><div class="log-entry"><span class="ts">12:57:21.720</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 0,
+  "query": "小",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">12:57:29.337</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 0,
+  "query": "小",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">12:57:33.082</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 0,
+  "query": "小",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">12:57:41.721</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 0,
+  "query": "丝",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">12:57:52.871</span><span class="level warn">warn</span><span class="ctx">[background/buondua]</span><span class="msg">站点搜索被反爬拦截</span><div class="data">{
+  "site": "pixibb"
+}</div></div><div class="log-entry"><span class="ts">12:57:52.872</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 12,
+  "query": "丝",
+  "sites": 4
+}</div></div><div class="log-entry"><span class="ts">12:58:05.278</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 0,
+  "query": "丝",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">13:01:58.027</span><span class="level info">info</span><span class="ctx">[background/diffuse]</span><span class="msg">生产者库已恢复</span><div class="data">{
+  "total": 0
+}</div></div><div class="log-entry"><span class="ts">13:19:04.929</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">background 初始化完成</span></div><div class="log-entry"><span class="ts">13:19:04.932</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">插件已安装/更新</span><div class="data">{
+  "reason": "update",
+  "version": "0.1.004"
+}</div></div><div class="log-entry"><span class="ts">13:19:11.823</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">background 初始化完成</span></div><div class="log-entry"><span class="ts">13:19:11.825</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">插件已安装/更新</span><div class="data">{
+  "reason": "update",
+  "version": "0.1.004"
+}</div></div><div class="log-entry"><span class="ts">13:21:10.811</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">background 初始化完成</span></div><div class="log-entry"><span class="ts">13:21:10.814</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">插件已安装/更新</span><div class="data">{
+  "reason": "update",
+  "version": "0.1.4"
+}</div></div><div class="log-entry"><span class="ts">13:21:15.570</span><span class="level info">info</span><span class="ctx">[background/action]</span><span class="msg">已创建抓取页</span><div class="data">{
+  "grabTabId": 551211677,
+  "srcTabId": 551211539
+}</div></div><div class="log-entry"><span class="ts">13:21:15.604</span><span class="level info">info</span><span class="ctx">[background/session]</span><span class="msg">会话已注册</span><div class="data">{
+  "folderName": "像素打飞机 - 石墨文档",
+  "grabTabId": 551211677,
+  "srcTabId": 551211539
+}</div></div><div class="log-entry"><span class="ts">13:21:15.605</span><span class="level info">info</span><span class="ctx">[grabber/log-panel]</span><span class="msg">日志面板已挂载</span></div><div class="log-entry"><span class="ts">13:21:15.609</span><span class="level info">info</span><span class="ctx">[grabber/grabber]</span><span class="msg">抓取页就绪，已请求解析</span><div class="data">{
+  "srcTabId": 551211539,
+  "title": "像素打飞机 - 石墨文档"
+}</div></div><div class="log-entry"><span class="ts">13:21:15.613</span><span class="level info">info</span><span class="ctx">[background/parse]</span><span class="msg">解析已启动</span><div class="data">{
+  "srcTabId": 551211539
+}</div></div><div class="log-entry"><span class="ts">13:21:15.619</span><span class="level info">info</span><span class="ctx">[grabber/view]</span><span class="msg">解析完成（默认全选）</span><div class="data">{
+  "count": 6
+}</div></div><div class="log-entry"><span class="ts">13:21:44.514</span><span class="level warn">warn</span><span class="ctx">[background/buondua]</span><span class="msg">站点搜索被反爬拦截</span><div class="data">{
+  "site": "pixibb"
+}</div></div><div class="log-entry"><span class="ts">13:21:44.515</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 43,
+  "query": "小丁",
+  "sites": 3
+}</div></div><div class="log-entry"><span class="ts">13:22:11.473</span><span class="level warn">warn</span><span class="ctx">[background/buondua]</span><span class="msg">站点搜索被反爬拦截</span><div class="data">{
+  "site": "pixibb"
+}</div></div><div class="log-entry"><span class="ts">13:22:11.475</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 12,
+  "query": "无内",
+  "sites": 3
+}</div></div><div class="log-entry"><span class="ts">13:22:16.743</span><span class="level info">info</span><span class="ctx">[background/session]</span><span class="msg">抓取页关闭，清理会话</span><div class="data">{
+  "grabTabId": 551211677,
+  "srcTabId": 551211539
+}</div></div><div class="log-entry"><span class="ts">13:22:29.835</span><span class="level info">info</span><span class="ctx">[background/action]</span><span class="msg">已创建抓取页</span><div class="data">{
+  "grabTabId": 551211680,
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">13:22:29.848</span><span class="level info">info</span><span class="ctx">[grabber/grabber]</span><span class="msg">开始初始化</span><div class="data">{
+  "grabTabId": 551211680,
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">13:22:29.849</span><span class="level info">info</span><span class="ctx">[background/session]</span><span class="msg">会话已注册</span><div class="data">{
+  "folderName": "您的存储库",
+  "grabTabId": 551211680,
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">13:22:29.850</span><span class="level info">info</span><span class="ctx">[grabber/log-panel]</span><span class="msg">日志面板已挂载</span></div><div class="log-entry"><span class="ts">13:22:29.851</span><span class="level info">info</span><span class="ctx">[grabber/grabber]</span><span class="msg">抓取页就绪，已请求解析</span><div class="data">{
+  "srcTabId": 551211663,
+  "title": "您的存储库"
+}</div></div><div class="log-entry"><span class="ts">13:22:29.854</span><span class="level info">info</span><span class="ctx">[background/parse]</span><span class="msg">解析已启动</span><div class="data">{
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">13:22:29.855</span><span class="level info">info</span><span class="ctx">[grabber/view]</span><span class="msg">解析完成（默认全选）</span><div class="data">{
+  "count": 3
+}</div></div><div class="log-entry"><span class="ts">13:22:46.422</span><span class="level warn">warn</span><span class="ctx">[background/buondua]</span><span class="msg">站点搜索被反爬拦截</span><div class="data">{
+  "site": "pixibb"
+}</div></div><div class="log-entry"><span class="ts">13:22:46.427</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 12,
+  "query": "闺蜜",
+  "sites": 3
+}</div></div><div class="log-entry"><span class="ts">13:22:57.106</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 0,
+  "query": "闺蜜",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">13:23:04.755</span><span class="level info">info</span><span class="ctx">[background/session]</span><span class="msg">抓取页关闭，清理会话</span><div class="data">{
+  "grabTabId": 551211680,
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">13:28:30.852</span><span class="level info">info</span><span class="ctx">[background/diffuse]</span><span class="msg">生产者库已恢复</span><div class="data">{
+  "total": 0
+}</div></div><div class="log-entry"><span class="ts">13:31:12.433</span><span class="level info">info</span><span class="ctx">[background/diffuse]</span><span class="msg">生产者库已恢复</span><div class="data">{
+  "total": 0
+}</div></div><div class="log-entry"><span class="ts">14:07:31.517</span><span class="level info">info</span><span class="ctx">[background/diffuse]</span><span class="msg">生产者库已恢复</span><div class="data">{
+  "total": 0
+}</div></div><div class="log-entry"><span class="ts">14:11:31.430</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">background 初始化完成</span></div><div class="log-entry"><span class="ts">14:11:31.434</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">插件已安装/更新</span><div class="data">{
+  "reason": "update",
+  "version": "0.1.6"
+}</div></div><div class="log-entry"><span class="ts">14:11:34.580</span><span class="level info">info</span><span class="ctx">[background/action]</span><span class="msg">已创建抓取页</span><div class="data">{
+  "grabTabId": 551211686,
+  "srcTabId": 551211541
+}</div></div><div class="log-entry"><span class="ts">14:11:34.598</span><span class="level info">info</span><span class="ctx">[grabber/grabber]</span><span class="msg">开始初始化</span><div class="data">{
+  "grabTabId": 551211686,
+  "srcTabId": 551211541
+}</div></div><div class="log-entry"><span class="ts">14:11:34.599</span><span class="level info">info</span><span class="ctx">[background/session]</span><span class="msg">会话已注册</span><div class="data">{
+  "folderName": "Pixel Shmup · Kenney",
+  "grabTabId": 551211686,
+  "srcTabId": 551211541
+}</div></div><div class="log-entry"><span class="ts">14:11:34.616</span><span class="level info">info</span><span class="ctx">[grabber/grabber]</span><span class="msg">抓取页就绪，已请求解析</span><div class="data">{
+  "srcTabId": 551211541,
+  "title": "Pixel Shmup · Kenney"
+}</div></div><div class="log-entry"><span class="ts">14:11:34.621</span><span class="level info">info</span><span class="ctx">[background/parse]</span><span class="msg">解析已启动</span><div class="data">{
+  "srcTabId": 551211541
+}</div></div><div class="log-entry"><span class="ts">14:11:34.625</span><span class="level info">info</span><span class="ctx">[grabber/view]</span><span class="msg">解析完成（默认全选）</span><div class="data">{
+  "count": 7
+}</div></div><div class="log-entry"><span class="ts">14:12:22.946</span><span class="level info">info</span><span class="ctx">[background/diffuse]</span><span class="msg">生产者库已恢复</span><div class="data">{
+  "total": 0
+}</div></div><div class="log-entry"><span class="ts">14:12:25.101</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 2,
+  "query": "秀人",
+  "sites": 2
+}</div></div><div class="log-entry"><span class="ts">14:12:48.628</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">background 初始化完成</span></div><div class="log-entry"><span class="ts">14:12:48.632</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">插件已安装/更新</span><div class="data">{
+  "reason": "update",
+  "version": "0.1.6"
+}</div></div><div class="log-entry"><span class="ts">14:12:50.916</span><span class="level info">info</span><span class="ctx">[background/action]</span><span class="msg">已创建抓取页</span><div class="data">{
+  "grabTabId": 551211688,
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">14:12:50.953</span><span class="level info">info</span><span class="ctx">[background/session]</span><span class="msg">会话已注册</span><div class="data">{
+  "folderName": "您的存储库",
+  "grabTabId": 551211688,
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">14:12:50.957</span><span class="level info">info</span><span class="ctx">[grabber/grabber]</span><span class="msg">抓取页就绪，已请求解析</span><div class="data">{
+  "srcTabId": 551211663,
+  "title": "您的存储库"
+}</div></div><div class="log-entry"><span class="ts">14:12:50.960</span><span class="level info">info</span><span class="ctx">[background/parse]</span><span class="msg">解析已启动</span><div class="data">{
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">14:12:50.961</span><span class="level info">info</span><span class="ctx">[grabber/view]</span><span class="msg">解析完成（默认全选）</span><div class="data">{
+  "count": 3
+}</div></div><div class="log-entry"><span class="ts">14:13:10.801</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 0,
+  "query": "秀",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">14:13:20.012</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 0,
+  "query": "小丁",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">14:13:28.175</span><span class="level warn">warn</span><span class="ctx">[background/buondua]</span><span class="msg">站点搜索被反爬拦截</span><div class="data">{
+  "site": "pixibb"
+}</div></div><div class="log-entry"><span class="ts">14:13:28.176</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 0,
+  "query": "小丁",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">14:13:34.217</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 20,
+  "query": "小丁",
+  "sites": 1
+}</div></div><div class="log-entry"><span class="ts">14:13:45.719</span><span class="level info">info</span><span class="ctx">[background/buondua]</span><span class="msg">聚合搜索完成</span><div class="data">{
+  "merged": 20,
+  "query": "小丁",
+  "sites": 2
+}</div></div><div class="log-entry"><span class="ts">14:14:19.318</span><span class="level info">info</span><span class="ctx">[background/diffuse]</span><span class="msg">生产者库已恢复</span><div class="data">{
+  "total": 0
+}</div></div><div class="log-entry"><span class="ts">14:15:11.823</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">background 初始化完成</span></div><div class="log-entry"><span class="ts">14:15:11.828</span><span class="level info">info</span><span class="ctx">[background/runtime]</span><span class="msg">插件已安装/更新</span><div class="data">{
+  "reason": "update",
+  "version": "0.1.6"
+}</div></div><div class="log-entry"><span class="ts">14:15:13.619</span><span class="level info">info</span><span class="ctx">[background/action]</span><span class="msg">已创建抓取页</span><div class="data">{
+  "grabTabId": 551211694,
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">14:15:13.643</span><span class="level info">info</span><span class="ctx">[grabber/grabber]</span><span class="msg">开始初始化</span><div class="data">{
+  "grabTabId": 551211694,
+  "srcTabId": 551211663
+}</div></div><div class="log-entry"><span class="ts">14:15:13.647</span><span class="level info">info</span><span class="ctx">[background/session]</span><span class="msg">会话已注册</span><div class="data">{
+  "folderName": "您的存储库",
+  "grabTabId": 551211694,
+  "srcTabId": 551211663
+}</div></div></div>
+      <div id="log-empty" class="log-empty">暂无日志。请操作插件后点「刷新」。</div>
+      <div id="log-count" class="log-count">95 / 95 条</div>
+    </div>
+  </section>
+      <section id="panel-imgbb" class="panel">
+    <div class="adapters-view">
+      <div class="adapter-head">
+        <h3>imgbb 图床</h3>
+        <span class="adapter-hint">子标签均手动触发，不自动解析</span>
+      </div>
+      <div class="adapter-tabs">
+        <button data-sub="home" class="adapter-tab active">用户主页</button>
+        <button data-sub="album" class="adapter-tab">相册抓取</button>
+        <button data-sub="albums" class="adapter-tab">相册分析</button>
+        <button data-sub="following" class="adapter-tab">关注墙</button>
+        <button data-sub="diffuse" class="adapter-tab">扩散检索</button>
+      </div>
+
+      <div id="sub-home" class="adapter-panel active">
+        <div class="row">
+          <input id="home-url" class="text-input" placeholder="用户主页 URL，如 https://xxx.imgbb.com/">
+          <button id="home-fetch" class="btn primary">抓第一批（约100）</button>
+          <button id="home-next" class="btn">下一批</button>
+        </div>
+        <div class="row">
+          <span class="row-label">分页范围</span>
+          <input id="home-page-from" class="num-input" value="1" type="number" min="1">
+          <span>~</span>
+          <input id="home-page-to" class="num-input" value="3" type="number" min="1">
+          <button id="home-fetch-pages" class="btn">按页抓取</button>
+          <span class="row-label">编号范围</span>
+          <input id="home-prefix" class="text-input small" placeholder="前缀如 IMG_">
+          <input id="home-from" class="num-input" type="number" min="0" placeholder="起">
+          <span>~</span>
+          <input id="home-to" class="num-input" type="number" min="0" placeholder="止">
+          <button id="home-fetch-range" class="btn">按编号抓取</button>
+        </div>
+        <div id="home-grab-view" class="grab-view-host">
+    <div class="images-view">
+      <div class="toolbar">
+        <div class="group">
+          
+          
+          <button id="gv-dedupe" class="btn active">去重：开</button>
+          <button id="gv-small-filter" class="btn active">小图过滤：开</button>
+        </div>
+        <div class="group">
+          <button id="gv-select-all" class="btn">全选</button>
+          <button id="gv-select-none" class="btn">取消选择</button>
+          <span id="gv-stat" class="stat-text">共 0 张，显示 0 张，选中 0 张</span>
+        </div>
+        <div class="group">
+          <button id="gv-download" class="btn primary">下载选中</button>
+          <button id="gv-zip" class="btn">打包下载</button>
+          <button id="gv-folder" class="btn">打开文件夹</button>
+        </div>
+      </div>
+      <div class="size-filter-bar">
+        <span class="size-filter-label">尺寸筛选</span>
+        <div id="gv-size-btns" class="size-btns"><span class="size-hint">解析完成后在此按尺寸筛选</span></div>
+      </div>
+      <div class="progress-area">
+        <div class="progress-row" id="gv-parse-row">
+          <span class="progress-label">解析</span>
+          <div class="progress-bar"><div id="gv-parse-fill" class="progress-fill"></div></div>
+          <span id="gv-parse-text" class="progress-text"></span>
+          
+        </div>
+        <div class="progress-row" id="gv-dl-row" style="display:none">
+          <span class="progress-label" id="gv-dl-label">下载</span>
+          <div class="progress-bar"><div id="gv-dl-fill" class="progress-fill"></div></div>
+          <span id="gv-dl-text" class="progress-text"></span>
+          <button id="gv-dl-cancel" class="btn danger">取消</button>
+        </div>
+      </div>
+      <div class="grid" id="gv-grid"><div class="empty-tip">暂无图片。请先抓取/解析。</div></div>
+      <div class="failed-area" id="gv-failed" style="display:none"></div>
+    </div>
+  </div>
+      </div>
+
+      <div id="sub-album" class="adapter-panel">
+        <div class="row">
+          <input id="album-url" class="text-input" placeholder="相册 URL，如 https://ibb.co/album/XXXX">
+          <button id="album-fetch" class="btn primary">抓取全部图片</button>
+        </div>
+        <div id="album-grab-view" class="grab-view-host">
+    <div class="images-view">
+      <div class="toolbar">
+        <div class="group">
+          
+          
+          <button id="gv-dedupe" class="btn active">去重：开</button>
+          <button id="gv-small-filter" class="btn active">小图过滤：开</button>
+        </div>
+        <div class="group">
+          <button id="gv-select-all" class="btn">全选</button>
+          <button id="gv-select-none" class="btn">取消选择</button>
+          <span id="gv-stat" class="stat-text">共 0 张，显示 0 张，选中 0 张</span>
+        </div>
+        <div class="group">
+          <button id="gv-download" class="btn primary">下载选中</button>
+          <button id="gv-zip" class="btn">打包下载</button>
+          <button id="gv-folder" class="btn">打开文件夹</button>
+        </div>
+      </div>
+      <div class="size-filter-bar">
+        <span class="size-filter-label">尺寸筛选</span>
+        <div id="gv-size-btns" class="size-btns"><span class="size-hint">解析完成后在此按尺寸筛选</span></div>
+      </div>
+      <div class="progress-area">
+        <div class="progress-row" id="gv-parse-row">
+          <span class="progress-label">解析</span>
+          <div class="progress-bar"><div id="gv-parse-fill" class="progress-fill"></div></div>
+          <span id="gv-parse-text" class="progress-text"></span>
+          
+        </div>
+        <div class="progress-row" id="gv-dl-row" style="display:none">
+          <span class="progress-label" id="gv-dl-label">下载</span>
+          <div class="progress-bar"><div id="gv-dl-fill" class="progress-fill"></div></div>
+          <span id="gv-dl-text" class="progress-text"></span>
+          <button id="gv-dl-cancel" class="btn danger">取消</button>
+        </div>
+      </div>
+      <div class="grid" id="gv-grid"><div class="empty-tip">暂无图片。请先抓取/解析。</div></div>
+      <div class="failed-area" id="gv-failed" style="display:none"></div>
+    </div>
+  </div>
+      </div>
+
+      <div id="sub-albums" class="adapter-panel">
+        <div class="row">
+          <input id="albums-user" class="text-input" placeholder="imgbb 用户名，如 u351622">
+          <button id="albums-start" class="btn primary">开始分析</button>
+          <button id="albums-next" class="btn">下一批</button>
+          <span id="albums-status" class="status-text"></span>
+        </div>
+        <div class="album-grid" id="albums-grid"></div>
+      </div>
+
+      <div id="sub-following" class="adapter-panel">
+        <div class="row">
+          <input id="following-user" class="text-input" placeholder="imgbb 用户名，如 u351622">
+          <label class="radio-label"><input type="radio" name="following-side" value="both" checked="">全部</label>
+          <label class="radio-label"><input type="radio" name="following-side" value="following">关注者</label>
+          <label class="radio-label"><input type="radio" name="following-side" value="followers">被关注者</label>
+          <button id="following-start" class="btn primary">开始分析</button>
+          <button id="following-next" class="btn">下一批</button>
+          <span id="following-status" class="status-text"></span>
+        </div>
+        <div class="following-list" id="following-list"></div>
+      </div>
+
+      <div id="sub-diffuse" class="adapter-panel">
+        <div class="diffuse-section">
+          <div class="section-title">① 广域筛选：following 扩散 → 入度统计</div>
+          <div class="row">
+            <input id="diffuse-user" class="text-input diffuse-user-input" placeholder="起点用户名">
+            <button id="diffuse-start" class="btn primary">开始扩散</button>
+            <button id="diffuse-next" class="btn">下一批(50)</button>
+            <span id="diffuse-status" class="status-text"></span>
+          </div>
+          <div class="row">
+            <span class="row-label">实时</span>
+            <span id="diffuse-progress" class="status-text"></span>
+            <span class="row-label">429</span>
+            <span id="diffuse-429" class="status-text"></span>
+          </div>
+          <div class="batch-progress-row">
+            <div class="progress-bar thin"><div id="diffuse-batch-fill" class="progress-fill"></div></div>
+            <span id="diffuse-batch-text" class="progress-text"></span>
+          </div>
+          <div class="diffuse-log" id="diffuse-log"></div>
+          <table class="batch-history" id="diffuse-history">
+            <thead><tr><th>批</th><th>处理</th><th>新增</th><th>失败</th><th>耗时</th><th>均请求</th><th>入度+</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="diffuse-section">
+          <div class="section-title">② 生产者库：用户相册统计与评分</div>
+          <div class="row">
+            <button id="db-save" class="btn">合并入库</button>
+            <button id="db-load" class="btn">读取</button>
+            <button id="db-reset-confirm" class="btn primary">重新确认</button>
+            <button id="db-clear" class="btn danger">清空</button>
+            <span id="db-status" class="status-text"></span>
+          </div>
+          <div class="row">
+            <span class="row-label">相册统计</span>
+            <button id="score-start" class="btn">确认评分</button>
+            <button id="score-next" class="btn">下一批确认</button>
+            <button id="score-stop" class="btn danger" disabled="">停止</button>
+            <label class="radio-label"><input type="radio" name="score-order" value="inDegree" checked="">入度优先</label>
+            <label class="radio-label"><input type="radio" name="score-order" value="newest">最新优先</label>
+            <label class="radio-label"><input type="radio" name="score-order" value="score">评分优先</label>
+            <label class="radio-label">每批 <select id="score-batch" class="num-input"><option value="50" selected="">50</option><option value="100">100</option><option value="200">200</option></select></label>
+            <label class="radio-label">入度权重 <input id="search-w1" class="num-input" value="60" type="number" min="0" max="100" style="width:48px">%</label>
+            <span id="score-status" class="status-text"></span>
+          </div>
+          <div class="row">
+            <span class="row-label">排行数量</span>
+            <input id="rank-n" class="num-input" value="100" type="number" min="10" max="500" style="width:60px">
+          </div>
+          <div id="db-composition" class="db-composition"></div>
+          <div class="rank-groups">
+            <div class="rank-group"><div class="rank-title">得分 Top <span class="rank-num" id="rank-score-n">100</span></div><div class="user-list" id="rank-score"></div></div>
+            <div class="rank-group"><div class="rank-title">入度 Top <span class="rank-num" id="rank-degree-n">100</span></div><div class="user-list" id="rank-degree"></div></div>
+            <div class="rank-group"><div class="rank-title">相册数 Top <span class="rank-num" id="rank-album-n">100</span>（已确认）</div><div class="user-list" id="rank-album"></div></div>
+          </div>
+          <div class="row">
+            <span class="row-label">会话</span>
+            <span id="diffuse-users-total" class="status-text"></span>
+          </div>
+          <div class="user-list" id="diffuse-users"></div>
+          <div class="diffuse-section tag-cloud-section">
+            <div class="section-title">⑤ 标签云（点击标签自动检索相册）</div>
+            <div class="row">
+              <span class="row-label">Top</span>
+              <input id="tag-n" class="num-input" value="100" type="number" min="20" max="500" style="width:60px">
+              <button id="tag-refresh" class="btn primary">生成标签云</button>
+              <span id="tag-status" class="status-text"></span>
+            </div>
+            <div class="tag-legend" id="tag-legend"></div>
+            <div class="tag-cloud" id="tag-cloud"></div>
+          </div>
+        </div>
+        <div class="diffuse-section">
+          <div class="section-title">③ 相册关键词检索（纯本地匹配）</div>
+          <div class="row">
+            <input id="search-keywords" class="text-input" placeholder="关键词，逗号分隔">
+            <label class="radio-label">取前 <input id="search-pct" type="range" min="1" max="100" value="100" class="pct-range"> <span id="search-pct-val">100</span>%</label>
+            <button id="search-start" class="btn primary">区间检索</button>
+            <span id="search-status" class="status-text"></span>
+          </div>
+          <div class="row">
+            <button id="search-prev" class="btn" disabled="">上一页</button>
+            <span id="search-page" class="status-text"></span>
+            <button id="search-next" class="btn" disabled="">下一页</button>
+            <span id="search-total" class="status-text"></span>
+          </div>
+          <div class="search-results" id="search-results"></div>
+        </div>
+        <div class="diffuse-section">
+          <div class="section-title">④ 本地数据表（导出 / 导入合并 JSON）</div>
+          <div class="row">
+            <button id="db-export" class="btn primary">导出数据表</button>
+            <button id="db-import" class="btn">导入合并</button>
+            <input id="db-import-file" type="file" accept=".json" style="display:none">
+            <span class="row-label">提示</span>
+            <span class="status-text">导出为 imgbb-producers.json，可保存到本工程目录</span>
+            <span id="local-status" class="status-text"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+      <section id="panel-buondua" class="panel active">
+    <div class="adapters-view">
+      <div class="adapter-head">
+        <h3>多页图站</h3>
+        <span class="adapter-hint">buondua / rrwsh / hitxhot / jrants / pixibb / kaizty：全子页抓取 / 推荐 / 其他链接批量抓取</span>
+      </div>
+      <div class="adapter-tabs">
+        <button data-sub="bd-album" class="adapter-tab">抓取</button>
+        <button data-sub="bd-recommended" class="adapter-tab">批量抓取推荐链接</button>
+        <button data-sub="bd-popular" class="adapter-tab">批量抓取其他链接</button>
+        <button data-sub="bd-search" class="adapter-tab active">聚合搜索</button>
+      </div>
+
+      <div id="sub-bd-album" class="adapter-panel">
+        <div class="row">
+          <input id="bd-album-url" class="text-input" placeholder="相册 URL：buondua / rrwsh.uuss.uk / hitxhot.org / jrants.com / pixibb.com / kaizty.com">
+          <button id="bd-album-fetch" class="btn primary">抓取全部子页</button>
+        </div>
+        <div id="bd-album-grab-view" class="grab-view-host">
+    <div class="images-view">
+      <div class="toolbar">
+        <div class="group">
+          
+          
+          <button id="gv-dedupe" class="btn active">去重：开</button>
+          <button id="gv-small-filter" class="btn active">小图过滤：开</button>
+        </div>
+        <div class="group">
+          <button id="gv-select-all" class="btn">全选</button>
+          <button id="gv-select-none" class="btn">取消选择</button>
+          <span id="gv-stat" class="stat-text">共 0 张，显示 0 张，选中 0 张</span>
+        </div>
+        <div class="group">
+          <button id="gv-download" class="btn primary">下载选中</button>
+          <button id="gv-zip" class="btn">打包下载</button>
+          <button id="gv-folder" class="btn">打开文件夹</button>
+        </div>
+      </div>
+      <div class="size-filter-bar">
+        <span class="size-filter-label">尺寸筛选</span>
+        <div id="gv-size-btns" class="size-btns"><span class="size-hint">解析完成后在此按尺寸筛选</span></div>
+      </div>
+      <div class="progress-area">
+        <div class="progress-row" id="gv-parse-row">
+          <span class="progress-label">解析</span>
+          <div class="progress-bar"><div id="gv-parse-fill" class="progress-fill"></div></div>
+          <span id="gv-parse-text" class="progress-text"></span>
+          
+        </div>
+        <div class="progress-row" id="gv-dl-row" style="display:none">
+          <span class="progress-label" id="gv-dl-label">下载</span>
+          <div class="progress-bar"><div id="gv-dl-fill" class="progress-fill"></div></div>
+          <span id="gv-dl-text" class="progress-text"></span>
+          <button id="gv-dl-cancel" class="btn danger">取消</button>
+        </div>
+      </div>
+      <div class="grid" id="gv-grid"><div class="empty-tip">暂无图片。请先抓取/解析。</div></div>
+      <div class="failed-area" id="gv-failed" style="display:none"></div>
+    </div>
+  </div>
+      </div>
+
+      <div id="sub-bd-recommended" class="adapter-panel">
+        <div class="row">
+          <input id="bd-rec-url" class="text-input" placeholder="相册 URL（自动识别推荐相册）">
+          <button id="bd-rec-scan" class="btn primary">识别推荐链接</button>
+        </div>
+        <div class="row">
+          <button class="btn bd-select-all">全选本批/取消</button>
+          <button class="btn bd-fetch-selected">抓取选中</button>
+          <button class="btn bd-prev-batch">上一批</button>
+          <button class="btn bd-next-batch">下一批</button>
+          <span class="bd-batch-info status-text"></span>
+          <span class="bd-list-status status-text"></span>
+        </div>
+        <div class="bd-link-list"></div>
+        <div class="bd-batch-results"></div>
+      </div>
+
+      <div id="sub-bd-popular" class="adapter-panel">
+        <div class="row">
+          <input id="bd-pop-url" class="text-input" placeholder="相册 URL（扫描全页其他帖子链接）">
+          <button id="bd-pop-scan" class="btn primary">扫描全部链接</button>
+        </div>
+        <div class="row">
+          <button class="btn bd-select-all">全选本批/取消</button>
+          <button class="btn bd-fetch-selected">抓取选中</button>
+          <button class="btn bd-prev-batch">上一批</button>
+          <button class="btn bd-next-batch">下一批</button>
+          <span class="bd-batch-info status-text"></span>
+          <span class="bd-list-status status-text"></span>
+        </div>
+        <div class="bd-link-list"></div>
+        <div class="bd-batch-results"></div>
+      </div>
+
+      <div id="sub-bd-search" class="adapter-panel active">
+        <div class="row">
+          <input id="bd-search-q" class="text-input" placeholder="关键词（聚合搜索多站点）">
+          <select id="bd-search-pages" class="num-input" title="每站搜索页数">
+            <option value="1">1 页/站</option>
+            <option value="2" selected="">2 页/站</option>
+            <option value="3">3 页/站</option>
+          </select>
+          <button id="bd-search-go" class="btn primary">聚合搜索</button>
+        </div>
+        <div class="row">
+          <div id="bd-search-sites" class="bd-search-sites"><label class="bd-site-check"><input type="checkbox" value="buondua"> buondua</label><label class="bd-site-check"><input type="checkbox" value="rrwsh" checked=""> rrwsh</label><label class="bd-site-check"><input type="checkbox" value="hitxhot"> hitxhot<span class="bd-site-note">（Google）</span></label><label class="bd-site-check"><input type="checkbox" value="kaizty"> kaizty<span class="bd-site-note">（Google）</span></label><label class="bd-site-check"><input type="checkbox" value="jrants" checked=""> jrants</label><label class="bd-site-check"><input type="checkbox" value="pixibb" checked=""> pixibb</label><label class="bd-site-check disabled" title="无搜索（图床）"><input type="checkbox" disabled=""> imgbb<span class="bd-site-note">（无搜索（图床））</span></label></div>
+          <span id="bd-search-site-status" class="status-text">搜索完成：20 个结果</span>
+        </div>
+        <div class="row">
+          <button id="bd-google-test" class="btn">测试 Google 连接</button>
+          <span id="bd-google-status" class="status-text">连接正常（HTTP 200 · 620ms）</span>
+        </div>
+        <div class="row">
+          <button class="btn bd-select-all">全选/取消</button>
+          <button class="btn bd-fetch-selected">抓取选中</button>
+          <span class="bd-batch-info status-text">共 20 个结果（1 站）</span>
+          <span class="bd-list-status status-text">搜索完成：共 20 个结果（按站点分栏展示）</span>
+        </div>
+        <div class="bd-link-list bd-search-list"><div class="bd-search-site-block"><div class="bd-search-site-head">hitxhot · 20 条</div><div class="bd-search-site-grid"><div class="bd-search-card" data-idx="0"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="雨波_HaneAme白血球cos #工作细胞" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="雨波_HaneAme白血球cos #工作细胞">雨波_HaneAme白血球cos #工作细胞</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="1"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="然理理柴郡猫耳cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="然理理柴郡猫耳cos">然理理柴郡猫耳cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="2"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="水淼-Aqua申鹤cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="水淼-Aqua申鹤cos">水淼-Aqua申鹤cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="3"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="阿包也是兔娘能代cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="阿包也是兔娘能代cos">阿包也是兔娘能代cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="4"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="国模套图国模cos妹大尺度人体私拍套图" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="国模套图国模cos妹大尺度人体私拍套图">国模套图国模cos妹大尺度人体私拍套图</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="5"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="西瓜子赫敏cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="西瓜子赫敏cos">西瓜子赫敏cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="6"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="樱泽诗诗柴郡cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="樱泽诗诗柴郡cos">樱泽诗诗柴郡cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="7"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="烛墨墨阿尔托莉雅cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="烛墨墨阿尔托莉雅cos">烛墨墨阿尔托莉雅cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="8"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="Tomoyo酱柴郡cos #碧蓝航线柴郡cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="Tomoyo酱柴郡cos #碧蓝航线柴郡cos">Tomoyo酱柴郡cos #碧蓝航线柴郡cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="9"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="[香草帕露露]COS摄影私房写真" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="[香草帕露露]COS摄影私房写真">[香草帕露露]COS摄影私房写真</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="10"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="【预览】【水淼-Aqua】碧蓝航线可畏cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="【预览】【水淼-Aqua】碧蓝航线可畏cos">【预览】【水淼-Aqua】碧蓝航线可畏cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="11"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="【预览】【Kokuhui】初音cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="【预览】【Kokuhui】初音cos">【预览】【Kokuhui】初音cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="12"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="瓜希酱雷电将军cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="瓜希酱雷电将军cos">瓜希酱雷电将军cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="13"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="瓜希酱伊绪cos #公主连结re:dive" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="瓜希酱伊绪cos #公主连结re:dive">瓜希酱伊绪cos #公主连结re:dive</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="14"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="三刀刀拳皇安琪儿cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="三刀刀拳皇安琪儿cos">三刀刀拳皇安琪儿cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="15"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="腥味猫罐代号23 瞳cos #bw2021场照" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="腥味猫罐代号23 瞳cos #bw2021场照">腥味猫罐代号23 瞳cos #bw2021场照</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="16"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="婉Yue路易九世cos #碧蓝航线" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="婉Yue路易九世cos #碧蓝航线">婉Yue路易九世cos #碧蓝航线</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="17"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="封疆疆v君主·赭红爵祿cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="封疆疆v君主·赭红爵祿cos">封疆疆v君主·赭红爵祿cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="18"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="宮本桜玛奇玛cos" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="宮本桜玛奇玛cos">宮本桜玛奇玛cos</div><div class="bd-search-meta">张数未知</div></div></div><div class="bd-search-card" data-idx="19"><input type="checkbox" class="bd-search-check" title="勾选以批量抓取"><span class="bd-search-badge">hitxhot</span><div class="bd-search-cover no-cover" title="点击打开相册页"><img loading="lazy" src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/grabber.html?srcTabId=551211663" alt="浅川一笑_MNK㭴野cos #自拍碧蓝航线" draggable="false" style="display: none;"></div><div class="bd-search-info"><div class="bd-search-title" title="浅川一笑_MNK㭴野cos #自拍碧蓝航线">浅川一笑_MNK㭴野cos #自拍碧蓝航线</div><div class="bd-search-meta">张数未知</div></div></div></div></div></div>
+        <div class="bd-batch-results"></div>
+      </div>
+    </div>
+  </section>
+      <section id="panel-template" class="panel">
+    <div class="adapters-view">
+      <div class="adapter-head">
+        <h3>站点适配模板</h3>
+        <span class="adapter-hint">空模板 · 为未来站点预留</span>
+      </div>
+      <div class="empty-tip" style="padding: 40px 20px; text-align: center; color: var(--text-dim); line-height: 1.8;">
+        <p>当前没有已注册的站点适配器。</p>
+        <p>新增一个站点适配需完成：</p>
+        <p style="color: var(--text); font-size: 12px;">
+          1. 在 <b>src/lib/imgbb-parse.ts</b> 同类文件中编写该站点的 HTML 解析器<br>
+          2. 在 <b>src/background/imgbb-service.ts</b> 同类文件中编写后台抓取服务<br>
+          3. 在本页签下新增对应的子标签 UI（参照 imgbb 页签）<br>
+          4. 更新 <b>设计文档/模块边界.md</b> 注册新适配器
+        </p>
+      </div>
+    </div>
+  </section>
+    </main>
+  </div>
+
+  <!-- 大图预览浮层 -->
+  <div id="preview-layer" class="preview-layer hidden">
+    <div class="preview-card">
+      <img id="preview-img" alt="">
+      <div id="preview-size" class="preview-size"></div>
+    </div>
+  </div>
+
+  <script src="chrome-extension://cdjmglcphckjofpnoggadehdhgomhljb/js/grabber.js"></script>
+
+
+</body></html>

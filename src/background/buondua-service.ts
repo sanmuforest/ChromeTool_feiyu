@@ -210,8 +210,15 @@ export class BuonduaService {
             break
           }
           const parsed = parseLinksForSite(siteId, html, url)
+          if (parsed.length === 0) {
+            // Google 通道（searchAlbumPath 站点）第 1 页无结果：多半是验证/同意页，给出明确提示
+            if (page === 1 && site.searchAlbumPath) {
+              error = 'Google 未返回可解析的相册结果（可能被验证页/同意页拦截，请用「测试 Google 连接」确认）'
+              logger.warn('buondua', 'Google 搜索无结果', { site: siteId })
+            }
+            break // 无更多结果
+          }
           items.push(...parsed)
-          if (parsed.length === 0) break // 无更多结果
         }
       } catch (err) {
         error = String(err)

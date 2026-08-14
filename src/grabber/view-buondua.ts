@@ -125,8 +125,10 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           <span id="bd-google-status" class="status-text"></span>
         </div>
         <div class="row">
-          <button class="btn bd-select-all">全选/取消</button>
+          <button class="btn bd-select-all">全选本批/取消</button>
           <button class="btn bd-fetch-selected">抓取选中</button>
+          <button class="btn bd-prev-batch">上一批</button>
+          <button class="btn bd-next-batch">下一批</button>
           <span class="bd-batch-info status-text"></span>
           <span class="bd-list-status status-text"></span>
         </div>
@@ -420,6 +422,8 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     const batchInfo = panel.querySelector('.bd-batch-info') as HTMLElement
     const googleTestBtn = panel.querySelector('#bd-google-test') as HTMLButtonElement
     const googleStatus = panel.querySelector('#bd-google-status') as HTMLElement
+    const btnNext = panel.querySelector('.bd-next-batch') as HTMLButtonElement
+    const btnPrev = panel.querySelector('.bd-prev-batch') as HTMLButtonElement
 
     // 站点勾选：支持搜索的站点可选（默认勾选 jrants/pixibb/rrwsh；hitxhot/kaizty 为 Google 通道，请求较慢，默认不勾选）；
     // 不支持的灰显禁用并标注原因（FP-012）
@@ -452,7 +456,9 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     let items: BuonduaLinkItem[] = [] // 平铺全站结果（跨站不去重，各站分栏展示）
     let itemSites: string[] = [] // 与 items 同序：来源站点（徽标/分组用）
     const siteSeen = new Map<string, Set<string>>() // 站内 URL 去重
+    let page = 0
     const selected = new Set<number>()
+    const pageCount = () => Math.max(1, Math.ceil(items.length / BATCH_SIZE))
     let pendingSites = 0
 
     /** 创建结果卡片（大封面网格）：勾选框独立选中，点卡片打开相册页 */
@@ -512,15 +518,20 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         listEl.innerHTML = '<div class="empty-tip">暂无结果。请输入关键词后点击「聚合搜索」。</div>'
         btnFetch.disabled = true
         btnSelectAll.disabled = true
+        btnNext.disabled = true
+        btnPrev.disabled = true
         batchInfo.textContent = ''
         return
       }
-      // 分站点分组（FP-012）：各站独立区块展示（顺序按 GALLERY_SITES 配置，含结果的站）
+      // 当前批：分站点分组展示（FP-012：各站独立区块，顺序按 GALLERY_SITES 配置）
+      const start = page * BATCH_SIZE
+      const slice = items.slice(start, start + BATCH_SIZE)
       const bySite = new Map<string, number[]>()
-      items.forEach((_item, idx) => {
-        const siteId = itemSites[idx] ?? ''
+      slice.forEach((_item, i) => {
+        const globalIdx = start + i
+        const siteId = itemSites[globalIdx] ?? ''
         if (!bySite.has(siteId)) bySite.set(siteId, [])
-        bySite.get(siteId)!.push(idx)
+        bySite.get(siteId)!.push(globalIdx)
       })
       const order = [...GALLERY_SITES.map((s) => s.id), ...bySite.keys()].filter(
         (id, i, arr) => arr.indexOf(id) === i,
@@ -544,7 +555,9 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       }
       btnFetch.disabled = false
       btnSelectAll.disabled = false
-      batchInfo.textContent = `共 ${items.length} 个结果（${bySite.size} 站）`
+      btnNext.disabled = page >= pageCount() - 1
+      btnPrev.disabled = page <= 0
+      batchInfo.textContent = `第 ${page + 1}/${pageCount()} 批（共 ${items.length} 个，本批 ${slice.length} 个）`
     }
 
     function setBusy(busy: boolean): void {
@@ -552,15 +565,35 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       btnFetch.disabled = busy
       btnSelectAll.disabled = busy
       googleTestBtn.disabled = busy
+      btnNext.disabled = busy || page >= pageCount() - 1
+      btnPrev.disabled = busy || page <= 0
       searchBtn.textContent = busy ? '搜索中…' : '聚合搜索'
     }
 
     btnSelectAll.addEventListener('click', () => {
-      // 全选/取消全部（跨站）
-      const allSelected = items.length > 0 && items.every((_i, idx) => selected.has(idx))
-      if (allSelected) selected.clear()
-      else items.forEach((_i, idx) => selected.add(idx))
+      // 全选/取消本批
+      const start = page * BATCH_SIZE
+      const batchAll = items
+        .slice(start, start + BATCH_SIZE)
+        .every((_i, idx) => selected.has(start + idx))
+      if (batchAll) {
+        for (let i = start; i < Math.min(start + BATCH_SIZE, items.length); i++) selected.delete(i)
+      } else {
+        for (let i = start; i < Math.min(start + BATCH_SIZE, items.length); i++) selected.add(i)
+      }
       renderList()
+    })
+    btnNext.addEventListener('click', () => {
+      if (page < pageCount() - 1) {
+        page++
+        renderList()
+      }
+    })
+    btnPrev.addEventListener('click', () => {
+      if (page > 0) {
+        page--
+        renderList()
+      }
     })
     btnFetch.addEventListener('click', () => {
       if (btnFetch.disabled) return
@@ -669,6 +702,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       items = []
       itemSites = []
       siteSeen.clear()
+      page = 0
       selected.clear()
       pendingSites = sites.length
       renderList()
