@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "图片下载器",
-  "version": "0.2.1",
-  "description": "网页图片抓取：解析、尺寸筛选、预览选择、批量/打包下载",
+  "name": "肥鱼抓兔 - 图片下载器",
+  "version": "0.1.0",
+  "description": "网页图片抓取：解析、尺寸筛选、预览选择、批量/打包下载（肥鱼抓兔变体）",
   "permissions": ["storage", "downloads", "activeTab", "scripting"],
   "optional_host_permissions": ["<all_urls>"],
   "icons": {

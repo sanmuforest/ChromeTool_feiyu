@@ -1,9 +1,9 @@
 {
-  "name": "browser-extension-project",
+  "name": "fat-fish-grabber",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "浏览器插件项目（MV3 + TypeScript + esbuild）",
+  "description": "肥鱼抓兔 - 网页图片抓取插件（Chrome 扩展 MV3，变体独立演进）",
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "node scripts/build.mjs --watch",

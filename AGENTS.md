@@ -1,7 +1,7 @@
 # 浏览器插件 — pi 工作指南
 
-> 技术栈：Chrome 扩展（Manifest V3）+ TypeScript + Vite 构建 ｜ 项目类型：浏览器插件（Chrome/Edge 优先）
-> 开发工具：本目录 `.pi/`（10 skills + 5 agents + 14 激活器 + 主题）｜ 由「像素打飞机」项目工具适配而来
+> 技术栈：Chrome 扩展（Manifest V3）+ TypeScript + esbuild 构建 ｜ 项目类型：浏览器插件（Chrome/Edge 优先）
+> 开发工具：本目录 `.pi/`（9 skills + 5 agents + 14 激活器 + 主题）｜ 由「像素打飞机」项目工具适配而来
 
 ## 铁律（每次回答必须执行）
 
@@ -66,9 +66,12 @@
 
 ## 项目上下文
 
-- 技术基线：**Manifest V3**（`manifest_version: 3`）、TypeScript、Vite/esbuild 构建、无远程代码、权限最小化
+- **变体身份**：肥鱼抓兔（`fat-fish-grabber`，Chrome 显示名「肥鱼抓兔 - 图片下载器」）。由原工程「图片下载器」（`F:\独游探索\浏览器插件`，pi 维护）复制而来，**变体独立演进，改动不回传原工程**；如需回传需人工合并
+- **git 仓库**：`https://github.com/sanmuforest/ChromeTool_feiyu.git`（变体独立仓库，与原工程 `ChromeTool.git` 无推送关联）
+- **版本**：v0.1.0（2026-08-14 变体独立起步，替代继承的 v0.2.1）
+- 技术基线：**Manifest V3**（`manifest_version: 3`）、TypeScript、esbuild 构建、无远程代码、权限最小化
 - pi 专属资源放在 `.pi/` 目录：
-  - **Skills**：`.pi/skills/`（10 个：extension-dev/review/prototype/content-scripts/popup-ui/security/perf/testing/publish + game-design）
+  - **Skills**：`.pi/skills/`（9 个：extension-dev/review/prototype/content-scripts/popup-ui/security/perf/testing/publish；game-design 已归档至 `归档/game-design-skill-2026-08-14-归档/`）
   - **智能体**：`.pi/agents/`（5 个：scout/planner/worker/reviewer/extension-specialist）
   - **激活器**：`.pi/激活器/`（14 个中文激活文件，拖入即用，覆盖立项→设计→开发→测试→发布）
   - **主题**：`.pi/themes/extension-theme.json`（思考文字淡黄色）
@@ -82,7 +85,7 @@
 ## 目录约定
 
 - **文档区**：`设计文档/`（需求 + 功能规格 + 架构决策 + 变更日志）
-- **工程区**：`src/`（源码：background / content / popup / options / lib / assets）+ `manifest.json`
+- **工程区**：`src/`（源码：background / content / grabber / lib / assets）+ `manifest.json`
 - **构建区**：`dist/`（构建产物，Chrome 加载此目录）
 - **测试区**：`tests/`（单测 / 集成 / E2E）
 
