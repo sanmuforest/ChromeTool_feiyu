@@ -5371,7 +5371,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260814131828" : "dev";
+  var BUILD_TIME = true ? "20260814132042" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
