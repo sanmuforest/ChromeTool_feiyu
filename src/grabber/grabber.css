@@ -1442,6 +1442,51 @@ body {
   grid-template-columns: repeat(6, 1fr);
   gap: 10px;
 }
+/* Google 通道站点结果：纯文字紧密列表（096，无封面依赖） */
+.bd-search-text-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bd-search-text-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  background: var(--card-bg, #222);
+}
+.bd-search-text-item:hover {
+  border-color: var(--accent, #4a9eff);
+}
+.bd-search-text-item.selected {
+  border-color: var(--accent, #4a9eff);
+  background: rgba(74, 158, 255, 0.1);
+}
+.bd-search-text-item .bd-search-check {
+  position: static;
+  flex-shrink: 0;
+}
+.bd-search-text-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text, #ddd);
+}
+.bd-search-text-meta {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted, #888);
+}
+.bd-search-text-open {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--accent, #4a9eff);
+}
 .bd-search-card {
   position: relative;
   border: 1px solid var(--border, #444);

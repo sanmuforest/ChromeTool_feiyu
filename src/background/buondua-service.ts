@@ -37,11 +37,12 @@ export class BuonduaService {
     site: GallerySiteConfig,
     query: string,
     pagesPerSite: number,
+    startPage = 1,
   ): Promise<{ items: BuonduaLinkItem[]; pages: number }> {
     const items: BuonduaLinkItem[] = []
     const seen = new Set<string>()
     let pagesFetched = 0
-    for (let page = 1; page <= pagesPerSite; page++) {
+    for (let page = startPage; page < startPage + pagesPerSite; page++) {
       const url = site.searchUrl(query, page)
       if (!url) break
       const tab = await chrome.tabs.create({ url, active: false })
@@ -251,10 +252,10 @@ export class BuonduaService {
     return items
   }
 
-  /** 批量抓取：targets 逐个全子页抓取（并发受限），返回每个目标的图片 */
+  /** 批量抓取：targets 逐个全子页抓取（并发受限），返回每个目标的图片（失败带 error，096） */
   async fetchAlbumsBatch(
     targets: { url: string; title: string }[],
-    onItem: (index: number, target: { url: string; title: string }, images: BuonduaImage[]) => void,
+    onItem: (index: number, target: { url: string; title: string }, images: BuonduaImage[], error?: string) => void,
   ): Promise<void> {
     let cursor = 0
     const worker = async (): Promise<void> => {
@@ -266,8 +267,9 @@ export class BuonduaService {
           const { images } = await this.fetchAlbumAllPages(target.url)
           onItem(idx, target, images)
         } catch (err) {
-          logger.warn('buondua', '批量相册抓取失败', { url: target.url, error: String(err) })
-          onItem(idx, target, [])
+          const error = String(err)
+          logger.warn('buondua', '批量相册抓取失败', { url: target.url, error })
+          onItem(idx, target, [], error)
         }
       }
     }
@@ -275,12 +277,14 @@ export class BuonduaService {
   }
 
   /** 聚合搜索：多站点逐页搜索 → 按站点路由解析 → 合并去重
+   *  startPage：每站起始页（「下一批」续搜传上次结束页 +1，096）
    *  onSite：每站完成后回调（推送该站结果，增量展示）；返回全部合并去重结果 */
   async searchSites(
     query: string,
     sites: string[],
     pagesPerSite: number,
     onSite: (siteId: string, items: BuonduaLinkItem[], error?: string) => Promise<void> | void,
+    startPage = 1,
   ): Promise<BuonduaLinkItem[]> {
     const mergedMap = new Map<string, BuonduaLinkItem>()
     const siteStats: Record<string, { count: number; pages: number; error?: string }> = {}
@@ -297,14 +301,14 @@ export class BuonduaService {
         // Google 通道站点（searchAlbumPath）：后台 fetch 拿不到新版 Google 结果（JS 渲染壳），
         // 改走页面降级通道（静默开标签渲染 + 提取，FP-012/093）
         if (site.searchAlbumPath) {
-          const tabRes = await this.searchGoogleViaTab(site, query, pagesPerSite)
+          const tabRes = await this.searchGoogleViaTab(site, query, pagesPerSite, startPage)
           pagesFetched = tabRes.pages
           for (const item of tabRes.items) items.push(item)
           if (tabRes.items.length === 0) {
             error = 'Google 标签页未提取到相册结果（可能验证页/无匹配，日志含诊断）'
           }
         } else {
-          for (let page = 1; page <= pagesPerSite; page++) {
+          for (let page = startPage; page < startPage + pagesPerSite; page++) {
             const url = site.searchUrl(query, page)
             if (!url) break
             // jrants 连续快速搜索触发反爬限流（实测 2026-08-13/14），页间强制间隔

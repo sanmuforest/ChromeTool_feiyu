@@ -125,10 +125,9 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           <span id="bd-google-status" class="status-text"></span>
         </div>
         <div class="row">
-          <button class="btn bd-select-all">全选本批/取消</button>
+          <button class="btn bd-select-all">全选/取消</button>
           <button class="btn bd-fetch-selected">抓取选中</button>
-          <button class="btn bd-prev-batch">上一批</button>
-          <button class="btn bd-next-batch">下一批</button>
+          <button class="btn bd-next-batch" title="继续检索更多结果（每站追加一页）">下一批（继续检索）</button>
           <span class="bd-batch-info status-text"></span>
           <span class="bd-list-status status-text"></span>
         </div>
@@ -423,7 +422,6 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     const googleTestBtn = panel.querySelector('#bd-google-test') as HTMLButtonElement
     const googleStatus = panel.querySelector('#bd-google-status') as HTMLElement
     const btnNext = panel.querySelector('.bd-next-batch') as HTMLButtonElement
-    const btnPrev = panel.querySelector('.bd-prev-batch') as HTMLButtonElement
 
     // 站点勾选：支持搜索的站点可选（默认勾选 jrants/pixibb/rrwsh；hitxhot/kaizty 为 Google 通道，请求较慢，默认不勾选）；
     // 不支持的灰显禁用并标注原因（FP-012）
@@ -456,11 +454,11 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     let items: BuonduaLinkItem[] = [] // 平铺全站结果（跨站不去重，各站分栏展示）
     let itemSites: string[] = [] // 与 items 同序：来源站点（徽标/分组用）
     const siteSeen = new Map<string, Set<string>>() // 站内 URL 去重
-    let page = 0
     const selected = new Set<number>()
-    const pageCount = () => Math.max(1, Math.ceil(items.length / BATCH_SIZE))
     let pendingSites = 0
     let lastQuery = '' // 最近一次搜索关键词（日志用）
+    let nextStartPage = 1 // 每站起始页（「下一批」续搜 +pagesPerSite，096）
+    const siteHasResult = new Set<string>() // 出过结果的站点（续搜跳过空站）
 
     /** 创建结果卡片（大封面网格）：勾选框独立选中，点卡片打开相册页 */
     function makeCard(item: BuonduaLinkItem, globalIdx: number): HTMLDivElement {
@@ -513,6 +511,40 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       return card
     }
 
+    /** 文字行（Google 通道站点用，096：无封面依赖，紧密列表） */
+    function makeTextRow(item: BuonduaLinkItem, globalIdx: number): HTMLDivElement {
+      const row = document.createElement('div')
+      row.className = 'bd-search-text-item' + (selected.has(globalIdx) ? ' selected' : '')
+      const check = document.createElement('input')
+      check.type = 'checkbox'
+      check.className = 'bd-search-check'
+      check.checked = selected.has(globalIdx)
+      check.title = '勾选以批量抓取'
+      check.addEventListener('click', (ev) => {
+        ev.stopPropagation()
+        if (selected.has(globalIdx)) selected.delete(globalIdx)
+        else selected.add(globalIdx)
+        row.classList.toggle('selected', selected.has(globalIdx))
+      })
+      const title = document.createElement('span')
+      title.className = 'bd-search-text-title'
+      title.textContent = item.title
+      title.title = item.title
+      const meta = document.createElement('span')
+      meta.className = 'bd-search-text-meta'
+      meta.textContent = item.imageCount !== undefined ? `${item.imageCount} 张` : ''
+      const open = document.createElement('span')
+      open.className = 'bd-search-text-open'
+      open.textContent = '打开 ↗'
+      row.append(check, title, meta, open)
+      row.addEventListener('click', (ev) => {
+        const t = ev.target as HTMLElement
+        if (t.closest('input')) return
+        window.open(item.url, '_blank', 'noreferrer')
+      })
+      return row
+    }
+
     function renderList(): void {
       listEl.innerHTML = ''
       if (items.length === 0) {
@@ -520,19 +552,15 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         btnFetch.disabled = true
         btnSelectAll.disabled = true
         btnNext.disabled = true
-        btnPrev.disabled = true
         batchInfo.textContent = ''
         return
       }
-      // 当前批：分站点分组展示（FP-012：各站独立区块，顺序按 GALLERY_SITES 配置）
-      const start = page * BATCH_SIZE
-      const slice = items.slice(start, start + BATCH_SIZE)
+      // 全量分站点分组展示：站内站点封面网格；Google 通道站点（无封面）纯文字紧密列表
       const bySite = new Map<string, number[]>()
-      slice.forEach((_item, i) => {
-        const globalIdx = start + i
-        const siteId = itemSites[globalIdx] ?? ''
+      items.forEach((_item, idx) => {
+        const siteId = itemSites[idx] ?? ''
         if (!bySite.has(siteId)) bySite.set(siteId, [])
-        bySite.get(siteId)!.push(globalIdx)
+        bySite.get(siteId)!.push(idx)
       })
       const order = [...GALLERY_SITES.map((s) => s.id), ...bySite.keys()].filter(
         (id, i, arr) => arr.indexOf(id) === i,
@@ -546,19 +574,27 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         head.className = 'bd-search-site-head'
         head.textContent = `${siteId} · ${indices.length} 条`
         block.appendChild(head)
-        const grid = document.createElement('div')
-        grid.className = 'bd-search-site-grid'
-        for (const globalIdx of indices) {
-          grid.appendChild(makeCard(items[globalIdx], globalIdx))
+        if (googleChannel.has(siteId)) {
+          const list = document.createElement('div')
+          list.className = 'bd-search-text-list'
+          for (const globalIdx of indices) {
+            list.appendChild(makeTextRow(items[globalIdx], globalIdx))
+          }
+          block.appendChild(list)
+        } else {
+          const grid = document.createElement('div')
+          grid.className = 'bd-search-site-grid'
+          for (const globalIdx of indices) {
+            grid.appendChild(makeCard(items[globalIdx], globalIdx))
+          }
+          block.appendChild(grid)
         }
-        block.appendChild(grid)
         listEl.appendChild(block)
       }
       btnFetch.disabled = false
       btnSelectAll.disabled = false
-      btnNext.disabled = page >= pageCount() - 1
-      btnPrev.disabled = page <= 0
-      batchInfo.textContent = `第 ${page + 1}/${pageCount()} 批（共 ${items.length} 个，本批 ${slice.length} 个）`
+      btnNext.disabled = false
+      batchInfo.textContent = `共 ${items.length} 个结果（已检索 ${nextStartPage - 1} 页/站）`
     }
 
     function setBusy(busy: boolean): void {
@@ -566,35 +602,40 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       btnFetch.disabled = busy
       btnSelectAll.disabled = busy
       googleTestBtn.disabled = busy
-      btnNext.disabled = busy || page >= pageCount() - 1
-      btnPrev.disabled = busy || page <= 0
+      btnNext.disabled = busy
       searchBtn.textContent = busy ? '搜索中…' : '聚合搜索'
     }
 
     btnSelectAll.addEventListener('click', () => {
-      // 全选/取消本批
-      const start = page * BATCH_SIZE
-      const batchAll = items
-        .slice(start, start + BATCH_SIZE)
-        .every((_i, idx) => selected.has(start + idx))
-      if (batchAll) {
-        for (let i = start; i < Math.min(start + BATCH_SIZE, items.length); i++) selected.delete(i)
-      } else {
-        for (let i = start; i < Math.min(start + BATCH_SIZE, items.length); i++) selected.add(i)
-      }
+      // 全选/取消全部（跨站）
+      const allSelected = items.length > 0 && items.every((_i, idx) => selected.has(idx))
+      if (allSelected) selected.clear()
+      else items.forEach((_i, idx) => selected.add(idx))
       renderList()
     })
     btnNext.addEventListener('click', () => {
-      if (page < pageCount() - 1) {
-        page++
-        renderList()
+      // 「下一批」= 继续检索（096）：每站从 nextStartPage 起追加 pagesPerSite 页，结果扩充
+      if (searchBtn.disabled) return
+      const query = lastQuery
+      if (!query) {
+        setStatus(statusEl, '请先进行一次聚合搜索', true)
+        return
       }
-    })
-    btnPrev.addEventListener('click', () => {
-      if (page > 0) {
-        page--
-        renderList()
+      const sites = selectedSites().filter((s) => siteHasResult.has(s))
+      if (sites.length === 0) {
+        setStatus(statusEl, '没有可继续检索的站点（尚无结果），请重新搜索', true)
+        return
       }
+      nextStartPage += Number(pagesInput.value) || 2
+      pendingSites = sites.length
+      setStatus(statusEl, `继续检索「${query}」第 ${nextStartPage} 页起：${sites.join(' / ')}`)
+      setBusy(true)
+      void sendMessage({ type: 'BD_SEARCH', srcTabId, query, sites, pagesPerSite: Number(pagesInput.value) || 2, startPage: nextStartPage }).then((res) => {
+        if (!res.ok) {
+          setStatus(statusEl, `请求失败：${res.error}`, true)
+          setBusy(false)
+        }
+      })
     })
     btnFetch.addEventListener('click', () => {
       if (btnFetch.disabled) return
@@ -729,7 +770,8 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       items = []
       itemSites = []
       siteSeen.clear()
-      page = 0
+      siteHasResult.clear()
+      nextStartPage = 1
       selected.clear()
       pendingSites = sites.length
       renderList()
@@ -758,6 +800,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           seen = new Set()
           siteSeen.set(key, seen)
         }
+        if (list.length > 0) siteHasResult.add(key)
         for (const item of list) {
           if (!seen.has(item.url)) {
             seen.add(item.url)

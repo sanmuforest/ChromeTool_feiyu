@@ -2006,11 +2006,11 @@
     /** Google 通道：页面降级搜索（FP-012/093）——后台静默打开 Google 搜索标签（真实浏览器 JS 渲染），
      *  提取渲染后结果（a.zReHs + h3 / h3.r > a），逐页进行，完成后关闭标签。
      *  后台 fetch 拿不到新版 Google 结果（JS 渲染壳，gbv=1 已废弃），此通道与用户手动搜索等效。 */
-    async searchGoogleViaTab(site, query, pagesPerSite) {
+    async searchGoogleViaTab(site, query, pagesPerSite, startPage = 1) {
       const items = [];
       const seen = /* @__PURE__ */ new Set();
       let pagesFetched = 0;
-      for (let page = 1; page <= pagesPerSite; page++) {
+      for (let page = startPage; page < startPage + pagesPerSite; page++) {
         const url = site.searchUrl(query, page);
         if (!url) break;
         const tab = await chrome.tabs.create({ url, active: false });
@@ -2198,7 +2198,7 @@
       logger4.info("buondua", "\u94FE\u63A5\u626B\u63CF\u5B8C\u6210", { kind, count: items.length, site: site?.id ?? "buondua" });
       return items;
     }
-    /** 批量抓取：targets 逐个全子页抓取（并发受限），返回每个目标的图片 */
+    /** 批量抓取：targets 逐个全子页抓取（并发受限），返回每个目标的图片（失败带 error，096） */
     async fetchAlbumsBatch(targets, onItem) {
       let cursor = 0;
       const worker = async () => {
@@ -2210,16 +2210,18 @@
             const { images } = await this.fetchAlbumAllPages(target.url);
             onItem(idx, target, images);
           } catch (err) {
-            logger4.warn("buondua", "\u6279\u91CF\u76F8\u518C\u6293\u53D6\u5931\u8D25", { url: target.url, error: String(err) });
-            onItem(idx, target, []);
+            const error = String(err);
+            logger4.warn("buondua", "\u6279\u91CF\u76F8\u518C\u6293\u53D6\u5931\u8D25", { url: target.url, error });
+            onItem(idx, target, [], error);
           }
         }
       };
       await Promise.all(Array.from({ length: Math.min(CONCURRENCY2, targets.length) }, () => worker()));
     }
     /** 聚合搜索：多站点逐页搜索 → 按站点路由解析 → 合并去重
+     *  startPage：每站起始页（「下一批」续搜传上次结束页 +1，096）
      *  onSite：每站完成后回调（推送该站结果，增量展示）；返回全部合并去重结果 */
-    async searchSites(query, sites, pagesPerSite, onSite) {
+    async searchSites(query, sites, pagesPerSite, onSite, startPage = 1) {
       const mergedMap = /* @__PURE__ */ new Map();
       const siteStats = {};
       for (const siteId of sites) {
@@ -2233,14 +2235,14 @@
         let pagesFetched = 0;
         try {
           if (site.searchAlbumPath) {
-            const tabRes = await this.searchGoogleViaTab(site, query, pagesPerSite);
+            const tabRes = await this.searchGoogleViaTab(site, query, pagesPerSite, startPage);
             pagesFetched = tabRes.pages;
             for (const item of tabRes.items) items.push(item);
             if (tabRes.items.length === 0) {
               error = "Google \u6807\u7B7E\u9875\u672A\u63D0\u53D6\u5230\u76F8\u518C\u7ED3\u679C\uFF08\u53EF\u80FD\u9A8C\u8BC1\u9875/\u65E0\u5339\u914D\uFF0C\u65E5\u5FD7\u542B\u8BCA\u65AD\uFF09";
             }
           } else {
-            for (let page = 1; page <= pagesPerSite; page++) {
+            for (let page = startPage; page < startPage + pagesPerSite; page++) {
               const url = site.searchUrl(query, page);
               if (!url) break;
               if (siteId === "jrants" && page > 1) await sleep(2e3);
@@ -3112,7 +3114,8 @@
                 done: false,
                 error
               });
-            }
+            },
+            message.startPage ?? 1
           );
           await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "search", data: [], done: true });
         } catch (err) {
@@ -3133,12 +3136,12 @@
           let completed = 0;
           await buondua.fetchAlbumsBatch(
             targets.map((t) => ({ url: t.url, title: t.folderName })),
-            (index, _target, images) => {
+            (index, _target, images, error) => {
               completed++;
               void sendToTab(sessionOf(message.srcTabId), {
                 type: "BD_RESULT",
                 kind: "batch-item",
-                data: { index, target: targets[index], images, pages: [] },
+                data: { index, target: targets[index], images, pages: [], error },
                 done: completed >= targets.length
               });
             }

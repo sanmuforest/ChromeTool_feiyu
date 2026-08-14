@@ -855,6 +855,7 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
               error,
             })
           },
+          message.startPage ?? 1,
         )
         await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'search', data: [], done: true })
       } catch (err) {
@@ -876,12 +877,12 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
         let completed = 0
         await buondua.fetchAlbumsBatch(
           targets.map((t) => ({ url: t.url, title: t.folderName })),
-          (index, _target, images) => {
+          (index, _target, images, error) => {
             completed++
             void sendToTab(sessionOf(message.srcTabId), {
               type: 'BD_RESULT',
               kind: 'batch-item',
-              data: { index, target: targets[index], images, pages: [] },
+              data: { index, target: targets[index], images, pages: [], error },
               done: completed >= targets.length,
             })
           },

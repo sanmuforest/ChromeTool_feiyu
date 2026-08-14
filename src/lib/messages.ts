@@ -99,8 +99,9 @@ export type Message =
   | { type: 'BD_FETCH_ALBUM'; srcTabId: number; url: string }
   | { type: 'BD_SCAN_LINKS'; srcTabId: number; url: string; kind: 'recommended' | 'popular' }
   | { type: 'BD_FETCH_ALBUMS'; srcTabId: number; targets: BuonduaTarget[] }
-  // ---- 多页图站聚合搜索（FP-010）：grabber → bg ----
-  | { type: 'BD_SEARCH'; srcTabId: number; query: string; sites: string[]; pagesPerSite: number }
+  // ---- 多页图站聚合搜索（FP-010/096）：grabber → bg ----
+  // startPage：每站起始页（默认 1）；「下一批」续搜时传上次结束页 +1，结果追加扩充
+  | { type: 'BD_SEARCH'; srcTabId: number; query: string; sites: string[]; pagesPerSite: number; startPage?: number }
   // ---- 聚合搜索：Google 连接测试（FP-012）：grabber → bg ----
   | { type: 'BD_TEST_GOOGLE'; srcTabId: number }
   // ---- buondua 适配器：bg → grabber 推送 ----
@@ -118,12 +119,13 @@ export interface SearchSiteResult {
   items: BuonduaLinkItem[]
 }
 
-/** 批量抓取单个相册完成推送 */
+/** 批量抓取单个相册完成推送（error 存在表示该相册抓取失败，096 增强） */
 export interface BuonduaBatchItem {
   index: number
   target: BuonduaTarget
   images: BuonduaImage[]
   pages: string[]
+  error?: string
 }
 
 export type MessageResponse =

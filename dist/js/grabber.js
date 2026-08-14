@@ -4712,10 +4712,9 @@
           <span id="bd-google-status" class="status-text"></span>
         </div>
         <div class="row">
-          <button class="btn bd-select-all">\u5168\u9009\u672C\u6279/\u53D6\u6D88</button>
+          <button class="btn bd-select-all">\u5168\u9009/\u53D6\u6D88</button>
           <button class="btn bd-fetch-selected">\u6293\u53D6\u9009\u4E2D</button>
-          <button class="btn bd-prev-batch">\u4E0A\u4E00\u6279</button>
-          <button class="btn bd-next-batch">\u4E0B\u4E00\u6279</button>
+          <button class="btn bd-next-batch" title="\u7EE7\u7EED\u68C0\u7D22\u66F4\u591A\u7ED3\u679C\uFF08\u6BCF\u7AD9\u8FFD\u52A0\u4E00\u9875\uFF09">\u4E0B\u4E00\u6279\uFF08\u7EE7\u7EED\u68C0\u7D22\uFF09</button>
           <span class="bd-batch-info status-text"></span>
           <span class="bd-list-status status-text"></span>
         </div>
@@ -4976,7 +4975,6 @@
       const googleTestBtn = panel.querySelector("#bd-google-test");
       const googleStatus = panel.querySelector("#bd-google-status");
       const btnNext = panel.querySelector(".bd-next-batch");
-      const btnPrev = panel.querySelector(".bd-prev-batch");
       const searchable = GALLERY_SITES.filter((s) => s.searchUrl);
       const defaultChecked = /* @__PURE__ */ new Set(["jrants", "pixibb", "rrwsh"]);
       const googleChannel = /* @__PURE__ */ new Set(["hitxhot", "kaizty"]);
@@ -4998,11 +4996,11 @@
       let items = [];
       let itemSites = [];
       const siteSeen = /* @__PURE__ */ new Map();
-      let page = 0;
       const selected = /* @__PURE__ */ new Set();
-      const pageCount = () => Math.max(1, Math.ceil(items.length / BATCH_SIZE));
       let pendingSites = 0;
       let lastQuery = "";
+      let nextStartPage = 1;
+      const siteHasResult = /* @__PURE__ */ new Set();
       function makeCard(item, globalIdx) {
         const card = document.createElement("div");
         card.className = "bd-search-card" + (selected.has(globalIdx) ? " selected" : "");
@@ -5052,6 +5050,38 @@
         });
         return card;
       }
+      function makeTextRow(item, globalIdx) {
+        const row = document.createElement("div");
+        row.className = "bd-search-text-item" + (selected.has(globalIdx) ? " selected" : "");
+        const check = document.createElement("input");
+        check.type = "checkbox";
+        check.className = "bd-search-check";
+        check.checked = selected.has(globalIdx);
+        check.title = "\u52FE\u9009\u4EE5\u6279\u91CF\u6293\u53D6";
+        check.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          if (selected.has(globalIdx)) selected.delete(globalIdx);
+          else selected.add(globalIdx);
+          row.classList.toggle("selected", selected.has(globalIdx));
+        });
+        const title = document.createElement("span");
+        title.className = "bd-search-text-title";
+        title.textContent = item.title;
+        title.title = item.title;
+        const meta = document.createElement("span");
+        meta.className = "bd-search-text-meta";
+        meta.textContent = item.imageCount !== void 0 ? `${item.imageCount} \u5F20` : "";
+        const open = document.createElement("span");
+        open.className = "bd-search-text-open";
+        open.textContent = "\u6253\u5F00 \u2197";
+        row.append(check, title, meta, open);
+        row.addEventListener("click", (ev) => {
+          const t = ev.target;
+          if (t.closest("input")) return;
+          window.open(item.url, "_blank", "noreferrer");
+        });
+        return row;
+      }
       function renderList() {
         listEl.innerHTML = "";
         if (items.length === 0) {
@@ -5059,18 +5089,14 @@
           btnFetch.disabled = true;
           btnSelectAll.disabled = true;
           btnNext.disabled = true;
-          btnPrev.disabled = true;
           batchInfo.textContent = "";
           return;
         }
-        const start = page * BATCH_SIZE;
-        const slice = items.slice(start, start + BATCH_SIZE);
         const bySite = /* @__PURE__ */ new Map();
-        slice.forEach((_item, i) => {
-          const globalIdx = start + i;
-          const siteId = itemSites[globalIdx] ?? "";
+        items.forEach((_item, idx) => {
+          const siteId = itemSites[idx] ?? "";
           if (!bySite.has(siteId)) bySite.set(siteId, []);
-          bySite.get(siteId).push(globalIdx);
+          bySite.get(siteId).push(idx);
         });
         const order = [...GALLERY_SITES.map((s) => s.id), ...bySite.keys()].filter(
           (id, i, arr) => arr.indexOf(id) === i
@@ -5084,50 +5110,64 @@
           head.className = "bd-search-site-head";
           head.textContent = `${siteId} \xB7 ${indices.length} \u6761`;
           block.appendChild(head);
-          const grid = document.createElement("div");
-          grid.className = "bd-search-site-grid";
-          for (const globalIdx of indices) {
-            grid.appendChild(makeCard(items[globalIdx], globalIdx));
+          if (googleChannel.has(siteId)) {
+            const list = document.createElement("div");
+            list.className = "bd-search-text-list";
+            for (const globalIdx of indices) {
+              list.appendChild(makeTextRow(items[globalIdx], globalIdx));
+            }
+            block.appendChild(list);
+          } else {
+            const grid = document.createElement("div");
+            grid.className = "bd-search-site-grid";
+            for (const globalIdx of indices) {
+              grid.appendChild(makeCard(items[globalIdx], globalIdx));
+            }
+            block.appendChild(grid);
           }
-          block.appendChild(grid);
           listEl.appendChild(block);
         }
         btnFetch.disabled = false;
         btnSelectAll.disabled = false;
-        btnNext.disabled = page >= pageCount() - 1;
-        btnPrev.disabled = page <= 0;
-        batchInfo.textContent = `\u7B2C ${page + 1}/${pageCount()} \u6279\uFF08\u5171 ${items.length} \u4E2A\uFF0C\u672C\u6279 ${slice.length} \u4E2A\uFF09`;
+        btnNext.disabled = false;
+        batchInfo.textContent = `\u5171 ${items.length} \u4E2A\u7ED3\u679C\uFF08\u5DF2\u68C0\u7D22 ${nextStartPage - 1} \u9875/\u7AD9\uFF09`;
       }
       function setBusy(busy) {
         searchBtn.disabled = busy;
         btnFetch.disabled = busy;
         btnSelectAll.disabled = busy;
         googleTestBtn.disabled = busy;
-        btnNext.disabled = busy || page >= pageCount() - 1;
-        btnPrev.disabled = busy || page <= 0;
+        btnNext.disabled = busy;
         searchBtn.textContent = busy ? "\u641C\u7D22\u4E2D\u2026" : "\u805A\u5408\u641C\u7D22";
       }
       btnSelectAll.addEventListener("click", () => {
-        const start = page * BATCH_SIZE;
-        const batchAll = items.slice(start, start + BATCH_SIZE).every((_i, idx) => selected.has(start + idx));
-        if (batchAll) {
-          for (let i = start; i < Math.min(start + BATCH_SIZE, items.length); i++) selected.delete(i);
-        } else {
-          for (let i = start; i < Math.min(start + BATCH_SIZE, items.length); i++) selected.add(i);
-        }
+        const allSelected = items.length > 0 && items.every((_i, idx) => selected.has(idx));
+        if (allSelected) selected.clear();
+        else items.forEach((_i, idx) => selected.add(idx));
         renderList();
       });
       btnNext.addEventListener("click", () => {
-        if (page < pageCount() - 1) {
-          page++;
-          renderList();
+        if (searchBtn.disabled) return;
+        const query = lastQuery;
+        if (!query) {
+          setStatus(statusEl, "\u8BF7\u5148\u8FDB\u884C\u4E00\u6B21\u805A\u5408\u641C\u7D22", true);
+          return;
         }
-      });
-      btnPrev.addEventListener("click", () => {
-        if (page > 0) {
-          page--;
-          renderList();
+        const sites = selectedSites().filter((s) => siteHasResult.has(s));
+        if (sites.length === 0) {
+          setStatus(statusEl, "\u6CA1\u6709\u53EF\u7EE7\u7EED\u68C0\u7D22\u7684\u7AD9\u70B9\uFF08\u5C1A\u65E0\u7ED3\u679C\uFF09\uFF0C\u8BF7\u91CD\u65B0\u641C\u7D22", true);
+          return;
         }
+        nextStartPage += Number(pagesInput.value) || 2;
+        pendingSites = sites.length;
+        setStatus(statusEl, `\u7EE7\u7EED\u68C0\u7D22\u300C${query}\u300D\u7B2C ${nextStartPage} \u9875\u8D77\uFF1A${sites.join(" / ")}`);
+        setBusy(true);
+        void sendMessage({ type: "BD_SEARCH", srcTabId: srcTabId2, query, sites, pagesPerSite: Number(pagesInput.value) || 2, startPage: nextStartPage }).then((res) => {
+          if (!res.ok) {
+            setStatus(statusEl, `\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`, true);
+            setBusy(false);
+          }
+        });
       });
       btnFetch.addEventListener("click", () => {
         if (btnFetch.disabled) return;
@@ -5233,7 +5273,8 @@
         items = [];
         itemSites = [];
         siteSeen.clear();
-        page = 0;
+        siteHasResult.clear();
+        nextStartPage = 1;
         selected.clear();
         pendingSites = sites.length;
         renderList();
@@ -5261,6 +5302,7 @@
             seen = /* @__PURE__ */ new Set();
             siteSeen.set(key, seen);
           }
+          if (list.length > 0) siteHasResult.add(key);
           for (const item of list) {
             if (!seen.has(item.url)) {
               seen.add(item.url);
@@ -5452,7 +5494,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260814144037" : "dev";
+  var BUILD_TIME = true ? "20260814144750" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
