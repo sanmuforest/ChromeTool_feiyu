@@ -667,7 +667,16 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
                 blocked: boolean
                 ms: number
                 error?: string
-                diag?: { len: number; title: string; hasH3: boolean; isConsent: boolean; bodyPreview: string }
+                diag?: {
+                  len: number
+                  title: string
+                  hasH3: boolean
+                  isConsent: boolean
+                  hasMetaRefresh: boolean
+                  hasNoResultText: boolean
+                  hops: number
+                  bodyPreview: string
+                }
               }
             }
           | { ok: false; error: string }
@@ -681,8 +690,9 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           return
         }
         const g = res.google
-        const diagText = g.diag
-          ? ` [${(g.diag.len / 1024).toFixed(0)}KB, ${g.diag.hasH3 ? '含结果' : '无结果标记'}${g.diag.isConsent ? ', 同意页' : ''}, ${g.diag.title.slice(0, 30)}] 页面: ${g.diag.bodyPreview.slice(0, 120)}`
+        const d = g.diag
+        const diagText = d
+          ? ` [${(d.len / 1024).toFixed(0)}KB, ${d.hasH3 ? '含结果' : '无结果标记'}${d.isConsent ? ', 同意页' : ''}${d.hasMetaRefresh ? ', meta刷新' : ''}${d.hasNoResultText ? ', 0结果文案' : ''}${d.hops > 0 ? `, ${d.hops}跳` : ''}] 页面: ${d.bodyPreview.slice(0, 120)}`
           : ''
         if (!g.ok) {
           setStatus(googleStatus, `连接失败：${g.error}（${g.ms}ms）`, true)

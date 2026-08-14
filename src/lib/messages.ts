@@ -166,8 +166,17 @@ export type MessageResponse =
         blocked: boolean
         ms: number
         error?: string
-        /** 返回页诊断特征（089/090 增强）：长度/标题/是否含可解析结果/是否同意页/可见文本预览 */
-        diag?: { len: number; title: string; hasH3: boolean; isConsent: boolean; bodyPreview: string }
+        /** 返回页诊断特征（089-091 增强）：长度/标题/是否含可解析结果/同意页/meta refresh/0 结果文案/跳数/可见文本预览 */
+        diag?: {
+          len: number
+          title: string
+          hasH3: boolean
+          isConsent: boolean
+          hasMetaRefresh: boolean
+          hasNoResultText: boolean
+          hops: number
+          bodyPreview: string
+        }
       }
     }
   | { ok: false; error: string }

@@ -44,6 +44,29 @@ export class BuonduaService {
     throw lastErr
   }
 
+  /** Google 搜索页抓取（FP-012/091）：跟随页内跳转（meta refresh / JS location），最多 4 跳，
+   *  返回最终可解析页面。Google 对无 JS fetch 可能返回中间跳转壳页。 */
+  async fetchGoogleSearch(url: string): Promise<string> {
+    let current = url
+    for (let hop = 0; hop < 4; hop++) {
+      const html = await this.fetchHtml(current)
+      const mr = html.match(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*content=["'][^"']*url=([^"']+)["']/i)
+      if (mr) {
+        current = new URL(mr[1].replace(/&amp;/g, '&'), current).href
+        logger.info('buondua', 'Google 跟随 meta refresh 跳转', { hop: hop + 1, to: current.slice(0, 120) })
+        continue
+      }
+      const js = html.match(/window\.location\.(?:replace|href)\s*=\s*["']([^"']+)["']/i)
+      if (js) {
+        current = new URL(js[1].replace(/&amp;/g, '&'), current).href
+        logger.info('buondua', 'Google 跟随 JS 跳转', { hop: hop + 1, to: current.slice(0, 120) })
+        continue
+      }
+      return html
+    }
+    throw new Error('Google 跳转次数过多')
+  }
+
   private async fetchOnce(url: string): Promise<string> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
@@ -202,7 +225,8 @@ export class BuonduaService {
           if (!url) break
           // jrants 连续快速搜索触发反爬限流（实测 2026-08-13/14），页间强制间隔
           if (siteId === 'jrants' && page > 1) await sleep(2000)
-          const html = await this.fetchHtml(url)
+          // Google 通道站点走页内跳转跟随（meta refresh / JS location）
+          const html = site.searchAlbumPath ? await this.fetchGoogleSearch(url) : await this.fetchHtml(url)
           if (isBlockedPage(html)) {
             // 反爬拦截页：跳过该站（避免把热门/推荐链接当搜索结果）
             error = '搜索被反爬拦截（限流），请稍后重试'
@@ -244,42 +268,65 @@ export class BuonduaService {
     return `ID-buondua-${name}-${ts}`
   }
 
-  /** Google 连接测试（聚合搜索 Google 通道，FP-012/090）：请求 google 搜索（gbv=1 基础版），
-   *  报告可达性/拦截/耗时 + 返回页诊断（长度/标题/是否含 h3/是否同意页/可见文本预览） */
+  /** Google 连接测试（聚合搜索 Google 通道，FP-012/090/091）：请求 google 搜索（gbv=1），跟随页内跳转，
+   *  报告可达性/拦截/耗时 + 返回页诊断（长度/标题/是否含 h3/同意页/meta refresh/0 结果文案/可见文本预览） */
   async testGoogleConnection(): Promise<{
     ok: boolean
     status?: number
     blocked: boolean
     ms: number
     error?: string
-    diag?: { len: number; title: string; hasH3: boolean; isConsent: boolean; bodyPreview: string }
+    diag?: {
+      len: number
+      title: string
+      hasH3: boolean
+      isConsent: boolean
+      hasMetaRefresh: boolean
+      hasNoResultText: boolean
+      hops: number
+      bodyPreview: string
+    }
   }> {
     const start = Date.now()
     try {
-      const resp = await fetch('https://www.google.com/search?q=test&gbv=1', {
-        credentials: 'include',
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        },
-      })
-      const html = await resp.text()
+      const { html, hops } = await this.fetchGoogleSearchWithHops('https://www.google.com/search?q=test&gbv=1')
       const blocked = isBlockedPage(html)
       const title = (html.match(/<title>([^<]*)<\/title>/) ?? [null, ''])[1].slice(0, 100)
       const hasH3 = /<h3[^>]*class="[^"]*\br\b[^"]*"/.test(html) || /zReHs/.test(html)
       const isConsent = /consent\.google\.com|google\.com\/consent/i.test(html)
+      const hasMetaRefresh = /<meta[^>]*http-equiv=["']?refresh["']?/i.test(html)
+      const hasNoResultText = /未找到任何匹配项|did not match any documents|no results found/i.test(html)
       const body = (html.replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<style[\s\S]*?<\/style>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')).trim()
       return {
         ok: true,
-        status: resp.status,
+        status: 200,
         blocked,
         ms: Date.now() - start,
-        diag: { len: html.length, title, hasH3, isConsent, bodyPreview: body.slice(0, 220) },
+        diag: { len: html.length, title, hasH3, isConsent, hasMetaRefresh, hasNoResultText, hops, bodyPreview: body.slice(0, 220) },
       }
     } catch (err) {
       return { ok: false, blocked: false, ms: Date.now() - start, error: String(err) }
     }
+  }
+
+  /** 跟随页内跳转并返回跳数（测试用；fetchGoogleSearch 的内部版本） */
+  private async fetchGoogleSearchWithHops(url: string): Promise<{ html: string; hops: number }> {
+    let current = url
+    for (let hop = 0; hop < 4; hop++) {
+      const html = await this.fetchHtml(current)
+      const mr = html.match(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*content=["'][^"']*url=([^"']+)["']/i)
+      if (mr) {
+        current = new URL(mr[1].replace(/&amp;/g, '&'), current).href
+        continue
+      }
+      const js = html.match(/window\.location\.(?:replace|href)\s*=\s*["']([^"']+)["']/i)
+      if (js) {
+        current = new URL(js[1].replace(/&amp;/g, '&'), current).href
+        continue
+      }
+      return { html, hops: hop }
+    }
+    throw new Error('Google 跳转次数过多')
   }
 }
 
