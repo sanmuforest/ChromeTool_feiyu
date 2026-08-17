@@ -7,3 +7,6 @@ node_modules/
 # ç³»ç»Ÿæ–‡ä»¶
 .DS_Store
 Thumbs.db
+
+# npm ±¾µØ»º´æ
+.npm-cache/

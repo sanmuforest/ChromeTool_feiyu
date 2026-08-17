@@ -27,11 +27,13 @@ export interface GallerySiteConfig {
   /** 标题清理（文件夹名用）：去掉分页标记与站点后缀 */
   cleanTitle: (title: string) => string
   /** 搜索 URL 构造（聚合搜索用）；返回 null 表示该站不支持搜索 */
-  searchUrl: (q: string, page: number) => string | null
+  searchUrl?: (q: string, page: number) => string | null
   /** 搜索结果 URL 改写（如 4khd.com → rrwsh.uuss.uk 绕过反爬网关）；返回原样表示不改写 */
   rewriteUrl?: (url: string) => string
   /** 搜索结果相册路径前缀（Google 通道过滤用，如 /photos/）；无则不过滤路径 */
   searchAlbumPath?: string
+  /** 图片 URL 清洗（FP-014：CDN 缩放参数放大等，如 Photon ?w=640 → ?w=1920） */
+  imageUrlClean?: (url: string) => string
 }
 
 export const GALLERY_SITES: GallerySiteConfig[] = [
@@ -52,8 +54,12 @@ export const GALLERY_SITES: GallerySiteConfig[] = [
       }
     },
     cleanTitle: (title) => title.replace(/\s*[-–—]\s*\(\s*Page\s+\d+\s*\/\s*\d+\s*\)\s*$/i, '').trim(),
-    // buondua 站点当前不可达且搜索入口未验证，暂不支持聚合搜索
-    searchUrl: () => null,
+    // buondua 站内搜索（2026-08-14 实测恢复可用）：GET ?search={q}，分页 &start={offset}（每页 20 条）
+    // 结果卡片与推荐区同构（items-row），parseRecommendedLinks 直接解析（parseLinksForSite 路由）
+    searchUrl: (q, page) =>
+      page <= 1
+        ? `https://buondua.com/?search=${encodeURIComponent(q)}`
+        : `https://buondua.com/?search=${encodeURIComponent(q)}&start=${(page - 1) * 20}`,
   },
   {
     id: 'rrwsh',
@@ -196,6 +202,78 @@ export const GALLERY_SITES: GallerySiteConfig[] = [
         ? `https://sexy.pixibb.com/?s=${encodeURIComponent(q)}`
         : `https://sexy.pixibb.com/page/${page}/?s=${encodeURIComponent(q)}`,
   },
+  {
+    // FP-014 新站（2026-08-17 探测适配）：
+    id: 'cangcuc',
+    hosts: ['cangcuc.com'],
+    // 探测：正文容器 post-single-body(57)；图片 media01.cangcuc.com/size_large_v1/{相册}_{ts}/NNN.jpg
+    // 单文章页图集全展示（探测页无分页链接）；标题「李佳 - OL | Căng Cực」
+    containerOpen: /<div[^>]*class="[^"]*post-single-body[^"]*"[^>]*>/,
+    pagePattern: /(?!)0/, // 无标题分页标记；分页链接兜底（parseGalleryMaxPage）
+    pageUrl: (base, _page) => base,
+    baseUrlOf: (url) => {
+      try {
+        const u = new URL(url)
+        u.search = ''
+        u.hash = ''
+        return u.href
+      } catch {
+        return url
+      }
+    },
+    cleanTitle: (title) => title.replace(/\s*\|\s*Căng\s*Cực\s*$/i, '').trim(),
+    // WP 站内搜索（FP-014：标准 ?s= + 路径式分页，搜索结果页链接为文章页，parseSitePostLinks 通用解析）
+    searchUrl: (q, page) =>
+      page <= 1
+        ? `https://cangcuc.com/?s=${encodeURIComponent(q)}`
+        : `https://cangcuc.com/page/${page}/?s=${encodeURIComponent(q)}`,
+  },
+  {
+    id: 'phimvuspot',
+    hosts: ['m.phimvuspot.com', 'phimvuspot.com'],
+    // 探测：标题含「Page 1/18」；分页 ?page=N；图片 iN.wp.com/im.thismore.fun/s2/{base64}.jpg?w=640
+    // （WordPress Photon CDN 代理，?w 参数可放大原图）；容器 contentme（与 hitxhot 同模板）
+    containerOpen: /<div[^>]*class="[^"]*contentme[^"]*"[^>]*>/,
+    pagePattern: /\|\s*Page\s+\d+\s*\/\s*(\d+)/i,
+    pageUrl: (base, page) => `${base}?page=${page}`,
+    baseUrlOf: (url) => {
+      try {
+        const u = new URL(url)
+        u.search = ''
+        u.hash = ''
+        return u.href
+      } catch {
+        return url
+      }
+    },
+    cleanTitle: (title) =>
+      title
+        .replace(/^PhimVu\s*Blog:\s*/i, '')
+        .replace(/\s*\|\s*Page\s+\d+\s*\/\s*\d+\s*$/i, '')
+        .trim(),
+    // Photon 缩放参数放大：?w=640 → ?w=1920（高清原图级）
+    imageUrlClean: (url) => url.replace(/[?&]w=\d+/, '?w=1920'),
+  },
+  {
+    id: 'ilovexs',
+    hosts: ['ilovexs.com'],
+    // 探测：图片画廊容器 image-gallery/gallery-item（内容图在 reiobox.top/wp-content/uploads，跨域图床）；
+    // 相册卡片 album-card 为相关推荐（必须隔离，用 image-gallery 容器）；标题「... | Nongmo.Zone」
+    containerOpen: /<div[^>]*class="[^"]*image-gallery[^"]*"[^>]*>/,
+    pagePattern: /(?!)0/,
+    pageUrl: (base, _page) => base,
+    baseUrlOf: (url) => {
+      try {
+        const u = new URL(url)
+        u.search = ''
+        u.hash = ''
+        return u.href
+      } catch {
+        return url
+      }
+    },
+    cleanTitle: (title) => title.replace(/\s*\|\s*Nongmo\.Zone\s*$/i, '').trim(),
+  },
 ]
 
 /** 按 URL hostname 匹配站点配置 */
@@ -267,15 +345,18 @@ export function parseGalleryImages(html: string, _baseUrl: string, site: Gallery
   while ((m = re.exec(block)) !== null) {
     collect(m[1] || m[2])
   }
+  // FP-014：站点图片 URL 清洗（CDN 缩放参数放大等）
+  const clean = site.imageUrlClean
   return urls.map((url) => {
+    const finalUrl = clean ? clean(url) : url
     let filename = ''
     try {
-      filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '')
+      filename = decodeURIComponent(new URL(finalUrl).pathname.split('/').pop() || '')
     } catch {
-      filename = url.split('/').pop() || ''
+      filename = finalUrl.split('/').pop() || ''
     }
     filename = filename.replace(/[\\/:*?"<>|]/g, '_')
-    return { url, filename }
+    return { url: finalUrl, filename }
   })
 }
 

@@ -4479,8 +4479,9 @@
         }
       },
       cleanTitle: (title) => title.replace(/\s*[-–—]\s*\(\s*Page\s+\d+\s*\/\s*\d+\s*\)\s*$/i, "").trim(),
-      // buondua 站点当前不可达且搜索入口未验证，暂不支持聚合搜索
-      searchUrl: () => null
+      // buondua 站内搜索（2026-08-14 实测恢复可用）：GET ?search={q}，分页 &start={offset}（每页 20 条）
+      // 结果卡片与推荐区同构（items-row），parseRecommendedLinks 直接解析（parseLinksForSite 路由）
+      searchUrl: (q, page) => page <= 1 ? `https://buondua.com/?search=${encodeURIComponent(q)}` : `https://buondua.com/?search=${encodeURIComponent(q)}&start=${(page - 1) * 20}`
     },
     {
       id: "rrwsh",
@@ -4595,6 +4596,72 @@
       cleanTitle: (title) => title.trim(),
       // WP 搜索：路径式分页（实测 2026-08-14：/page/N/?s={q}，&paged= 无效；主内容子域 sexy）
       searchUrl: (q, page) => page <= 1 ? `https://sexy.pixibb.com/?s=${encodeURIComponent(q)}` : `https://sexy.pixibb.com/page/${page}/?s=${encodeURIComponent(q)}`
+    },
+    {
+      // FP-014 新站（2026-08-17 探测适配）：
+      id: "cangcuc",
+      hosts: ["cangcuc.com"],
+      // 探测：正文容器 post-single-body(57)；图片 media01.cangcuc.com/size_large_v1/{相册}_{ts}/NNN.jpg
+      // 单文章页图集全展示（探测页无分页链接）；标题「李佳 - OL | Căng Cực」
+      containerOpen: /<div[^>]*class="[^"]*post-single-body[^"]*"[^>]*>/,
+      pagePattern: /(?!)0/,
+      // 无标题分页标记；分页链接兜底（parseGalleryMaxPage）
+      pageUrl: (base, _page) => base,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          return u.href;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.replace(/\s*\|\s*Căng\s*Cực\s*$/i, "").trim(),
+      // WP 站内搜索（FP-014：标准 ?s= + 路径式分页，搜索结果页链接为文章页，parseSitePostLinks 通用解析）
+      searchUrl: (q, page) => page <= 1 ? `https://cangcuc.com/?s=${encodeURIComponent(q)}` : `https://cangcuc.com/page/${page}/?s=${encodeURIComponent(q)}`
+    },
+    {
+      id: "phimvuspot",
+      hosts: ["m.phimvuspot.com", "phimvuspot.com"],
+      // 探测：标题含「Page 1/18」；分页 ?page=N；图片 iN.wp.com/im.thismore.fun/s2/{base64}.jpg?w=640
+      // （WordPress Photon CDN 代理，?w 参数可放大原图）；容器 contentme（与 hitxhot 同模板）
+      containerOpen: /<div[^>]*class="[^"]*contentme[^"]*"[^>]*>/,
+      pagePattern: /\|\s*Page\s+\d+\s*\/\s*(\d+)/i,
+      pageUrl: (base, page) => `${base}?page=${page}`,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          return u.href;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.replace(/^PhimVu\s*Blog:\s*/i, "").replace(/\s*\|\s*Page\s+\d+\s*\/\s*\d+\s*$/i, "").trim(),
+      // Photon 缩放参数放大：?w=640 → ?w=1920（高清原图级）
+      imageUrlClean: (url) => url.replace(/[?&]w=\d+/, "?w=1920")
+    },
+    {
+      id: "ilovexs",
+      hosts: ["ilovexs.com"],
+      // 探测：图片画廊容器 image-gallery/gallery-item（内容图在 reiobox.top/wp-content/uploads，跨域图床）；
+      // 相册卡片 album-card 为相关推荐（必须隔离，用 image-gallery 容器）；标题「... | Nongmo.Zone」
+      containerOpen: /<div[^>]*class="[^"]*image-gallery[^"]*"[^>]*>/,
+      pagePattern: /(?!)0/,
+      pageUrl: (base, _page) => base,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          return u.href;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.replace(/\s*\|\s*Nongmo\.Zone\s*$/i, "").trim()
     }
   ];
   function matchGallerySite(url) {
@@ -4653,9 +4720,11 @@
 
       <div id="sub-bd-album" class="adapter-panel active">
         <div class="row">
-          <input id="bd-album-url" class="text-input" placeholder="\u76F8\u518C URL\uFF1Abuondua / rrwsh.uuss.uk / hitxhot.org / jrants.com / pixibb.com / kaizty.com">
+          <input id="bd-album-url" class="text-input" placeholder="\u76F8\u518C URL\uFF1Abuondua / rrwsh.uuss.uk / hitxhot.org / jrants.com / pixibb.com / kaizty.com / \u65B0\u7AD9">
           <button id="bd-album-fetch" class="btn primary">\u6293\u53D6\u5168\u90E8\u5B50\u9875</button>
+          <button id="bd-probe" class="btn" title="\u5F00\u6807\u7B7E\u63D0\u53D6\u9875\u9762\u7ED3\u6784\uFF08\u56FE\u7247\u6A21\u5F0F/\u5BB9\u5668 class/\u5206\u9875\uFF09\uFF0C\u7528\u4E8E\u9002\u914D\u65B0\u7AD9">\u63A2\u6D4B\u7ED3\u6784</button>
         </div>
+        <pre id="bd-probe-out" class="ai-probe-out hidden"></pre>
         <div id="bd-album-grab-view" class="grab-view-host"></div>
       </div>
 
@@ -4704,10 +4773,20 @@
           <button id="bd-search-go" class="btn primary">\u805A\u5408\u641C\u7D22</button>
         </div>
         <div class="row">
-          <div id="bd-search-sites" class="bd-search-sites"></div>
+          <div class="bd-search-sites">
+            <div class="bd-site-group">
+              <div class="bd-site-group-title">\u7AD9\u5185\u641C\u7D22\uFF08\u76F4\u63A5\u7AD9\u5185\u63A5\u53E3\uFF0C\u5FEB\uFF09</div>
+              <div id="bd-search-sites-site" class="bd-site-boxes"></div>
+            </div>
+            <div class="bd-site-group">
+              <div class="bd-site-group-title">Google \u901A\u9053\uFF08\u4EC5 Google \u53EF\u641C\uFF09</div>
+              <div id="bd-search-sites-google" class="bd-site-boxes"></div>
+            </div>
+          </div>
           <span id="bd-search-site-status" class="status-text"></span>
         </div>
         <div class="row">
+          <label class="bd-google-all-check" title="\u5F00\u542F\u540E\u5FFD\u7565\u4E0A\u65B9\u52FE\u9009\uFF0C\u5168\u90E8\u7AD9\u70B9\u8D70 Google sitesearch \u7F51\u9875\u901A\u9053\uFF08\u4EC5\u6807\u9898+\u94FE\u63A5\uFF0C\u540C\u7AD9\u53BB\u91CD\uFF0C\u901F\u5EA6\u5FEB\uFF09"><input type="checkbox" id="bd-google-all"> Google \u5168\u7AD9\u641C\u7D22</label>
           <button id="bd-google-test" class="btn">\u6D4B\u8BD5 Google \u8FDE\u63A5</button>
           <span id="bd-google-status" class="status-text"></span>
         </div>
@@ -4751,6 +4830,55 @@
         return false;
       }
     }
+    const probeBtn = root.querySelector("#bd-probe");
+    const probeOut = root.querySelector("#bd-probe-out");
+    probeBtn?.addEventListener("click", async () => {
+      const url = albumUrlInput.value.trim();
+      if (!url) {
+        albumGrabView.setParseText("\u8BF7\u5148\u586B\u5199\u76F8\u518C URL");
+        return;
+      }
+      if (!await ensureHostPermission()) {
+        albumGrabView.setParseText("\u9700\u8981\u6388\u6743\u8BBF\u95EE <all_urls> \u540E\u624D\u80FD\u63A2\u6D4B");
+        return;
+      }
+      probeBtn.disabled = true;
+      probeBtn.textContent = "\u63A2\u6D4B\u4E2D\u2026";
+      if (probeOut) {
+        probeOut.classList.remove("hidden");
+        probeOut.textContent = "\u52A0\u8F7D\u9875\u9762\u5E76\u63D0\u53D6\u7ED3\u6784\u4E2D\u2026";
+      }
+      try {
+        const res = await sendMessage({
+          type: "BD_PROBE_PAGE",
+          url
+        });
+        if (res.ok && probeOut) {
+          const p = res.probe;
+          probeOut.textContent = `\u6807\u9898: ${p.title}
+URL: ${p.url}
+og:image: ${p.ogImage || "\u65E0"}
+\u56FE\u7247\u6837\u672C(${p.imgSrcs.length}):
+  ${p.imgSrcs.slice(0, 8).join("\n  ")}
+\u5BB9\u5668\u5019\u9009: ${p.containerCandidates.map((c) => `${c.cls}(${c.n})`).join(" ")}
+\u5206\u9875(${p.pagination.length}):
+  ${p.pagination.map((pg) => `${pg.href} [${pg.text}]`).join("\n  ") || "\uFF08\u65E0\uFF09"}`;
+          logger5.info("view", "\u9875\u9762\u7ED3\u6784\u63A2\u6D4B\u5B8C\u6210", {
+            url,
+            imgs: p.imgSrcs.length,
+            containers: p.containerCandidates.slice(0, 5),
+            pages: p.pagination.length
+          });
+        } else if (!res.ok && probeOut) {
+          probeOut.textContent = `\u63A2\u6D4B\u5931\u8D25\uFF1A${res.error}`;
+        }
+      } catch (err) {
+        if (probeOut) probeOut.textContent = `\u63A2\u6D4B\u5F02\u5E38\uFF1A${String(err)}`;
+      } finally {
+        probeBtn.disabled = false;
+        probeBtn.textContent = "\u63A2\u6D4B\u7ED3\u6784";
+      }
+    });
     const albumGrabView = createGrabView(root.querySelector("#bd-album-grab-view"), {
       srcTabId: srcTabId2,
       getFolderName: () => lastAlbumFolder,
@@ -4964,7 +5092,6 @@
       const queryInput = panel.querySelector("#bd-search-q");
       const pagesInput = panel.querySelector("#bd-search-pages");
       const searchBtn = panel.querySelector("#bd-search-go");
-      const siteBoxes = panel.querySelector("#bd-search-sites");
       const siteStatus = panel.querySelector("#bd-search-site-status");
       const listEl = panel.querySelector(".bd-link-list");
       const resultsHost = panel.querySelector(".bd-batch-results");
@@ -4975,24 +5102,35 @@
       const googleTestBtn = panel.querySelector("#bd-google-test");
       const googleStatus = panel.querySelector("#bd-google-status");
       const btnNext = panel.querySelector(".bd-next-batch");
-      const searchable = GALLERY_SITES.filter((s) => s.searchUrl);
-      const defaultChecked = /* @__PURE__ */ new Set(["jrants", "pixibb", "rrwsh"]);
-      const googleChannel = /* @__PURE__ */ new Set(["hitxhot", "kaizty"]);
+      const googleGroupIds = ["hitxhot", "kaizty", "phimvuspot", "ilovexs"];
+      const defaultChecked = /* @__PURE__ */ new Set(["buondua", "jrants", "pixibb", "rrwsh"]);
+      const googleChannel = /* @__PURE__ */ new Set(["hitxhot", "kaizty", "phimvuspot", "ilovexs"]);
+      const googleAllCheck = panel.querySelector("#bd-google-all");
+      let googleAll = false;
+      googleAllCheck.addEventListener("change", () => {
+        googleAll = googleAllCheck.checked;
+        siteStatus.textContent = googleAll ? "Google \u5168\u7AD9\u6A21\u5F0F\uFF1A\u5FFD\u7565\u4E0A\u65B9\u52FE\u9009\uFF0C\u5168\u90E8\u7AD9\u70B9\u8D70 Google" : "";
+      });
       const disabledNotes = {
-        buondua: "\u7AD9\u70B9\u4E0D\u53EF\u8FBE",
         imgbb: "\u65E0\u641C\u7D22\uFF08\u56FE\u5E8A\uFF09"
       };
       const renderSiteBoxes = () => {
-        const ok = searchable.map(
-          (s) => `<label class="bd-site-check"><input type="checkbox" value="${s.id}" ${defaultChecked.has(s.id) ? "checked" : ""}> ${s.id}${googleChannel.has(s.id) ? '<span class="bd-site-note">\uFF08Google\uFF09</span>' : ""}</label>`
-        ).join("");
-        const disabled = [...GALLERY_SITES.filter((s) => !s.searchUrl), { id: "imgbb" }].map(
-          (s) => `<label class="bd-site-check disabled" title="${disabledNotes[s.id] ?? "\u4E0D\u652F\u6301\u641C\u7D22"}"><input type="checkbox" disabled> ${s.id}<span class="bd-site-note">\uFF08${disabledNotes[s.id] ?? "\u4E0D\u652F\u6301"}\uFF09</span></label>`
-        ).join("");
-        siteBoxes.innerHTML = ok + disabled;
+        const renderGroup = (ids, containerId) => {
+          const container = panel.querySelector(`#${containerId}`);
+          container.innerHTML = ids.map(
+            (id) => `<label class="bd-site-check ${disabledNotes[id] ? "disabled" : ""}" title="${disabledNotes[id] ?? ""}"><input type="checkbox" value="${id}" ${defaultChecked.has(id) ? "checked" : ""} ${disabledNotes[id] ? "disabled" : ""}> ${id}${googleChannel.has(id) ? '<span class="bd-site-note">\uFF08Google\uFF09</span>' : ""}${disabledNotes[id] ? `<span class="bd-site-note">\uFF08${disabledNotes[id]}\uFF09</span>` : ""}</label>`
+          ).join("");
+        };
+        renderGroup(["buondua", "jrants", "pixibb", "rrwsh", "cangcuc", "imgbb"], "bd-search-sites-site");
+        renderGroup(googleGroupIds, "bd-search-sites-google");
       };
       renderSiteBoxes();
-      const selectedSites = () => Array.from(siteBoxes.querySelectorAll('input[type="checkbox"]:checked')).map((c) => c.value);
+      const selectedSites = () => {
+        if (googleAll) {
+          return GALLERY_SITES.map((s) => s.id);
+        }
+        return Array.from(panel.querySelectorAll('#bd-search-sites input[type="checkbox"]:checked')).map((c) => c.value);
+      };
       let items = [];
       let itemSites = [];
       const siteSeen = /* @__PURE__ */ new Map();
@@ -5110,7 +5248,7 @@
           head.className = "bd-search-site-head";
           head.textContent = `${siteId} \xB7 ${indices.length} \u6761`;
           block.appendChild(head);
-          if (googleChannel.has(siteId)) {
+          if (googleAll || googleChannel.has(siteId)) {
             const list = document.createElement("div");
             list.className = "bd-search-text-list";
             for (const globalIdx of indices) {
@@ -5162,7 +5300,7 @@
         pendingSites = sites.length;
         setStatus(statusEl, `\u7EE7\u7EED\u68C0\u7D22\u300C${query}\u300D\u7B2C ${nextStartPage} \u9875\u8D77\uFF1A${sites.join(" / ")}`);
         setBusy(true);
-        void sendMessage({ type: "BD_SEARCH", srcTabId: srcTabId2, query, sites, pagesPerSite: Number(pagesInput.value) || 2, startPage: nextStartPage }).then((res) => {
+        void sendMessage({ type: "BD_SEARCH", srcTabId: srcTabId2, query, sites, pagesPerSite: Number(pagesInput.value) || 2, startPage: nextStartPage, useGoogleAll: googleAll }).then((res) => {
           if (!res.ok) {
             setStatus(statusEl, `\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`, true);
             setBusy(false);
@@ -5279,9 +5417,9 @@
         pendingSites = sites.length;
         renderList();
         siteStatus.textContent = "\u641C\u7D22\u4E2D\uFF080/" + pendingSites + "\uFF09\u2026";
-        setStatus(statusEl, `\u805A\u5408\u641C\u7D22\u300C${query}\u300D\uFF1A${sites.join(" / ")}`);
+        setStatus(statusEl, `\u805A\u5408\u641C\u7D22\u300C${query}\u300D\uFF1A${sites.join(" / ")}${googleAll ? "\uFF08Google \u5168\u7AD9\uFF09" : ""}`);
         setBusy(true);
-        void sendMessage({ type: "BD_SEARCH", srcTabId: srcTabId2, query, sites, pagesPerSite: Number(pagesInput.value) || 2 }).then((res) => {
+        void sendMessage({ type: "BD_SEARCH", srcTabId: srcTabId2, query, sites, pagesPerSite: Number(pagesInput.value) || 2, useGoogleAll: googleAll }).then((res) => {
           if (!res.ok) {
             setStatus(statusEl, `\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`, true);
             setBusy(false);
@@ -5494,7 +5632,7 @@
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260814144750" : "dev";
+  var BUILD_TIME = true ? "20260818000350" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

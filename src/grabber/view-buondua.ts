@@ -66,9 +66,11 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
 
       <div id="sub-bd-album" class="adapter-panel active">
         <div class="row">
-          <input id="bd-album-url" class="text-input" placeholder="相册 URL：buondua / rrwsh.uuss.uk / hitxhot.org / jrants.com / pixibb.com / kaizty.com">
+          <input id="bd-album-url" class="text-input" placeholder="相册 URL：buondua / rrwsh.uuss.uk / hitxhot.org / jrants.com / pixibb.com / kaizty.com / 新站">
           <button id="bd-album-fetch" class="btn primary">抓取全部子页</button>
+          <button id="bd-probe" class="btn" title="开标签提取页面结构（图片模式/容器 class/分页），用于适配新站">探测结构</button>
         </div>
+        <pre id="bd-probe-out" class="ai-probe-out hidden"></pre>
         <div id="bd-album-grab-view" class="grab-view-host"></div>
       </div>
 
@@ -117,10 +119,20 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           <button id="bd-search-go" class="btn primary">聚合搜索</button>
         </div>
         <div class="row">
-          <div id="bd-search-sites" class="bd-search-sites"></div>
+          <div class="bd-search-sites">
+            <div class="bd-site-group">
+              <div class="bd-site-group-title">站内搜索（直接站内接口，快）</div>
+              <div id="bd-search-sites-site" class="bd-site-boxes"></div>
+            </div>
+            <div class="bd-site-group">
+              <div class="bd-site-group-title">Google 通道（仅 Google 可搜）</div>
+              <div id="bd-search-sites-google" class="bd-site-boxes"></div>
+            </div>
+          </div>
           <span id="bd-search-site-status" class="status-text"></span>
         </div>
         <div class="row">
+          <label class="bd-google-all-check" title="开启后忽略上方勾选，全部站点走 Google sitesearch 网页通道（仅标题+链接，同站去重，速度快）"><input type="checkbox" id="bd-google-all"> Google 全站搜索</label>
           <button id="bd-google-test" class="btn">测试 Google 连接</button>
           <span id="bd-google-status" class="status-text"></span>
         </div>
@@ -171,6 +183,56 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       return false
     }
   }
+
+  // ---------- 页面结构探测（FP-014 站点扩充） ----------
+  const probeBtn = root.querySelector('#bd-probe') as HTMLButtonElement | null
+  const probeOut = root.querySelector('#bd-probe-out') as HTMLElement | null
+  probeBtn?.addEventListener('click', async () => {
+    const url = albumUrlInput.value.trim()
+    if (!url) {
+      albumGrabView.setParseText('请先填写相册 URL')
+      return
+    }
+    if (!(await ensureHostPermission())) {
+      albumGrabView.setParseText('需要授权访问 <all_urls> 后才能探测')
+      return
+    }
+    probeBtn.disabled = true
+    probeBtn.textContent = '探测中…'
+    if (probeOut) {
+      probeOut.classList.remove('hidden')
+      probeOut.textContent = '加载页面并提取结构中…'
+    }
+    try {
+      const res = await sendMessage<{ ok: true; probe: import('../lib/messages').PageProbeResult } | { ok: false; error: string }>({
+        type: 'BD_PROBE_PAGE',
+        url,
+      })
+      if (res.ok && probeOut) {
+        const p = res.probe
+        probeOut.textContent =
+          `标题: ${p.title}\n` +
+          `URL: ${p.url}\n` +
+          `og:image: ${p.ogImage || '无'}\n` +
+          `图片样本(${p.imgSrcs.length}):\n  ${p.imgSrcs.slice(0, 8).join('\n  ')}\n` +
+          `容器候选: ${p.containerCandidates.map((c) => `${c.cls}(${c.n})`).join(' ')}\n` +
+          `分页(${p.pagination.length}):\n  ${p.pagination.map((pg) => `${pg.href} [${pg.text}]`).join('\n  ') || '（无）'}`
+        logger.info('view', '页面结构探测完成', {
+          url,
+          imgs: p.imgSrcs.length,
+          containers: p.containerCandidates.slice(0, 5),
+          pages: p.pagination.length,
+        })
+      } else if (!res.ok && probeOut) {
+        probeOut.textContent = `探测失败：${res.error}`
+      }
+    } catch (err) {
+      if (probeOut) probeOut.textContent = `探测异常：${String(err)}`
+    } finally {
+      probeBtn.disabled = false
+      probeBtn.textContent = '探测结构'
+    }
+  })
 
   // ---------- 抓取（全子页） ----------
   const albumGrabView = createGrabView(root.querySelector('#bd-album-grab-view') as HTMLElement, {
@@ -411,7 +473,6 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     const queryInput = panel.querySelector('#bd-search-q') as HTMLInputElement
     const pagesInput = panel.querySelector('#bd-search-pages') as HTMLSelectElement
     const searchBtn = panel.querySelector('#bd-search-go') as HTMLButtonElement
-    const siteBoxes = panel.querySelector('#bd-search-sites') as HTMLElement
     const siteStatus = panel.querySelector('#bd-search-site-status') as HTMLElement
     const listEl = panel.querySelector('.bd-link-list') as HTMLElement
     const resultsHost = panel.querySelector('.bd-batch-results') as HTMLElement
@@ -423,33 +484,44 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     const googleStatus = panel.querySelector('#bd-google-status') as HTMLElement
     const btnNext = panel.querySelector('.bd-next-batch') as HTMLButtonElement
 
-    // 站点勾选：支持搜索的站点可选（默认勾选 jrants/pixibb/rrwsh；hitxhot/kaizty 为 Google 通道，请求较慢，默认不勾选）；
-    // 不支持的灰显禁用并标注原因（FP-012）
-    const searchable = GALLERY_SITES.filter((s) => s.searchUrl)
-    const defaultChecked = new Set(['jrants', 'pixibb', 'rrwsh'])
-    const googleChannel = new Set(['hitxhot', 'kaizty'])
+    // 站点勾选：分类存放（FP-013 调整）——站内搜索类（直接站内接口）/ Google 通道类（仅 Google 可搜）
+    // 默认勾选站内类 buondua/jrants/pixibb/rrwsh；hitxhot/kaizty Google 通道默认不勾选（较慢）
+    // buondua 2026-08-17 恢复支持；cangcuc/phimvuspot/ilovexs 2026-08-17 FP-014 扩充（站内/Google 通道分类）
+    const googleGroupIds = ['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs']
+    const defaultChecked = new Set(['buondua', 'jrants', 'pixibb', 'rrwsh'])
+    const googleChannel = new Set(['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs'])
+    const googleAllCheck = panel.querySelector('#bd-google-all') as HTMLInputElement
+    let googleAll = false // Google 全站搜索开关状态
+    googleAllCheck.addEventListener('change', () => {
+      googleAll = googleAllCheck.checked
+      siteStatus.textContent = googleAll ? 'Google 全站模式：忽略上方勾选，全部站点走 Google' : ''
+    })
     const disabledNotes: Record<string, string> = {
-      buondua: '站点不可达',
       imgbb: '无搜索（图床）',
     }
     const renderSiteBoxes = (): void => {
-      const ok = searchable
-        .map(
-          (s) =>
-            `<label class="bd-site-check"><input type="checkbox" value="${s.id}" ${defaultChecked.has(s.id) ? 'checked' : ''}> ${s.id}${googleChannel.has(s.id) ? '<span class="bd-site-note">（Google）</span>' : ''}</label>`,
-        )
-        .join('')
-      const disabled = [...GALLERY_SITES.filter((s) => !s.searchUrl), { id: 'imgbb' }]
-        .map(
-          (s) =>
-            `<label class="bd-site-check disabled" title="${disabledNotes[s.id] ?? '不支持搜索'}"><input type="checkbox" disabled> ${s.id}<span class="bd-site-note">（${disabledNotes[s.id] ?? '不支持'}）</span></label>`,
-        )
-        .join('')
-      siteBoxes.innerHTML = ok + disabled
+      const renderGroup = (ids: string[], containerId: string): void => {
+        const container = panel.querySelector(`#${containerId}`) as HTMLElement
+        container.innerHTML = ids
+          .map(
+            (id) =>
+              `<label class="bd-site-check ${disabledNotes[id] ? 'disabled' : ''}" title="${disabledNotes[id] ?? ''}"><input type="checkbox" value="${id}" ${defaultChecked.has(id) ? 'checked' : ''} ${disabledNotes[id] ? 'disabled' : ''}> ${id}${googleChannel.has(id) ? '<span class="bd-site-note">（Google）</span>' : ''}${disabledNotes[id] ? `<span class="bd-site-note">（${disabledNotes[id]}）</span>` : ''}</label>`,
+          )
+          .join('')
+      }
+      // 站内搜索类：buondua/jrants/pixibb/rrwsh/cangcuc + imgbb（无搜索灰显，保留原列表提示）
+      renderGroup(['buondua', 'jrants', 'pixibb', 'rrwsh', 'cangcuc', 'imgbb'], 'bd-search-sites-site')
+      // Google 通道类：仅 Google 可搜
+      renderGroup(googleGroupIds, 'bd-search-sites-google')
     }
     renderSiteBoxes()
-    const selectedSites = (): string[] =>
-      Array.from(siteBoxes.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')).map((c) => c.value)
+    const selectedSites = (): string[] => {
+      if (googleAll) {
+        // Google 全站：全部已适配站点（含无站内搜索接口的站，FP-014）
+        return GALLERY_SITES.map((s) => s.id)
+      }
+      return Array.from(panel.querySelectorAll<HTMLInputElement>('#bd-search-sites input[type="checkbox"]:checked')).map((c) => c.value)
+    }
 
     let items: BuonduaLinkItem[] = [] // 平铺全站结果（跨站不去重，各站分栏展示）
     let itemSites: string[] = [] // 与 items 同序：来源站点（徽标/分组用）
@@ -574,7 +646,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         head.className = 'bd-search-site-head'
         head.textContent = `${siteId} · ${indices.length} 条`
         block.appendChild(head)
-        if (googleChannel.has(siteId)) {
+        if (googleAll || googleChannel.has(siteId)) {
           const list = document.createElement('div')
           list.className = 'bd-search-text-list'
           for (const globalIdx of indices) {
@@ -630,7 +702,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       pendingSites = sites.length
       setStatus(statusEl, `继续检索「${query}」第 ${nextStartPage} 页起：${sites.join(' / ')}`)
       setBusy(true)
-      void sendMessage({ type: 'BD_SEARCH', srcTabId, query, sites, pagesPerSite: Number(pagesInput.value) || 2, startPage: nextStartPage }).then((res) => {
+      void sendMessage({ type: 'BD_SEARCH', srcTabId, query, sites, pagesPerSite: Number(pagesInput.value) || 2, startPage: nextStartPage, useGoogleAll: googleAll }).then((res) => {
         if (!res.ok) {
           setStatus(statusEl, `请求失败：${res.error}`, true)
           setBusy(false)
@@ -776,9 +848,9 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       pendingSites = sites.length
       renderList()
       siteStatus.textContent = '搜索中（0/' + pendingSites + '）…'
-      setStatus(statusEl, `聚合搜索「${query}」：${sites.join(' / ')}`)
+      setStatus(statusEl, `聚合搜索「${query}」：${sites.join(' / ')}${googleAll ? '（Google 全站）' : ''}`)
       setBusy(true)
-      void sendMessage({ type: 'BD_SEARCH', srcTabId, query, sites, pagesPerSite: Number(pagesInput.value) || 2 }).then((res) => {
+      void sendMessage({ type: 'BD_SEARCH', srcTabId, query, sites, pagesPerSite: Number(pagesInput.value) || 2, useGoogleAll: googleAll }).then((res) => {
         if (!res.ok) {
           setStatus(statusEl, `请求失败：${res.error}`, true)
           setBusy(false)
@@ -852,8 +924,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
   }
 
   return {
-    onResult: (kind, data, done, error) => {
-      if (kind === 'album') {
+    onResult: (kind, data, done, error) => {      if (kind === 'album') {
         const images = data as BuonduaImage[]
         albumGrabView.appendImages(images.map(toGrabbed))
         albumGrabView.selectAll()

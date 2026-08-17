@@ -30,6 +30,19 @@ const FETCH_ATTEMPTS = 2
 const CONCURRENCY = 3 // 批量抓取并发（用户确认）
 
 export class BuonduaService {
+  /** Google 全站模式：为无 sitesearch 配置的站点构造 Google sitesearch 搜索配置（FP-013 调整）
+   *  gbv=1 强制基础 HTML 版；结果提取走 searchGoogleViaTab（标签页 + executeScript，仅标题+链接） */
+  private googleSearchConfig(site: GallerySiteConfig): GallerySiteConfig {
+    const host = site.hosts[0] ?? site.id
+    return {
+      ...site,
+      searchUrl: (q, page) =>
+        `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=${host}&gbv=1${
+          page > 1 ? `&start=${(page - 1) * 10}` : ''
+        }`,
+    }
+  }
+
   /** Google 通道：页面降级搜索（FP-012/093）——后台静默打开 Google 搜索标签（真实浏览器 JS 渲染），
    *  提取渲染后结果（a.zReHs + h3 / h3.r > a），逐页进行，完成后关闭标签。
    *  后台 fetch 拿不到新版 Google 结果（JS 渲染壳，gbv=1 已废弃），此通道与用户手动搜索等效。 */
@@ -43,7 +56,7 @@ export class BuonduaService {
     const seen = new Set<string>()
     let pagesFetched = 0
     for (let page = startPage; page < startPage + pagesPerSite; page++) {
-      const url = site.searchUrl(query, page)
+      const url = site.searchUrl?.(query, page)
       if (!url) break
       const tab = await chrome.tabs.create({ url, active: false })
       try {
@@ -278,19 +291,23 @@ export class BuonduaService {
 
   /** 聚合搜索：多站点逐页搜索 → 按站点路由解析 → 合并去重
    *  startPage：每站起始页（「下一批」续搜传上次结束页 +1，096）
-   *  onSite：每站完成后回调（推送该站结果，增量展示）；返回全部合并去重结果 */
+   *  onSite：每站完成后回调（推送该站结果，增量展示）；返回全部合并去重结果
+   *  useGoogleAll：Google 全站搜索开关（FP-013 调整）——开启后全部站点走 Google sitesearch
+   *  网页通道（标签页渲染，仅标题+链接，同站去重，速度快）；不读站内搜索接口 */
   async searchSites(
     query: string,
     sites: string[],
     pagesPerSite: number,
     onSite: (siteId: string, items: BuonduaLinkItem[], error?: string) => Promise<void> | void,
     startPage = 1,
+    useGoogleAll = false,
   ): Promise<BuonduaLinkItem[]> {
     const mergedMap = new Map<string, BuonduaLinkItem>()
     const siteStats: Record<string, { count: number; pages: number; error?: string }> = {}
     for (const siteId of sites) {
       const site = GALLERY_SITES.find((s) => s.id === siteId)
-      if (!site || !site.searchUrl) {
+      // FP-014：useGoogleAll 模式下不要求站内 searchUrl（无搜索接口的站也能走 Google sitesearch）
+      if (!site || (!site.searchUrl && !useGoogleAll)) {
         await onSite(siteId, [], '该站不支持搜索')
         continue
       }
@@ -298,10 +315,11 @@ export class BuonduaService {
       let error: string | undefined
       let pagesFetched = 0
       try {
-        // Google 通道站点（searchAlbumPath）：后台 fetch 拿不到新版 Google 结果（JS 渲染壳），
-        // 改走页面降级通道（静默开标签渲染 + 提取，FP-012/093）
-        if (site.searchAlbumPath) {
-          const tabRes = await this.searchGoogleViaTab(site, query, pagesPerSite, startPage)
+        // Google 通道站点（searchAlbumPath）或 Google 全站模式（useGoogleAll）：
+        // 后台 fetch 拿不到新版 Google 结果（JS 渲染壳），走页面降级通道（静默开标签渲染 + 提取，FP-012/093）
+        if (site.searchAlbumPath || useGoogleAll) {
+          const googleSite = useGoogleAll && !site.searchAlbumPath ? this.googleSearchConfig(site) : site
+          const tabRes = await this.searchGoogleViaTab(googleSite, query, pagesPerSite, startPage)
           pagesFetched = tabRes.pages
           for (const item of tabRes.items) items.push(item)
           if (tabRes.items.length === 0) {
@@ -309,7 +327,7 @@ export class BuonduaService {
           }
         } else {
           for (let page = startPage; page < startPage + pagesPerSite; page++) {
-            const url = site.searchUrl(query, page)
+            const url = site.searchUrl?.(query, page)
             if (!url) break
             // jrants 连续快速搜索触发反爬限流（实测 2026-08-13/14），页间强制间隔
             if (siteId === 'jrants' && page > 1) await sleep(2000)
@@ -419,8 +437,9 @@ export class BuonduaService {
   }
 }
 
-/** 按站点路由搜索页链接解析：jrants/pixibb 用专用解析器，其余用通用解析 */
+/** 按站点路由搜索页链接解析：jrants/pixibb 用专用解析器，buondua 搜索卡片与推荐区同构（items-row），其余用通用解析 */
 function parseLinksForSite(siteId: string, html: string, base: string): BuonduaLinkItem[] {
+  if (siteId === 'buondua') return parseRecommendedLinks(html, base)
   if (siteId === 'jrants') return parseJrantsPostLinks(html, base, {})
   if (siteId === 'pixibb') return parsePixibbPostLinks(html, base, {})
   if (siteId === 'kaizty') return parseKaiztyPostLinks(html, base)

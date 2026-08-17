@@ -15,7 +15,7 @@ import type { GithubConfig } from '../lib/github-sync'
 import { parseAlbumItems, parseAlbumNextPage } from '../lib/imgbb-parse'
 import type { ProducerDb } from '../lib/producer-db'
 import { appendLog, clearEntries, getEntries, getLevel, initLogger, setLevel } from '../lib/logger'
-import { sendToTab, type ImgResultKind, type Message, type MessageResponse } from '../lib/messages'
+import { sendToTab, type ImgResultKind, type Message, type MessageResponse, type PageProbeResult } from '../lib/messages'
 import { storageGet, storageSet } from '../lib/storage'
 import type { GrabSession, ImgbbAlbum, ImgbbFollowingUser, ImgbbImage } from '../lib/types'
 import { ImgbbService } from './imgbb-service'
@@ -166,6 +166,76 @@ async function sendToTabAndGet<T>(tabId: number, message: Message): Promise<T | 
     return (await chrome.tabs.sendMessage(tabId, message)) as T
   } catch {
     return undefined
+  }
+}
+
+// ---------- 页面结构探测（FP-014 站点扩充） ----------
+
+/** 探测执行函数（executeScript 注入，返回页面结构特征供新站适配） */
+function extractProbeData(): PageProbeResult {
+  const out: PageProbeResult = {
+    title: document.title,
+    url: location.href,
+    ogImage: '',
+    imgSrcs: [],
+    containerCandidates: [],
+    pagination: [],
+  }
+  out.ogImage = document.querySelector('meta[property="og:image"]')?.getAttribute('content') ?? ''
+  const seenImg = new Set<string>()
+  for (const img of Array.from(document.querySelectorAll('img'))) {
+    const s = img.getAttribute('data-src') || img.src || img.getAttribute('data-original') || ''
+    if (!s || seenImg.has(s)) continue
+    seenImg.add(s)
+    out.imgSrcs.push(s)
+    if (out.imgSrcs.length >= 40) break
+  }
+  // 图片祖先容器 class 统计（4 层，适配正文容器）
+  const counter: Record<string, number> = {}
+  for (const img of Array.from(document.querySelectorAll('img'))) {
+    let el: HTMLElement | null = img.parentElement
+    for (let d = 0; d < 4 && el; d++) {
+      const cls = typeof el.className === 'string' ? el.className : ''
+      for (const c of cls.split(/\s+/)) {
+        if (c && c.length > 3) counter[c] = (counter[c] ?? 0) + 1
+      }
+      el = el.parentElement
+    }
+  }
+  out.containerCandidates = Object.entries(counter)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([cls, n]) => ({ cls, n }))
+  // 分页链接（?page=N / page/N / 路径尾 /N）
+  const pageSeen = new Set<string>()
+  for (const a of Array.from(document.querySelectorAll('a[href]'))) {
+    const href = (a as HTMLAnchorElement).href
+    if (/[?&]page=\d+|page\/\d+|(?<![a-z])\/\d+\/?$/i.test(href) && !pageSeen.has(href)) {
+      pageSeen.add(href)
+      out.pagination.push({ href, text: (a.textContent ?? '').trim().slice(0, 20) })
+      if (out.pagination.length >= 10) break
+    }
+  }
+  return out
+}
+
+/** 打开标签探测页面结构（静默开/关），返回提取结果 */
+async function probePageStructure(url: string): Promise<PageProbeResult | null> {
+  const tab = await chrome.tabs.create({ url, active: false })
+  try {
+    const deadline = Date.now() + 25000
+    while (Date.now() < deadline) {
+      const t = await chrome.tabs.get(tab.id!)
+      if (t.status === 'complete' && (t.url ?? '').startsWith('http')) break
+      await new Promise((r) => setTimeout(r, 300))
+    }
+    const res = await chrome.scripting.executeScript({
+      target: { tabId: tab.id! },
+      func: extractProbeData,
+    })
+    return (res[0]?.result as PageProbeResult | undefined) ?? null
+  } finally {
+    await chrome.tabs.remove(tab.id!).catch(() => {})
   }
 }
 
@@ -856,6 +926,7 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
             })
           },
           message.startPage ?? 1,
+          message.useGoogleAll === true,
         )
         await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'search', data: [], done: true })
       } catch (err) {
@@ -899,6 +970,24 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
         })
       }
       return { ok: true }
+    }
+
+    case 'BD_PROBE_PAGE': {
+      try {
+        const probe = await probePageStructure(message.url)
+        if (!probe) throw new Error('页面结构提取失败（可能加载超时/被拦截）')
+        logger.info('buondua', '页面结构探测', {
+          url: message.url,
+          title: probe.title,
+          imgs: probe.imgSrcs.length,
+          containers: probe.containerCandidates.slice(0, 3),
+          pages: probe.pagination.length,
+        })
+        return { ok: true, probe }
+      } catch (err) {
+        logger.warn('buondua', '页面结构探测失败', { url: message.url, error: String(err) })
+        return { ok: false, error: String(err) }
+      }
     }
 
   }

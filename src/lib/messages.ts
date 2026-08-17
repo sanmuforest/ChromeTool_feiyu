@@ -101,13 +101,16 @@ export type Message =
   | { type: 'BD_FETCH_ALBUMS'; srcTabId: number; targets: BuonduaTarget[] }
   // ---- 多页图站聚合搜索（FP-010/096）：grabber → bg ----
   // startPage：每站起始页（默认 1）；「下一批」续搜时传上次结束页 +1，结果追加扩充
-  | { type: 'BD_SEARCH'; srcTabId: number; query: string; sites: string[]; pagesPerSite: number; startPage?: number }
+  // useGoogleAll：Google 全站搜索开关（FP-013 调整：开启后全部站点走 Google sitesearch 网页通道，仅标题+链接，速度快）
+  | { type: 'BD_SEARCH'; srcTabId: number; query: string; sites: string[]; pagesPerSite: number; startPage?: number; useGoogleAll?: boolean }
   // ---- 聚合搜索：Google 连接测试（FP-012）：grabber → bg ----
   | { type: 'BD_TEST_GOOGLE'; srcTabId: number }
   // ---- buondua 适配器：bg → grabber 推送 ----
   | { type: 'BD_RESULT'; kind: BuonduaResultKind; data: BuonduaImage[] | BuonduaLinkItem[] | BuonduaBatchItem | SearchSiteResult; done: boolean; error?: string }
   // ---- 多页站点：bg → content 页面内 fetch（带 Cookie 穿透反爬，hitxhot 等） ----
   | { type: 'BD_FETCH_HTML'; url: string }
+  // ---- 页面结构探测（FP-014 站点扩充）：grabber → bg，开标签执行提取并关闭 ----
+  | { type: 'BD_PROBE_PAGE'; url: string }
 
 export type ImgResultKind = 'album-images' | 'gallery' | 'gallery-range' | 'albums' | 'following'
 
@@ -180,8 +183,23 @@ export type MessageResponse =
           bodyPreview: string
         }
       }
+      // ---- 页面结构探测（FP-014） ----
+      probe?: PageProbeResult
     }
   | { ok: false; error: string }
+
+/** 页面结构探测结果（FP-014 站点扩充：适配新站前先探测结构） */
+export interface PageProbeResult {
+  title: string
+  url: string
+  ogImage: string
+  /** 图片 src 样本（最多 40，去重） */
+  imgSrcs: string[]
+  /** 图片祖先容器 class 候选（按出现次数降序） */
+  containerCandidates: { cls: string; n: number }[]
+  /** 分页链接样本 */
+  pagination: { href: string; text: string }[]
+}
 
 /** 通用发送：扩展页面 → background */
 export function sendMessage<T extends MessageResponse>(message: Message): Promise<T> {

@@ -1389,12 +1389,14 @@ body {
 }
 
 /* ========== 多页图站聚合搜索（FP-010） ========== */
+/* 站点区：分组上下排列（FP-013 调整：站内搜索类 / Google 通道类） */
 .bd-search-sites {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
+  flex-direction: column;
+  gap: 6px;
   padding: 2px 0;
+  flex: 1;
+  min-width: 0;
 }
 .bd-site-check {
   display: inline-flex;
@@ -1423,30 +1425,52 @@ body {
   color: var(--muted, #888);
 }
 
-/* 聚合搜索结果：按站点分栏展示（FP-012），每站独立区块（标题 + 网格） */
+/* 聚合搜索结果：每站独立窗口（垂直并排，整行宽度，各自独立滚动，2026-08-14-099） */
+.bd-search-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* 覆盖共享类 .bd-link-list 的 max-height:340px + overflow 限制——否则外层多一层截断/滚动，
+     站点独立窗口（460px 高）会被外层 340px 视口裁掉显示不全（2026-08-14-100） */
+  max-height: none;
+  overflow: visible;
+}
 .bd-search-site-block {
-  margin-bottom: 14px;
+  flex: 0 0 auto;
+  width: 100%; /* 每站窗口占满整行，垂直堆叠 */
+  height: 460px; /* 固定窗口高度，内容独立滚动 */
+  overflow-y: auto;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  background: var(--bg-2);
 }
 .bd-search-site-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   font-size: 13px;
   font-weight: 600;
   color: var(--text, #ddd);
   padding: 6px 10px;
   margin-bottom: 8px;
-  background: rgba(74, 158, 255, 0.1);
-  border-left: 3px solid var(--accent, #4a9eff);
-  border-radius: 4px;
+  background: var(--bg-3); /* 不透明背景：滚动时内容不穿透标题 */
+  border-bottom: 1px solid var(--border-2);
+  border-left: 3px solid var(--accent);
 }
 .bd-search-site-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  /* 单行最多 8 个：130px×8 + 10px×7 = 1110px；常规窗口（内容 ~1160px）正好 8 列，窄窗口自适应减列 */
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  max-width: 1110px;
   gap: 10px;
+  padding: 0 10px 10px;
 }
 /* Google 通道站点结果：纯文字紧密列表（096，无封面依赖） */
 .bd-search-text-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  padding: 0 10px 10px;
 }
 .bd-search-text-item {
   display: flex;
@@ -1569,4 +1593,48 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.25);
   pointer-events: none;
   user-select: none;
+}
+
+/* ---------- 聚合搜索站点分组（FP-013 调整） ---------- */
+.bd-site-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bd-site-group-title {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 2px 4px;
+  border-bottom: 1px dashed var(--border-2);
+}
+
+.bd-site-boxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.bd-google-all-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* ---------- 页面结构探测输出（FP-014） ---------- */
+.ai-probe-out {
+  margin-top: 6px;
+  padding: 8px;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
 }

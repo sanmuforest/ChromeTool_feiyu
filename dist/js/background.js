@@ -1579,8 +1579,9 @@
         }
       },
       cleanTitle: (title) => title.replace(/\s*[-–—]\s*\(\s*Page\s+\d+\s*\/\s*\d+\s*\)\s*$/i, "").trim(),
-      // buondua 站点当前不可达且搜索入口未验证，暂不支持聚合搜索
-      searchUrl: () => null
+      // buondua 站内搜索（2026-08-14 实测恢复可用）：GET ?search={q}，分页 &start={offset}（每页 20 条）
+      // 结果卡片与推荐区同构（items-row），parseRecommendedLinks 直接解析（parseLinksForSite 路由）
+      searchUrl: (q, page) => page <= 1 ? `https://buondua.com/?search=${encodeURIComponent(q)}` : `https://buondua.com/?search=${encodeURIComponent(q)}&start=${(page - 1) * 20}`
     },
     {
       id: "rrwsh",
@@ -1695,6 +1696,72 @@
       cleanTitle: (title) => title.trim(),
       // WP 搜索：路径式分页（实测 2026-08-14：/page/N/?s={q}，&paged= 无效；主内容子域 sexy）
       searchUrl: (q, page) => page <= 1 ? `https://sexy.pixibb.com/?s=${encodeURIComponent(q)}` : `https://sexy.pixibb.com/page/${page}/?s=${encodeURIComponent(q)}`
+    },
+    {
+      // FP-014 新站（2026-08-17 探测适配）：
+      id: "cangcuc",
+      hosts: ["cangcuc.com"],
+      // 探测：正文容器 post-single-body(57)；图片 media01.cangcuc.com/size_large_v1/{相册}_{ts}/NNN.jpg
+      // 单文章页图集全展示（探测页无分页链接）；标题「李佳 - OL | Căng Cực」
+      containerOpen: /<div[^>]*class="[^"]*post-single-body[^"]*"[^>]*>/,
+      pagePattern: /(?!)0/,
+      // 无标题分页标记；分页链接兜底（parseGalleryMaxPage）
+      pageUrl: (base, _page) => base,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          return u.href;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.replace(/\s*\|\s*Căng\s*Cực\s*$/i, "").trim(),
+      // WP 站内搜索（FP-014：标准 ?s= + 路径式分页，搜索结果页链接为文章页，parseSitePostLinks 通用解析）
+      searchUrl: (q, page) => page <= 1 ? `https://cangcuc.com/?s=${encodeURIComponent(q)}` : `https://cangcuc.com/page/${page}/?s=${encodeURIComponent(q)}`
+    },
+    {
+      id: "phimvuspot",
+      hosts: ["m.phimvuspot.com", "phimvuspot.com"],
+      // 探测：标题含「Page 1/18」；分页 ?page=N；图片 iN.wp.com/im.thismore.fun/s2/{base64}.jpg?w=640
+      // （WordPress Photon CDN 代理，?w 参数可放大原图）；容器 contentme（与 hitxhot 同模板）
+      containerOpen: /<div[^>]*class="[^"]*contentme[^"]*"[^>]*>/,
+      pagePattern: /\|\s*Page\s+\d+\s*\/\s*(\d+)/i,
+      pageUrl: (base, page) => `${base}?page=${page}`,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          return u.href;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.replace(/^PhimVu\s*Blog:\s*/i, "").replace(/\s*\|\s*Page\s+\d+\s*\/\s*\d+\s*$/i, "").trim(),
+      // Photon 缩放参数放大：?w=640 → ?w=1920（高清原图级）
+      imageUrlClean: (url) => url.replace(/[?&]w=\d+/, "?w=1920")
+    },
+    {
+      id: "ilovexs",
+      hosts: ["ilovexs.com"],
+      // 探测：图片画廊容器 image-gallery/gallery-item（内容图在 reiobox.top/wp-content/uploads，跨域图床）；
+      // 相册卡片 album-card 为相关推荐（必须隔离，用 image-gallery 容器）；标题「... | Nongmo.Zone」
+      containerOpen: /<div[^>]*class="[^"]*image-gallery[^"]*"[^>]*>/,
+      pagePattern: /(?!)0/,
+      pageUrl: (base, _page) => base,
+      baseUrlOf: (url) => {
+        try {
+          const u = new URL(url);
+          u.search = "";
+          u.hash = "";
+          return u.href;
+        } catch {
+          return url;
+        }
+      },
+      cleanTitle: (title) => title.replace(/\s*\|\s*Nongmo\.Zone\s*$/i, "").trim()
     }
   ];
   function matchGallerySite(url) {
@@ -1755,15 +1822,17 @@
     while ((m = re.exec(block)) !== null) {
       collect(m[1] || m[2]);
     }
+    const clean = site.imageUrlClean;
     return urls.map((url) => {
+      const finalUrl = clean ? clean(url) : url;
       let filename = "";
       try {
-        filename = decodeURIComponent(new URL(url).pathname.split("/").pop() || "");
+        filename = decodeURIComponent(new URL(finalUrl).pathname.split("/").pop() || "");
       } catch {
-        filename = url.split("/").pop() || "";
+        filename = finalUrl.split("/").pop() || "";
       }
       filename = filename.replace(/[\\/:*?"<>|]/g, "_");
-      return { url, filename };
+      return { url: finalUrl, filename };
     });
   }
   function parseGalleryMaxPage(html, site) {
@@ -2003,6 +2072,15 @@
   var FETCH_ATTEMPTS = 2;
   var CONCURRENCY2 = 3;
   var BuonduaService = class {
+    /** Google 全站模式：为无 sitesearch 配置的站点构造 Google sitesearch 搜索配置（FP-013 调整）
+     *  gbv=1 强制基础 HTML 版；结果提取走 searchGoogleViaTab（标签页 + executeScript，仅标题+链接） */
+    googleSearchConfig(site) {
+      const host = site.hosts[0] ?? site.id;
+      return {
+        ...site,
+        searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=${host}&gbv=1${page > 1 ? `&start=${(page - 1) * 10}` : ""}`
+      };
+    }
     /** Google 通道：页面降级搜索（FP-012/093）——后台静默打开 Google 搜索标签（真实浏览器 JS 渲染），
      *  提取渲染后结果（a.zReHs + h3 / h3.r > a），逐页进行，完成后关闭标签。
      *  后台 fetch 拿不到新版 Google 结果（JS 渲染壳，gbv=1 已废弃），此通道与用户手动搜索等效。 */
@@ -2011,7 +2089,7 @@
       const seen = /* @__PURE__ */ new Set();
       let pagesFetched = 0;
       for (let page = startPage; page < startPage + pagesPerSite; page++) {
-        const url = site.searchUrl(query, page);
+        const url = site.searchUrl?.(query, page);
         if (!url) break;
         const tab = await chrome.tabs.create({ url, active: false });
         try {
@@ -2220,13 +2298,15 @@
     }
     /** 聚合搜索：多站点逐页搜索 → 按站点路由解析 → 合并去重
      *  startPage：每站起始页（「下一批」续搜传上次结束页 +1，096）
-     *  onSite：每站完成后回调（推送该站结果，增量展示）；返回全部合并去重结果 */
-    async searchSites(query, sites, pagesPerSite, onSite, startPage = 1) {
+     *  onSite：每站完成后回调（推送该站结果，增量展示）；返回全部合并去重结果
+     *  useGoogleAll：Google 全站搜索开关（FP-013 调整）——开启后全部站点走 Google sitesearch
+     *  网页通道（标签页渲染，仅标题+链接，同站去重，速度快）；不读站内搜索接口 */
+    async searchSites(query, sites, pagesPerSite, onSite, startPage = 1, useGoogleAll = false) {
       const mergedMap = /* @__PURE__ */ new Map();
       const siteStats = {};
       for (const siteId of sites) {
         const site = GALLERY_SITES.find((s) => s.id === siteId);
-        if (!site || !site.searchUrl) {
+        if (!site || !site.searchUrl && !useGoogleAll) {
           await onSite(siteId, [], "\u8BE5\u7AD9\u4E0D\u652F\u6301\u641C\u7D22");
           continue;
         }
@@ -2234,8 +2314,9 @@
         let error;
         let pagesFetched = 0;
         try {
-          if (site.searchAlbumPath) {
-            const tabRes = await this.searchGoogleViaTab(site, query, pagesPerSite, startPage);
+          if (site.searchAlbumPath || useGoogleAll) {
+            const googleSite = useGoogleAll && !site.searchAlbumPath ? this.googleSearchConfig(site) : site;
+            const tabRes = await this.searchGoogleViaTab(googleSite, query, pagesPerSite, startPage);
             pagesFetched = tabRes.pages;
             for (const item of tabRes.items) items.push(item);
             if (tabRes.items.length === 0) {
@@ -2243,7 +2324,7 @@
             }
           } else {
             for (let page = startPage; page < startPage + pagesPerSite; page++) {
-              const url = site.searchUrl(query, page);
+              const url = site.searchUrl?.(query, page);
               if (!url) break;
               if (siteId === "jrants" && page > 1) await sleep(2e3);
               const html = await this.fetchHtml(url);
@@ -2331,6 +2412,7 @@
     }
   };
   function parseLinksForSite(siteId, html, base) {
+    if (siteId === "buondua") return parseRecommendedLinks(html, base);
     if (siteId === "jrants") return parseJrantsPostLinks(html, base, {});
     if (siteId === "pixibb") return parsePixibbPostLinks(html, base, {});
     if (siteId === "kaizty") return parseKaiztyPostLinks(html, base);
@@ -2495,6 +2577,66 @@
       return await chrome.tabs.sendMessage(tabId, message);
     } catch {
       return void 0;
+    }
+  }
+  function extractProbeData() {
+    const out = {
+      title: document.title,
+      url: location.href,
+      ogImage: "",
+      imgSrcs: [],
+      containerCandidates: [],
+      pagination: []
+    };
+    out.ogImage = document.querySelector('meta[property="og:image"]')?.getAttribute("content") ?? "";
+    const seenImg = /* @__PURE__ */ new Set();
+    for (const img of Array.from(document.querySelectorAll("img"))) {
+      const s = img.getAttribute("data-src") || img.src || img.getAttribute("data-original") || "";
+      if (!s || seenImg.has(s)) continue;
+      seenImg.add(s);
+      out.imgSrcs.push(s);
+      if (out.imgSrcs.length >= 40) break;
+    }
+    const counter = {};
+    for (const img of Array.from(document.querySelectorAll("img"))) {
+      let el = img.parentElement;
+      for (let d = 0; d < 4 && el; d++) {
+        const cls = typeof el.className === "string" ? el.className : "";
+        for (const c of cls.split(/\s+/)) {
+          if (c && c.length > 3) counter[c] = (counter[c] ?? 0) + 1;
+        }
+        el = el.parentElement;
+      }
+    }
+    out.containerCandidates = Object.entries(counter).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([cls, n]) => ({ cls, n }));
+    const pageSeen = /* @__PURE__ */ new Set();
+    for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+      const href = a.href;
+      if (/[?&]page=\d+|page\/\d+|(?<![a-z])\/\d+\/?$/i.test(href) && !pageSeen.has(href)) {
+        pageSeen.add(href);
+        out.pagination.push({ href, text: (a.textContent ?? "").trim().slice(0, 20) });
+        if (out.pagination.length >= 10) break;
+      }
+    }
+    return out;
+  }
+  async function probePageStructure(url) {
+    const tab = await chrome.tabs.create({ url, active: false });
+    try {
+      const deadline = Date.now() + 25e3;
+      while (Date.now() < deadline) {
+        const t = await chrome.tabs.get(tab.id);
+        if (t.status === "complete" && (t.url ?? "").startsWith("http")) break;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      const res = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: extractProbeData
+      });
+      return res[0]?.result ?? null;
+    } finally {
+      await chrome.tabs.remove(tab.id).catch(() => {
+      });
     }
   }
   chrome.action.onClicked.addListener(async (tab) => {
@@ -3115,7 +3257,8 @@
                 error
               });
             },
-            message.startPage ?? 1
+            message.startPage ?? 1,
+            message.useGoogleAll === true
           );
           await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "search", data: [], done: true });
         } catch (err) {
@@ -3158,6 +3301,23 @@
           });
         }
         return { ok: true };
+      }
+      case "BD_PROBE_PAGE": {
+        try {
+          const probe = await probePageStructure(message.url);
+          if (!probe) throw new Error("\u9875\u9762\u7ED3\u6784\u63D0\u53D6\u5931\u8D25\uFF08\u53EF\u80FD\u52A0\u8F7D\u8D85\u65F6/\u88AB\u62E6\u622A\uFF09");
+          logger5.info("buondua", "\u9875\u9762\u7ED3\u6784\u63A2\u6D4B", {
+            url: message.url,
+            title: probe.title,
+            imgs: probe.imgSrcs.length,
+            containers: probe.containerCandidates.slice(0, 3),
+            pages: probe.pagination.length
+          });
+          return { ok: true, probe };
+        } catch (err) {
+          logger5.warn("buondua", "\u9875\u9762\u7ED3\u6784\u63A2\u6D4B\u5931\u8D25", { url: message.url, error: String(err) });
+          return { ok: false, error: String(err) };
+        }
       }
     }
     return { ok: false, error: "\u672A\u77E5\u6D88\u606F\u7C7B\u578B" };
