@@ -7,7 +7,14 @@
 import { initLogger } from '../lib/logger'
 import { sendMessage, type ImgResultKind } from '../lib/messages'
 import { extractAlbumId, extractUsername } from '../lib/imgbb-parse'
-import { noteFor } from '../lib/tag-extract'
+import {
+  noteFor,
+  TAG_CATEGORY_LABEL,
+  TAG_CATEGORY_ORDER,
+  type TagCategory,
+  type TagStat,
+  type TagCustomDict,
+} from '../lib/tag-extract'
 import type {
   DownloadJob,
   GrabbedImage,
@@ -175,10 +182,15 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
             <span class="row-label">排行数量</span>
             <input id="rank-n" class="num-input" value="100" type="number" min="10" max="500" style="width:60px">
           </div>
+          <div class="row">
+            <span class="row-label">标星悬浮窗</span>
+            <button id="star-overlay-toggle" class="btn">启用</button>
+            <span id="star-overlay-status" class="status-text"></span>
+          </div>
           <div id="db-composition" class="db-composition"></div>
           <div class="rank-groups">
             <div class="rank-group"><div class="rank-title">得分 Top <span class="rank-num" id="rank-score-n">100</span></div><div class="user-list" id="rank-score"></div></div>
-            <div class="rank-group"><div class="rank-title">入度 Top <span class="rank-num" id="rank-degree-n">100</span></div><div class="user-list" id="rank-degree"></div></div>
+            <div class="rank-group"><div class="rank-title">入度 Top <span class="rank-num" id="rank-degree-n">100</span>（第 5 列点击评星）</div><div class="user-list degree-list" id="rank-degree"></div></div>
             <div class="rank-group"><div class="rank-title">相册数 Top <span class="rank-num" id="rank-album-n">100</span>（已确认）</div><div class="user-list" id="rank-album"></div></div>
           </div>
           <div class="row">
@@ -187,15 +199,33 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
           </div>
           <div class="user-list" id="diffuse-users"></div>
           <div class="diffuse-section tag-cloud-section">
-            <div class="section-title">⑤ 标签云（点击标签自动检索相册）</div>
+            <div class="section-title">⑤ 标签云 v2（词典命中 + 同义归并，点击标签自动检索相册）</div>
             <div class="row">
               <span class="row-label">Top</span>
-              <input id="tag-n" class="num-input" value="100" type="number" min="20" max="500" style="width:60px">
+              <input id="tag-n" class="num-input" value="200" type="number" min="20" max="1000" style="width:64px">
+              <span class="row-label">最少相册</span>
+              <input id="tag-min-albums" class="num-input" value="5" type="number" min="1" max="100" style="width:52px">
+              <span class="row-label">最少用户</span>
+              <input id="tag-min-users" class="num-input" value="1" type="number" min="1" max="50" style="width:48px">
+              <label class="radio-label"><input type="checkbox" id="tag-slug">含 URL slug</label>
               <button id="tag-refresh" class="btn primary">生成标签云</button>
               <span id="tag-status" class="status-text"></span>
             </div>
+            <div class="row">
+              <span class="row-label">自定义词</span>
+              <input id="tag-custom-word" class="text-input" placeholder="标签名，如 蕾丝手套" style="width:140px">
+              <select id="tag-custom-cat" class="num-input"></select>
+              <button id="tag-custom-add" class="btn">添加</button>
+              <span class="row-label">屏蔽词</span>
+              <input id="tag-block-word" class="text-input" placeholder="不想看到的标签" style="width:130px">
+              <button id="tag-block-add" class="btn">屏蔽</button>
+              <button id="tag-dict-export" class="btn">导出词典</button>
+              <button id="tag-dict-import" class="btn">导入词典</button>
+              <input id="tag-dict-file" type="file" accept=".json" style="display:none">
+            </div>
             <div class="tag-legend" id="tag-legend"></div>
-            <div class="tag-cloud" id="tag-cloud"></div>
+            <div class="tag-blocked-list" id="tag-blocked-list"></div>
+            <div class="tag-groups" id="tag-groups"></div>
           </div>
         </div>
         <div class="diffuse-section">
@@ -636,7 +666,7 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
   /** 库内三组排行（得分 / 入度 / 相册数） */
   function renderRanks(res: {
     rankScore?: { username: string; url: string; inDegree: number; albumCount?: number; score: number; truncated?: boolean }[]
-    rankDegree?: { username: string; url: string; inDegree: number }[]
+    rankDegree?: { username: string; url: string; inDegree: number; starRating: number }[]
     rankAlbum?: { username: string; url: string; albumCount: number; inDegree: number; truncated?: boolean }[]
     total: number
   }): void {
@@ -651,6 +681,14 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
         ? `<span class="user-albums truncated" data-full="${username}" title="未遍历完，点击彻底遍历">${val}${plus}</span>`
         : `<span class="user-albums">${val}</span>`
     }
+    // 手动星级（FP-015）：5 颗星，点击第 N 颗 = N 星，再点同一颗 = 取消评星
+    const starCell = (username: string, stars: number): string => {
+      const cur = Math.max(0, Math.min(5, Math.round(Number(stars)) || 0))
+      const starsHtml = [1, 2, 3, 4, 5]
+        .map((s) => `<span class="star${s <= cur ? ' on' : ''}" data-v="${s}">${s <= cur ? '★' : '☆'}</span>`)
+        .join('')
+      return `<span class="star-rate" data-user="${username}" data-stars="${cur}" title="点击评星（1~5 星），再点同一颗取消">${starsHtml}</span>`
+    }
     if (rankScoreEl) {
       rankScoreEl.innerHTML = (res.rankScore ?? [])
         .map(
@@ -663,7 +701,7 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
       rankDegreeEl.innerHTML = (res.rankDegree ?? [])
         .map(
           (u, i) =>
-            `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="${u.url}" target="_blank">${u.username}</a><span class="user-score">-</span><span class="user-degree">${u.inDegree}</span><span class="user-albums">-</span></div>`,
+            `<div class="user-row"><span class="user-rank">${i + 1}</span><a href="${u.url}" target="_blank">${u.username}</a><span class="user-score">-</span><span class="user-degree">${u.inDegree}</span>${starCell(u.username, u.starRating)}</div>`,
         )
         .join('')
     }
@@ -697,6 +735,39 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
   }
   rankScoreEl?.addEventListener('click', onTruncatedClick)
   rankAlbumEl?.addEventListener('click', onTruncatedClick)
+
+  // 手动星级（FP-015）：入度 Top 第 5 列点击评星（事件委托，列表 innerHTML 重建无需重绑）
+  const onStarClick = async (ev: Event): Promise<void> => {
+    const starEl = (ev.target as HTMLElement).closest<HTMLElement>('.star')
+    if (!starEl) return
+    const box = starEl.closest<HTMLElement>('.star-rate')
+    const username = box?.dataset.user
+    const clicked = Number(starEl.dataset.v) || 0
+    if (!box || !username || clicked <= 0) return
+    const current = Number(box.dataset.stars) || 0
+    const next = current === clicked ? 0 : clicked // 再点同一颗 = 取消评星
+    // 本地即时点亮/熄灭（不等后台往返）
+    box.dataset.stars = String(next)
+    box.querySelectorAll<HTMLElement>('.star').forEach((el) => {
+      const v = Number(el.dataset.v) || 0
+      const on = v <= next
+      el.classList.toggle('on', on)
+      el.textContent = on ? '★' : '☆'
+    })
+    const res = await sendMessage<{ ok: true; starRating?: number } | { ok: false; error: string }>({
+      type: 'IMG_DB_SET_STAR',
+      username,
+      stars: next,
+    })
+    if (!res.ok) {
+      setStatus(dbStatus, `星级保存失败：${res.error}`, true)
+      return
+    }
+    logger.info('adapters', '手动星级已设置', { username, stars: next })
+    setStatus(dbStatus, `${username} 星级：${next} 星（已计入评分）`)
+    void loadDbStats() // 星级进入综合评分 → 刷新得分 Top
+  }
+  rankDegreeEl?.addEventListener('click', (ev) => void onStarClick(ev))
 
   function renderDiffuse(snapshot?: DiffuseSnapshot, result?: DiffuseBatchResult): void {
     if (diffuseProgress && snapshot) {
@@ -834,7 +905,7 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
         producers: number
         maxInDegree: number
         rankScore?: { username: string; url: string; inDegree: number; albumCount?: number; score: number }[]
-        rankDegree?: { username: string; url: string; inDegree: number }[]
+        rankDegree?: { username: string; url: string; inDegree: number; starRating: number }[]
         rankAlbum?: { username: string; url: string; albumCount: number; inDegree: number }[]
       } | { ok: false; error: string }
     >({ type: 'IMG_DB_GET', w1, topN })
@@ -855,6 +926,65 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
 
   // 排行数量变化 → 刷新
   rankNInput?.addEventListener('change', () => void loadDbStats())
+
+  // ---------- 标星悬浮窗开关（FP-017：在 imgbb 用户页/相册页注入评星浮窗） ----------
+  const STAR_OVERLAY_ORIGINS = ['*://*.imgbb.com/*', '*://ibb.co/*']
+  const starOverlayBtn = root.querySelector('#star-overlay-toggle') as HTMLButtonElement | null
+  const starOverlayStatus = root.querySelector('#star-overlay-status')
+  let starOverlayEnabled = false
+
+  async function refreshOverlayStatus(): Promise<void> {
+    const res = await sendMessage<
+      { ok: true; overlay?: { enabled: boolean; registered: boolean } } | { ok: false; error: string }
+    >({ type: 'STAR_OVERLAY_STATUS' })
+    if (!res.ok) {
+      setStatus(starOverlayStatus, `状态读取失败：${res.error}`, true)
+      return
+    }
+    starOverlayEnabled = !!res.overlay?.enabled
+    if (starOverlayBtn) starOverlayBtn.textContent = starOverlayEnabled ? '关闭' : '启用'
+    setStatus(
+      starOverlayStatus,
+      starOverlayEnabled ? '已启用：imgbb 用户页 / 相册详情页右下角显示评星浮窗' : '未启用',
+    )
+  }
+
+  async function toggleStarOverlay(): Promise<void> {
+    if (starOverlayEnabled) {
+      const res = await sendMessage<{ ok: true; overlay?: { enabled: boolean; registered: boolean } } | { ok: false; error: string }>({
+        type: 'STAR_OVERLAY_SET',
+        enabled: false,
+      })
+      if (!res.ok) {
+        setStatus(starOverlayStatus, `关闭失败：${res.error}`, true)
+        return
+      }
+      logger.info('adapters', '标星悬浮窗已关闭')
+      setStatus(starOverlayStatus, '已关闭标星悬浮窗')
+      void refreshOverlayStatus()
+      return
+    }
+    // 权限申请必须发生在用户手势内（此处是点击后的第一个 await）
+    const granted = await chrome.permissions.request({ origins: STAR_OVERLAY_ORIGINS })
+    if (!granted) {
+      setStatus(starOverlayStatus, '未授权 imgbb 域访问，悬浮窗未启用', true)
+      return
+    }
+    const res = await sendMessage<{ ok: true; overlay?: { enabled: boolean; registered: boolean } } | { ok: false; error: string }>({
+      type: 'STAR_OVERLAY_SET',
+      enabled: true,
+    })
+    if (!res.ok) {
+      setStatus(starOverlayStatus, `启用失败：${res.error}`, true)
+      return
+    }
+    logger.info('adapters', '标星悬浮窗已启用')
+    setStatus(starOverlayStatus, '已启用：打开 imgbb 用户页 / 相册页即可看到评星浮窗')
+    void refreshOverlayStatus()
+  }
+
+  starOverlayBtn?.addEventListener('click', () => void toggleStarOverlay())
+  void refreshOverlayStatus()
 
   root.querySelector('#db-load')?.addEventListener('click', () => void loadDbStats())
 
@@ -1038,67 +1168,174 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
     }
   })
 
-  // ---------- 事件：标签云（FP-006） ----------
+  // ---------- 事件：标签云 v2（FP-016：双通道提取 + 同义归并 + 分组筛选 + 自定义词典） ----------
   const tagStatus = root.querySelector('#tag-status')
-  const tagCloudEl = root.querySelector('#tag-cloud') as HTMLElement | null
+  const tagGroupsEl = root.querySelector('#tag-groups') as HTMLElement | null
   const tagLegendEl = root.querySelector('#tag-legend') as HTMLElement | null
   const tagNInput = root.querySelector('#tag-n') as HTMLInputElement | null
+  const tagMinAlbumsInput = root.querySelector('#tag-min-albums') as HTMLInputElement | null
+  const tagMinUsersInput = root.querySelector('#tag-min-users') as HTMLInputElement | null
+  const tagSlugCheck = root.querySelector('#tag-slug') as HTMLInputElement | null
+  const tagCustomWordInput = root.querySelector('#tag-custom-word') as HTMLInputElement | null
+  const tagCustomCatSelect = root.querySelector('#tag-custom-cat') as HTMLSelectElement | null
+  const tagBlockWordInput = root.querySelector('#tag-block-word') as HTMLInputElement | null
+  const tagBlockedListEl = root.querySelector('#tag-blocked-list') as HTMLElement | null
+  const tagDictFileInput = root.querySelector('#tag-dict-file') as HTMLInputElement | null
 
   const TAG_COLOR: Record<string, string> = {
-    japanese: '#4a9eff', korean: '#c792ea', theme: '#7bc47f', clothes: '#e07ab5', brand: '#e8a03a', english: '#9aa5b1', at: '#5ac8d8',
+    japanese: '#4a9eff', korean: '#c792ea', ip: '#f2a65a', theme: '#7bc47f', scene: '#5ac8d8',
+    clothes: '#e07ab5', fetish: '#d16ba5', act: '#e5646b', prop: '#b0a06a', body: '#8fbc5a',
+    relation: '#c0a0e0', brand: '#e8a03a', english: '#9aa5b1', at: '#5ac8d8',
   }
-  const TAG_LABEL: Record<string, string> = {
-    japanese: '演员', korean: '韩语', theme: '主题', clothes: '服装', brand: '品牌', english: '英文', at: '引用',
+
+  let tagStats: TagStat[] = []
+  let tagFilter = 'all'
+  let tagDict: TagCustomDict = { entries: [], blocked: [] }
+
+  const tagColor = (c: string): string => TAG_COLOR[c] ?? '#999'
+
+  if (tagCustomCatSelect) {
+    tagCustomCatSelect.innerHTML = TAG_CATEGORY_ORDER.map(
+      (c) => `<option value="${c}">${TAG_CATEGORY_LABEL[c]}</option>`,
+    ).join('')
+  }
+
+  function renderBlockedList(): void {
+    if (!tagBlockedListEl) return
+    if (tagDict.blocked.length === 0) {
+      tagBlockedListEl.textContent = ''
+      return
+    }
+    tagBlockedListEl.innerHTML =
+      `<span class="row-label">已屏蔽 ${tagDict.blocked.length}</span>` +
+      tagDict.blocked
+        .map((b) => `<span class="blocked-tag" data-block="${b}" title="点击取消屏蔽">${b} ×</span>`)
+        .join('')
+  }
+
+  async function loadTagDict(): Promise<void> {
+    const res = await sendMessage<{ ok: true; tagDict?: TagCustomDict } | { ok: false; error: string }>({
+      type: 'IMG_TAG_DICT_GET',
+    })
+    if (res.ok && res.tagDict) {
+      tagDict = res.tagDict
+      renderBlockedList()
+    }
+  }
+
+  async function saveTagDict(): Promise<void> {
+    const res = await sendMessage<{ ok: true; tagDict?: TagCustomDict } | { ok: false; error: string }>({
+      type: 'IMG_TAG_DICT_SAVE',
+      tagDict,
+    })
+    if (!res.ok) {
+      setStatus(tagStatus, `词典保存失败：${res.error}`, true)
+      return
+    }
+    if (res.tagDict) tagDict = res.tagDict
+    renderBlockedList()
+    logger.info('adapters', '标签词典已保存', { entries: tagDict.entries.length, blocked: tagDict.blocked.length })
+    void refreshTagCloud()
+  }
+
+  function renderTagLegend(): void {
+    if (!tagLegendEl) return
+    const catCount: Record<string, number> = {}
+    for (const t of tagStats) catCount[t.c] = (catCount[t.c] ?? 0) + 1
+    const chip = (key: string, label: string, n: number, color: string): string =>
+      `<span class="tag-chip${tagFilter === key ? ' on' : ''}" data-cat="${key}" style="--chip:${color}">${label} ${n}</span>`
+    let html = chip('all', '全部', tagStats.length, '#9aa5b1')
+    for (const c of TAG_CATEGORY_ORDER) {
+      const n = catCount[c] ?? 0
+      if (n === 0) continue
+      html += chip(c, TAG_CATEGORY_LABEL[c], n, tagColor(c))
+    }
+    tagLegendEl.innerHTML = html
+  }
+
+  function renderTagGroups(): void {
+    if (!tagGroupsEl) return
+    const list = tagFilter === 'all' ? tagStats : tagStats.filter((t) => t.c === tagFilter)
+    if (list.length === 0) {
+      tagGroupsEl.innerHTML = '<div class="tag-empty">该分类暂无标签（可下调阈值或添加自定义词）</div>'
+      return
+    }
+    const maxAlbums = list.reduce((m, x) => Math.max(m, x.albums), 1)
+    const byCat = new Map<string, TagStat[]>()
+    for (const t of list) {
+      if (!byCat.has(t.c)) byCat.set(t.c, [])
+      byCat.get(t.c)!.push(t)
+    }
+    tagGroupsEl.innerHTML = TAG_CATEGORY_ORDER.filter((c) => byCat.has(c))
+      .map((c) => {
+        const items = byCat.get(c)!
+        const tags = items
+          .map((x) => {
+            const isCjk = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(x.t)
+            const label = isCjk ? x.t : `${x.t}（${noteFor(x.t, x.c)}）`
+            const size = 12 + Math.round((x.albums / maxAlbums) * 8)
+            return `<span class="tag" data-tag="${x.t}" style="font-size:${size}px;color:${tagColor(x.c)}" title="${x.t} · ${TAG_CATEGORY_LABEL[x.c]} · ${x.albums} 相册 · ${x.users} 人"><span class="tag-t">${label}</span><b class="tag-x" data-block="${x.t}" title="屏蔽该标签">×</b></span>`
+          })
+          .join('')
+        return `<div class="tag-group" style="--group:${tagColor(c)}"><div class="tag-group-head">${TAG_CATEGORY_LABEL[c]} <span class="tag-group-n">${items.length}</span></div><div class="tag-group-body">${tags}</div></div>`
+      })
+      .join('')
   }
 
   async function refreshTagCloud(): Promise<void> {
-    const topN = Math.max(20, Math.min(500, Number(tagNInput?.value) || 100))
+    const topN = Math.max(20, Math.min(1000, Number(tagNInput?.value) || 200))
+    const minAlbums = Math.max(1, Math.min(100, Number(tagMinAlbumsInput?.value) || 5))
+    const minUsers = Math.max(1, Math.min(50, Number(tagMinUsersInput?.value) || 1))
     setStatus(tagStatus, '统计中…')
-    const res = await sendMessage<
-      { ok: true; tags?: import('../lib/tag-extract').TagStat[] } | { ok: false; error: string }
-    >({ type: 'IMG_TAG_GET', topN })
+    const res = await sendMessage<{ ok: true; tags?: TagStat[] } | { ok: false; error: string }>({
+      type: 'IMG_TAG_GET',
+      topN,
+      minAlbums,
+      minUsers,
+      includeSlug: !!tagSlugCheck?.checked,
+    })
     if (!res.ok) {
       setStatus(tagStatus, `标签云失败：${res.error}`, true)
       return
     }
-    if (!res.tags) {
-      setStatus(tagStatus, '标签云失败：无数据', true)
+    tagStats = res.tags ?? []
+    if (tagStats.length === 0) {
+      setStatus(tagStatus, '暂无标签（需先确认评分补相册名，或下调阈值）', true)
+      if (tagGroupsEl) tagGroupsEl.innerHTML = ''
+      if (tagLegendEl) tagLegendEl.innerHTML = ''
       return
     }
-    const tags = res.tags
-    if (tags.length === 0) {
-      setStatus(tagStatus, '暂无标签（需先确认评分补相册名）', true)
-      if (tagCloudEl) tagCloudEl.innerHTML = ''
-      return
-    }
-    // 图例
-    const catCount: Record<string, number> = {}
-    for (const t of tags) catCount[t.c] = (catCount[t.c] ?? 0) + 1
-    if (tagLegendEl) {
-      tagLegendEl.innerHTML = Object.entries(catCount)
-        .map(([c, n]) => `<span style="color:${TAG_COLOR[c]}">■ ${TAG_LABEL[c] ?? c} ${n}</span>`)
-        .join('')
-    }
-    // 标签云
-    const maxAlbums = tags[0]?.albums ?? 1
-    if (tagCloudEl) {
-      tagCloudEl.innerHTML = tags
-        .map((x) => {
-          const isCjk = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(x.t)
-          const label = isCjk ? x.t : `${x.t}（${noteFor(x.t)}）`
-          const size = 13 + Math.round((x.albums / maxAlbums) * 26)
-          return `<span class="tag" data-tag="${x.t}" data-albums="${x.albums}" data-users="${x.users}" style="font-size:${size}px;color:${TAG_COLOR[x.c] || '#999'}" title="${x.t} · ${x.albums}相册 · ${x.users}人">${label}</span>`
-        })
-        .join('')
-    }
-    setStatus(tagStatus, `已生成 ${tags.length} 个标签（相册≥10 且 用户≥2）`)
+    renderTagLegend()
+    renderTagGroups()
+    setStatus(tagStatus, `已生成 ${tagStats.length} 个标签（相册≥${minAlbums} 且 用户≥${minUsers}）`)
   }
 
   root.querySelector('#tag-refresh')?.addEventListener('click', () => void refreshTagCloud())
   tagNInput?.addEventListener('change', () => void refreshTagCloud())
+  tagMinAlbumsInput?.addEventListener('change', () => void refreshTagCloud())
+  tagMinUsersInput?.addEventListener('change', () => void refreshTagCloud())
+  tagSlugCheck?.addEventListener('change', () => void refreshTagCloud())
 
-  // 点击标签 → 自动填关键词 → 触发③区检索
-  tagCloudEl?.addEventListener('click', (ev) => {
+  // 分类 chip 筛选
+  tagLegendEl?.addEventListener('click', (ev) => {
+    const el = (ev.target as HTMLElement).closest<HTMLElement>('.tag-chip')
+    if (!el) return
+    tagFilter = el.dataset.cat || 'all'
+    renderTagLegend()
+    renderTagGroups()
+  })
+
+  // 点击标签 → 填关键词触发③区检索；点标签上的 × → 屏蔽该标签
+  tagGroupsEl?.addEventListener('click', (ev) => {
+    const xEl = (ev.target as HTMLElement).closest<HTMLElement>('.tag-x')
+    if (xEl) {
+      ev.stopPropagation()
+      const word = xEl.dataset.block
+      if (!word) return
+      if (!tagDict.blocked.some((b) => b.toLowerCase() === word.toLowerCase())) tagDict.blocked.push(word)
+      void saveTagDict()
+      return
+    }
     const el = (ev.target as HTMLElement).closest<HTMLElement>('.tag')
     if (!el) return
     const tag = el.dataset.tag
@@ -1109,6 +1346,73 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
     // 滚动到③区
     searchResultsEl?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   })
+
+  // 点击已屏蔽标签 → 取消屏蔽
+  tagBlockedListEl?.addEventListener('click', (ev) => {
+    const el = (ev.target as HTMLElement).closest<HTMLElement>('.blocked-tag')
+    if (!el) return
+    const word = el.dataset.block
+    if (!word) return
+    tagDict.blocked = tagDict.blocked.filter((b) => b.toLowerCase() !== word.toLowerCase())
+    void saveTagDict()
+  })
+
+  // 添加自定义标签
+  root.querySelector('#tag-custom-add')?.addEventListener('click', () => {
+    const word = tagCustomWordInput?.value.trim()
+    if (!word) {
+      setStatus(tagStatus, '请先填写标签名', true)
+      return
+    }
+    const c = (tagCustomCatSelect?.value || 'english') as TagCategory
+    if (!tagDict.entries.some((e) => e.t.toLowerCase() === word.toLowerCase())) tagDict.entries.push({ t: word, c })
+    if (tagCustomWordInput) tagCustomWordInput.value = ''
+    void saveTagDict()
+  })
+
+  // 添加屏蔽词
+  root.querySelector('#tag-block-add')?.addEventListener('click', () => {
+    const word = tagBlockWordInput?.value.trim()
+    if (!word) {
+      setStatus(tagStatus, '请先填写要屏蔽的词', true)
+      return
+    }
+    if (!tagDict.blocked.some((b) => b.toLowerCase() === word.toLowerCase())) tagDict.blocked.push(word)
+    if (tagBlockWordInput) tagBlockWordInput.value = ''
+    void saveTagDict()
+  })
+
+  // 词典导出 / 导入
+  root.querySelector('#tag-dict-export')?.addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(tagDict, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `tag-dict-${Date.now()}.json`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    setStatus(tagStatus, `已导出词典（自定义 ${tagDict.entries.length} 条 · 屏蔽 ${tagDict.blocked.length} 条）`)
+  })
+  root.querySelector('#tag-dict-import')?.addEventListener('click', () => tagDictFileInput?.click())
+  tagDictFileInput?.addEventListener('change', async () => {
+    const file = tagDictFileInput.files?.[0]
+    if (!file) return
+    try {
+      const data = JSON.parse(await file.text()) as TagCustomDict
+      tagDict = {
+        entries: Array.isArray(data.entries) ? data.entries : tagDict.entries,
+        blocked: Array.isArray(data.blocked) ? data.blocked : tagDict.blocked,
+      }
+      void saveTagDict()
+    } catch (err) {
+      setStatus(tagStatus, `词典文件解析失败：${String(err)}`, true)
+    } finally {
+      tagDictFileInput.value = ''
+    }
+  })
+
+  // 启动时载入自定义词典
+  void loadTagDict()
 
   // ---------- 事件：本地数据表导出/导入（FP-005） ----------
   const localStatus = root.querySelector('#local-status')

@@ -119,7 +119,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           <button id="bd-search-go" class="btn primary">聚合搜索</button>
         </div>
         <div class="row">
-          <div class="bd-search-sites">
+          <div id="bd-search-sites" class="bd-search-sites">
             <div class="bd-site-group">
               <div class="bd-site-group-title">站内搜索（直接站内接口，快）</div>
               <div id="bd-search-sites-site" class="bd-site-boxes"></div>
@@ -484,12 +484,12 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     const googleStatus = panel.querySelector('#bd-google-status') as HTMLElement
     const btnNext = panel.querySelector('.bd-next-batch') as HTMLButtonElement
 
-    // 站点勾选：分类存放（FP-013 调整）——站内搜索类（直接站内接口）/ Google 通道类（仅 Google 可搜）
-    // 默认勾选站内类 buondua/jrants/pixibb/rrwsh；hitxhot/kaizty Google 通道默认不勾选（较慢）
-    // buondua 2026-08-17 恢复支持；cangcuc/phimvuspot/ilovexs 2026-08-17 FP-014 扩充（站内/Google 通道分类）
-    const googleGroupIds = ['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs']
-    const defaultChecked = new Set(['buondua', 'jrants', 'pixibb', 'rrwsh'])
-    const googleChannel = new Set(['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs'])
+    // 站点勾选：分类存放（FP-013 调整）——站内搜索类（直接站内接口）/ Google 通道类（Google 优先，失败降级站内）
+    // 默认勾选站内类 buondua/jrants/rrwsh/cangcuc；Google 通道默认不勾选（较慢）
+    // FP-014 修复 7：cangcuc 有站内搜索 → 移回站内组（与 rrwsh 同处理）；pixibb 站内无结果 → Google 组
+    const googleGroupIds = ['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs', 'pixibb']
+    const defaultChecked = new Set(['buondua', 'jrants', 'rrwsh', 'cangcuc'])
+    const googleChannel = new Set(googleGroupIds)
     const googleAllCheck = panel.querySelector('#bd-google-all') as HTMLInputElement
     let googleAll = false // Google 全站搜索开关状态
     googleAllCheck.addEventListener('change', () => {
@@ -499,28 +499,53 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     const disabledNotes: Record<string, string> = {
       imgbb: '无搜索（图床）',
     }
+    /** 不在 GALLERY_SITES 中的站点首页（FP-014 修复 6：imgbb 图床） */
+    const HOME_URLS: Record<string, string> = {
+      imgbb: 'imgbb.com',
+    }
     const renderSiteBoxes = (): void => {
       const renderGroup = (ids: string[], containerId: string): void => {
         const container = panel.querySelector(`#${containerId}`) as HTMLElement
         container.innerHTML = ids
           .map(
             (id) =>
-              `<label class="bd-site-check ${disabledNotes[id] ? 'disabled' : ''}" title="${disabledNotes[id] ?? ''}"><input type="checkbox" value="${id}" ${defaultChecked.has(id) ? 'checked' : ''} ${disabledNotes[id] ? 'disabled' : ''}> ${id}${googleChannel.has(id) ? '<span class="bd-site-note">（Google）</span>' : ''}${disabledNotes[id] ? `<span class="bd-site-note">（${disabledNotes[id]}）</span>` : ''}</label>`,
+              `<label class="bd-site-check ${disabledNotes[id] ? 'disabled' : ''}" title="${disabledNotes[id] ?? ''}"><input type="checkbox" value="${id}" ${defaultChecked.has(id) ? 'checked' : ''} ${disabledNotes[id] ? 'disabled' : ''}> <a class="bd-site-name" href="#" data-site="${id}" title="打开网站首页">${id}</a>${googleChannel.has(id) ? '<span class="bd-site-note">（Google）</span>' : ''}${disabledNotes[id] ? `<span class="bd-site-note">（${disabledNotes[id]}）</span>` : ''}</label>`,
           )
           .join('')
       }
-      // 站内搜索类：buondua/jrants/pixibb/rrwsh/cangcuc + imgbb（无搜索灰显，保留原列表提示）
-      renderGroup(['buondua', 'jrants', 'pixibb', 'rrwsh', 'cangcuc', 'imgbb'], 'bd-search-sites-site')
+      // 站内搜索类：buondua/jrants/rrwsh/cangcuc + imgbb（无搜索灰显，保留原列表提示）
+      renderGroup(['buondua', 'jrants', 'rrwsh', 'cangcuc', 'imgbb'], 'bd-search-sites-site')
       // Google 通道类：仅 Google 可搜
       renderGroup(googleGroupIds, 'bd-search-sites-google')
+      // 站点名点击 → 打开网站首页（FP-014 修复 6：点击名字跳首页，checkbox 勾选不受影响）
+      panel.querySelectorAll('.bd-site-boxes').forEach((box) => {
+        box.addEventListener('click', (ev) => {
+          const target = ev.target as HTMLElement
+          const link = target.closest('a.bd-site-name')
+          if (!link) return
+          ev.preventDefault()
+          ev.stopPropagation()
+          const siteId = link.getAttribute('data-site') || ''
+          const site = GALLERY_SITES.find((s) => s.id === siteId)
+          const host = site
+            ? site.hosts.find((h) => !/^(m|www|mobile)\./i.test(h)) ?? site.hosts[0]
+            : HOME_URLS[siteId]
+          if (host) void chrome.tabs.create({ url: `https://${host}` })
+        })
+      })
     }
     renderSiteBoxes()
-    const selectedSites = (): string[] => {
+    /** 分组勾选分流：返回站内组站点与 Google 组站点（FP-014 修复 2：Google 组站点显式标记，后台强制走 Google） */
+    const selectedSites = (): { sites: string[]; googleSites: string[] } => {
       if (googleAll) {
-        // Google 全站：全部已适配站点（含无站内搜索接口的站，FP-014）
-        return GALLERY_SITES.map((s) => s.id)
+        // Google 全站：全部已适配站点
+        return { sites: GALLERY_SITES.map((s) => s.id), googleSites: [] }
       }
-      return Array.from(panel.querySelectorAll<HTMLInputElement>('#bd-search-sites input[type="checkbox"]:checked')).map((c) => c.value)
+      const checked = Array.from(panel.querySelectorAll<HTMLInputElement>('.bd-site-boxes input[type="checkbox"]:checked')).map((c) => c.value)
+      return {
+        sites: checked,
+        googleSites: checked.filter((id) => googleChannel.has(id)),
+      }
     }
 
     let items: BuonduaLinkItem[] = [] // 平铺全站结果（跨站不去重，各站分栏展示）
@@ -693,7 +718,9 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         setStatus(statusEl, '请先进行一次聚合搜索', true)
         return
       }
-      const sites = selectedSites().filter((s) => siteHasResult.has(s))
+      const sel = selectedSites()
+      const sites = sel.sites.filter((s) => siteHasResult.has(s))
+      const googleSites = sel.googleSites.filter((s) => siteHasResult.has(s))
       if (sites.length === 0) {
         setStatus(statusEl, '没有可继续检索的站点（尚无结果），请重新搜索', true)
         return
@@ -702,7 +729,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       pendingSites = sites.length
       setStatus(statusEl, `继续检索「${query}」第 ${nextStartPage} 页起：${sites.join(' / ')}`)
       setBusy(true)
-      void sendMessage({ type: 'BD_SEARCH', srcTabId, query, sites, pagesPerSite: Number(pagesInput.value) || 2, startPage: nextStartPage, useGoogleAll: googleAll }).then((res) => {
+      void sendMessage({ type: 'BD_SEARCH', srcTabId, query, sites, pagesPerSite: Number(pagesInput.value) || 2, startPage: nextStartPage, useGoogleAll: googleAll, googleSites }).then((res) => {
         if (!res.ok) {
           setStatus(statusEl, `请求失败：${res.error}`, true)
           setBusy(false)
@@ -828,13 +855,13 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         setStatus(statusEl, '请输入搜索关键词', true)
         return
       }
-      const sites = selectedSites()
+      const { sites, googleSites } = selectedSites()
       if (sites.length === 0) {
         setStatus(statusEl, '请至少勾选一个搜索站点', true)
         return
       }
       lastQuery = query
-      logger.info('view', '聚合搜索发起', { query, sites, pagesPerSite: Number(pagesInput.value) || 2 })
+      logger.info('view', '聚合搜索发起', { query, sites, googleSites, pagesPerSite: Number(pagesInput.value) || 2 })
       if (!(await ensureHostPermission())) {
         setStatus(statusEl, '需要授权访问多页图站（<all_urls>）后才能搜索', true)
         return
@@ -850,7 +877,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       siteStatus.textContent = '搜索中（0/' + pendingSites + '）…'
       setStatus(statusEl, `聚合搜索「${query}」：${sites.join(' / ')}${googleAll ? '（Google 全站）' : ''}`)
       setBusy(true)
-      void sendMessage({ type: 'BD_SEARCH', srcTabId, query, sites, pagesPerSite: Number(pagesInput.value) || 2, useGoogleAll: googleAll }).then((res) => {
+      void sendMessage({ type: 'BD_SEARCH', srcTabId, query, sites, pagesPerSite: Number(pagesInput.value) || 2, useGoogleAll: googleAll, googleSites }).then((res) => {
         if (!res.ok) {
           setStatus(statusEl, `请求失败：${res.error}`, true)
           setBusy(false)

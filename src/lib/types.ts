@@ -136,6 +136,9 @@ export interface ProducerEntry {
   albumsTruncated?: boolean
   /** 相册名列表（确认时缓存，检索零请求本地匹配） */
   albums?: { name: string; url: string }[]
+  /** 手动星级评定（0~5，入度 Top 第 5 列点击评星；FP-015）
+   * 未设置 / 0 = 星级项计 0 分 */
+  starRating?: number
 }
 
 /** 确认+评分批次结果 */

@@ -83,7 +83,18 @@ export type Message =
   | { type: 'IMG_DB_EXPORT' }
   | { type: 'IMG_DB_IMPORT'; db: unknown }
   | { type: 'IMG_DB_RESET_CONFIRM' }
-  | { type: 'IMG_TAG_GET'; topN?: number }
+  // 手动星级评定（FP-015）：入度 Top 第 5 列点击评星，0 = 取消评星
+  // autoCreate（FP-017）：库外用户标星时自动建条目（入度 0）
+  | { type: 'IMG_DB_SET_STAR'; username: string; stars: number; autoCreate?: boolean }
+  // 单人星级查询（FP-017 悬浮窗：只读单条，不返回全库排行）
+  | { type: 'IMG_DB_GET_STAR'; username: string }
+  // 标星悬浮窗注入开关（FP-017：按需授权 imgbb 域 + 动态注册 content script）
+  | { type: 'STAR_OVERLAY_SET'; enabled: boolean }
+  | { type: 'STAR_OVERLAY_STATUS' }
+  | { type: 'IMG_TAG_GET'; topN?: number; minAlbums?: number; minUsers?: number; includeSlug?: boolean }
+  // 标签云自定义词典与屏蔽词（FP-016）
+  | { type: 'IMG_TAG_DICT_GET' }
+  | { type: 'IMG_TAG_DICT_SAVE'; tagDict: unknown }
   | { type: 'IMG_SCORE_BATCH'; srcTabId: number; batchSize: number; concurrency: number; intervalMs: number; order?: 'inDegree' | 'newest' | 'score'; w1?: number; w2?: number }
   | { type: 'IMG_SCORE_STOP' }
   | { type: 'IMG_SCORE_FULL'; username: string }
@@ -102,7 +113,8 @@ export type Message =
   // ---- 多页图站聚合搜索（FP-010/096）：grabber → bg ----
   // startPage：每站起始页（默认 1）；「下一批」续搜时传上次结束页 +1，结果追加扩充
   // useGoogleAll：Google 全站搜索开关（FP-013 调整：开启后全部站点走 Google sitesearch 网页通道，仅标题+链接，速度快）
-  | { type: 'BD_SEARCH'; srcTabId: number; query: string; sites: string[]; pagesPerSite: number; startPage?: number; useGoogleAll?: boolean }
+  // googleSites：Google 组站点（FP-014 修复：站内无结果的站强制走 Google，失败自动降级站内）
+  | { type: 'BD_SEARCH'; srcTabId: number; query: string; sites: string[]; pagesPerSite: number; startPage?: number; useGoogleAll?: boolean; googleSites?: string[] }
   // ---- 聚合搜索：Google 连接测试（FP-012）：grabber → bg ----
   | { type: 'BD_TEST_GOOGLE'; srcTabId: number }
   // ---- buondua 适配器：bg → grabber 推送 ----
@@ -153,11 +165,26 @@ export type MessageResponse =
       dist?: { label: string; count: number }[]
       topUsers?: { username: string; inDegree: number; url: string; score?: number; albumCount?: number; checked?: boolean }[]
       rankScore?: { username: string; url: string; inDegree: number; albumCount?: number; score: number; truncated?: boolean }[]
-      rankDegree?: { username: string; url: string; inDegree: number }[]
+      rankDegree?: { username: string; url: string; inDegree: number; starRating: number }[]
       rankAlbum?: { username: string; url: string; albumCount: number; inDegree: number; truncated?: boolean }[]
+      /** 手动星级设置结果（FP-015：返回落库后的星级） */
+      starRating?: number
+      /** 单人星级与库内状态（FP-017 悬浮窗） */
+      starInfo?: {
+        username: string
+        starRating: number
+        inDegree: number
+        albumCount?: number
+        albumsChecked: boolean
+        inLibrary: boolean
+      }
+      /** 标星悬浮窗状态（FP-017） */
+      overlay?: { enabled: boolean; registered: boolean }
       full?: { username: string; albumCount: number; truncated: boolean }
       cancelled?: boolean
       tags?: import('./tag-extract').TagStat[]
+      /** 自定义标签词典与屏蔽词（FP-016） */
+      tagDict?: import('./tag-extract').TagCustomDict
       score?: ScoreBatchResult
       search?: SearchBatchResult
       unconfirmed?: number

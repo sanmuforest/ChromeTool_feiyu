@@ -813,6 +813,34 @@ body {
   color: #ffc46b;
 }
 
+/* 手动星级评定（FP-015）：入度 Top 第 5 列（原相册数栏） */
+.degree-list .user-row {
+  grid-template-columns: 24px 1fr 46px 46px 66px;
+}
+
+.star-rate {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.star-rate .star {
+  color: #4a4f57;
+  font-size: 12px;
+  line-height: 1;
+  transition: color 0.1s;
+}
+
+.star-rate .star.on {
+  color: #e8c06a;
+}
+
+.star-rate .star:hover {
+  color: #ffc46b;
+}
+
 /* 检索结果（FP-005 模块 2） */
 /* 库构成行（FP-005） */
 .db-composition {
@@ -829,9 +857,95 @@ body {
 .tag-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 14px;
+  gap: 6px 8px;
   font-size: 12px;
   color: #888;
+}
+
+/* 分类筛选 chip（FP-016） */
+.tag-chip {
+  cursor: pointer;
+  padding: 1px 8px;
+  border: 1px solid #2f343a;
+  border-radius: 10px;
+  color: var(--chip, #9aa5b1);
+  user-select: none;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.tag-chip:hover {
+  border-color: var(--chip, #9aa5b1);
+}
+
+.tag-chip.on {
+  background: #23272c;
+  border-color: var(--chip, #9aa5b1);
+  font-weight: bold;
+}
+
+/* 屏蔽词列表 */
+.tag-blocked-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  font-size: 11px;
+  color: #777;
+  min-height: 0;
+}
+
+.blocked-tag {
+  cursor: pointer;
+  padding: 0 6px;
+  border: 1px dashed #4a4f57;
+  border-radius: 8px;
+  color: #8a8f97;
+}
+
+.blocked-tag:hover {
+  color: #e5646b;
+  border-color: #e5646b;
+}
+
+/* 分组标签卡片（FP-016） */
+.tag-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.tag-group {
+  border: 1px solid #2a2e33;
+  border-left: 3px solid var(--group, #4a9eff);
+  border-radius: 6px;
+  background: #17191d;
+  padding: 6px 8px;
+}
+
+.tag-group-head {
+  font-size: 12px;
+  color: var(--group, #4a9eff);
+  margin-bottom: 4px;
+}
+
+.tag-group-n {
+  color: #666;
+  font-size: 11px;
+}
+
+.tag-group-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+}
+
+.tag-empty {
+  font-size: 12px;
+  color: #777;
+  padding: 8px;
 }
 
 .tag-cloud {
@@ -856,6 +970,36 @@ body {
 .tag-cloud .tag:hover {
   transform: scale(1.12);
   text-shadow: 0 0 8px currentColor;
+}
+
+/* 标签 pill（分组视图）：点击检索，× 屏蔽（FP-016） */
+.tag-group .tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  line-height: 1.5;
+}
+
+.tag-group .tag:hover {
+  text-shadow: 0 0 8px currentColor;
+}
+
+.tag-group .tag .tag-x {
+  font-weight: normal;
+  font-size: 10px;
+  color: #555;
+  padding: 0 1px;
+  border-radius: 3px;
+}
+
+.tag-group .tag:hover .tag-x {
+  color: #8a8f97;
+}
+
+.tag-group .tag .tag-x:hover {
+  color: #e5646b;
+  background: #23272c;
 }
 
 
@@ -1423,6 +1567,16 @@ body {
 .bd-site-note {
   font-size: 10px;
   color: var(--muted, #888);
+}
+/* 站点名链接：点击跳转首页（FP-014 修复 6） */
+.bd-site-name {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+  font-weight: 600;
+}
+.bd-site-name:hover {
+  text-decoration: underline;
 }
 
 /* 聚合搜索结果：每站独立窗口（垂直并排，整行宽度，各自独立滚动，2026-08-14-099） */

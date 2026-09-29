@@ -63,7 +63,8 @@ export const GALLERY_SITES: GallerySiteConfig[] = [
   },
   {
     id: 'rrwsh',
-    hosts: ['rrwsh.uuss.uk', '4khd.com'],
+    // FP-014 修复 8：iftye.uuss.uk 为同体系镜像（uuss.uk 系，4khd 模板 /content/N/slug.html），加入后全套解析复用
+    hosts: ['rrwsh.uuss.uk', '4khd.com', 'iftye.uuss.uk'],
     containerOpen: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/,
     pagePattern: /Page\s+\d+\s+of\s+(\d+)/i,
     pageUrl: (base, page) => `${base}/${page}`,

@@ -8,9 +8,9 @@
 
 import { DownloadManager, arrayBufferToBase64, fetchImageBytes, fetchImgbbViaSrcTab } from '../lib/downloader'
 import { DiffuseEngine } from './imgbb-diffuse'
-import { emptyDb, loadDb, mergeInDegree, mergeDb, dbSummary, inDegreeDist, unconfirmedCandidates, unconfirmedCount, confirmedScored, matchAlbums, scoreTop, degreeTop, albumTop, resetConfirmations, PRODUCER_DB_KEY } from '../lib/producer-db'
+import { emptyDb, loadDb, mergeInDegree, mergeDb, dbSummary, inDegreeDist, unconfirmedCandidates, unconfirmedCount, confirmedScored, matchAlbums, scoreTop, degreeTop, albumTop, resetConfirmations, setStarRating, ensureEntry, starInfo, PRODUCER_DB_KEY } from '../lib/producer-db'
 import { normalizeConfig, pullDb, pushDb, GITHUB_CONFIG_KEY } from '../lib/github-sync'
-import { computeTags } from '../lib/tag-extract'
+import { computeTags, loadCustomDict, emptyCustomDict, type TagCustomDict } from '../lib/tag-extract'
 import type { GithubConfig } from '../lib/github-sync'
 import { parseAlbumItems, parseAlbumNextPage } from '../lib/imgbb-parse'
 import type { ProducerDb } from '../lib/producer-db'
@@ -114,6 +114,71 @@ const producerDbReady = (async (): Promise<void> => {
 })()
 /** 扩散状态持久化键（storage.session：SW 休眠/重启不丢，不写磁盘） */
 const DIFFUSE_STATE_KEY = 'diffuse_state'
+
+// ---------- 标签云自定义词典（FP-016） ----------
+
+/** 自定义标签词典与屏蔽词（storage 键 tag_custom） */
+const TAG_CUSTOM_KEY = 'tag_custom'
+let tagCustomDict: TagCustomDict = emptyCustomDict()
+const tagCustomReady = (async (): Promise<void> => {
+  tagCustomDict = loadCustomDict(await storageGet<unknown>(TAG_CUSTOM_KEY))
+})()
+
+// ---------- 标星悬浮窗（FP-017） ----------
+
+/** 悬浮窗开关（storage 键 star_overlay_enabled） */
+const STAR_OVERLAY_KEY = 'star_overlay_enabled'
+/** 动态注册的 content script id */
+const STAR_OVERLAY_ID = 'star-overlay'
+/** 注入范围：imgbb 用户页（*.imgbb.com）+ 相册详情页（ibb.co/album/*）
+ * 声明在 manifest 的 optional_host_permissions，用户点「启用」时才申请 */
+const STAR_OVERLAY_ORIGINS = ['*://*.imgbb.com/*', '*://ibb.co/*']
+
+/** 按当前权限注册悬浮窗内容脚本（幂等，权限未授予则返回 false） */
+async function registerStarOverlay(): Promise<boolean> {
+  try {
+    const granted = await chrome.permissions.contains({ origins: STAR_OVERLAY_ORIGINS })
+    if (!granted) return false
+    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [STAR_OVERLAY_ID] })
+    if (existing.length === 0) {
+      await chrome.scripting.registerContentScripts([
+        {
+          id: STAR_OVERLAY_ID,
+          matches: STAR_OVERLAY_ORIGINS,
+          js: ['js/star-overlay.js'],
+          runAt: 'document_idle',
+          allFrames: false,
+          persistAcrossSessions: true,
+        },
+      ])
+      logger.info('star', '标星悬浮窗已注册', { matches: STAR_OVERLAY_ORIGINS })
+    }
+    return true
+  } catch (err) {
+    logger.error('star', '标星悬浮窗注册失败', String(err))
+    return false
+  }
+}
+
+async function unregisterStarOverlay(): Promise<void> {
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: [STAR_OVERLAY_ID] })
+    logger.info('star', '标星悬浮窗已注销')
+  } catch {
+    // 未注册过：忽略
+  }
+}
+
+/** 启动校验：开关为开但注册丢失（扩展更新/权限撤销）时补注册，权限失效则关掉开关 */
+void (async (): Promise<void> => {
+  const enabled = await storageGet<boolean>(STAR_OVERLAY_KEY)
+  if (!enabled) return
+  const ok = await registerStarOverlay()
+  if (!ok) {
+    await storageSet(STAR_OVERLAY_KEY, false)
+    logger.warn('star', '标星悬浮窗权限已失效，开关置为关闭')
+  }
+})()
 
 /** 消息处理前恢复扩散状态（SW 重启后续跑） */
 async function ensureDiffuseRestored(): Promise<void> {
@@ -623,6 +688,22 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
         rankAlbum,
       }
     }
+    // ---- 手动星级评定（FP-015）：入度 Top 第 5 列点击评星 → 写库并立即持久化 ----
+    case 'IMG_DB_SET_STAR': {
+      await producerDbReady
+      // FP-017：悬浮窗在库外用户上标星 → 自动建条目（入度 0，来源 star）
+      if (message.autoCreate) producerDb = ensureEntry(producerDb, message.username, 'star')
+      producerDb = setStarRating(producerDb, message.username, message.stars)
+      await storageSet(PRODUCER_DB_KEY, producerDb)
+      const stars = producerDb.entries[message.username]?.starRating ?? 0
+      logger.info('score', '手动星级已设置', { username: message.username, stars, autoCreate: !!message.autoCreate })
+      return { ok: true, starRating: stars, starInfo: starInfo(producerDb, message.username) }
+    }
+    // ---- 单人星级查询（FP-017 悬浮窗：只读单条，避免拉全库排行） ----
+    case 'IMG_DB_GET_STAR': {
+      await producerDbReady
+      return { ok: true, starInfo: starInfo(producerDb, message.username) }
+    }
     case 'IMG_DB_SAVE': {
       await producerDbReady
       await storageSet(PRODUCER_DB_KEY, producerDb)
@@ -650,9 +731,58 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
     }
     case 'IMG_TAG_GET': {
       await producerDbReady
-      const tags = computeTags(Object.values(producerDb.entries), message.topN ?? 100)
-      logger.info('tag', '标签云统计完成', { tags: tags.length, topN: message.topN ?? 100 })
+      await tagCustomReady
+      const tags = computeTags(Object.values(producerDb.entries), {
+        topN: message.topN ?? 200,
+        minAlbums: message.minAlbums ?? 5,
+        minUsers: message.minUsers ?? 1,
+        custom: tagCustomDict,
+        includeSlug: !!message.includeSlug,
+      })
+      logger.info('tag', '标签云统计完成', {
+        tags: tags.length,
+        topN: message.topN ?? 200,
+        minAlbums: message.minAlbums ?? 5,
+        minUsers: message.minUsers ?? 1,
+        custom: tagCustomDict.entries.length,
+        blocked: tagCustomDict.blocked.length,
+      })
       return { ok: true, tags }
+    }
+    // ---- 标签云：自定义词典与屏蔽词（FP-016） ----
+    case 'IMG_TAG_DICT_GET': {
+      await tagCustomReady
+      return { ok: true, tagDict: tagCustomDict }
+    }
+    case 'IMG_TAG_DICT_SAVE': {
+      tagCustomDict = loadCustomDict(message.tagDict)
+      await storageSet(TAG_CUSTOM_KEY, tagCustomDict)
+      logger.info('tag', '自定义标签词典已保存', {
+        entries: tagCustomDict.entries.length,
+        blocked: tagCustomDict.blocked.length,
+      })
+      return { ok: true, tagDict: tagCustomDict }
+    }
+    // ---- 标星悬浮窗开关（FP-017） ----
+    case 'STAR_OVERLAY_STATUS': {
+      const enabled = (await storageGet<boolean>(STAR_OVERLAY_KEY)) === true
+      const regs = await chrome.scripting
+        .getRegisteredContentScripts({ ids: [STAR_OVERLAY_ID] })
+        .catch(() => [] as chrome.scripting.RegisteredContentScript[])
+      return { ok: true, overlay: { enabled, registered: regs.length > 0 } }
+    }
+    case 'STAR_OVERLAY_SET': {
+      if (message.enabled) {
+        const ok = await registerStarOverlay()
+        await storageSet(STAR_OVERLAY_KEY, ok)
+        const regs = await chrome.scripting
+          .getRegisteredContentScripts({ ids: [STAR_OVERLAY_ID] })
+          .catch(() => [] as chrome.scripting.RegisteredContentScript[])
+        return { ok: true, overlay: { enabled: ok, registered: regs.length > 0 } }
+      }
+      await unregisterStarOverlay()
+      await storageSet(STAR_OVERLAY_KEY, false)
+      return { ok: true, overlay: { enabled: false, registered: false } }
     }
     case 'IMG_DB_IMPORT': {
       await producerDbReady
@@ -927,6 +1057,7 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
           },
           message.startPage ?? 1,
           message.useGoogleAll === true,
+          message.googleSites ?? [],
         )
         await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'search', data: [], done: true })
       } catch (err) {

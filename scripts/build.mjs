@@ -9,6 +9,7 @@ const ENTRIES = {
   'js/background.js': 'src/background/background.ts',
   'js/grabber.js': 'src/grabber/grabber.ts',
   'js/content.js': 'src/content/image-scanner.ts',
+  'js/star-overlay.js': 'src/content/star-overlay.ts',
 }
 
 const STATIC_FILES = [

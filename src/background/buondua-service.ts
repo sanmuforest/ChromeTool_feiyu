@@ -31,9 +31,10 @@ const CONCURRENCY = 3 // 批量抓取并发（用户确认）
 
 export class BuonduaService {
   /** Google 全站模式：为无 sitesearch 配置的站点构造 Google sitesearch 搜索配置（FP-013 调整）
-   *  gbv=1 强制基础 HTML 版；结果提取走 searchGoogleViaTab（标签页 + executeScript，仅标题+链接） */
+   *  gbv=1 强制基础 HTML 版；结果提取走 searchGoogleViaTab（标签页 + executeScript，仅标题+链接）
+   *  FP-014：优先主域（m./www./mobile. 子域 Google 索引差，如 phimvuspot 用 phimvuspot.com 而非 m. 版） */
   private googleSearchConfig(site: GallerySiteConfig): GallerySiteConfig {
-    const host = site.hosts[0] ?? site.id
+    const host = site.hosts.find((h) => !/^(m|www|mobile)\./i.test(h)) ?? site.hosts[0] ?? site.id
     return {
       ...site,
       searchUrl: (q, page) =>
@@ -41,6 +42,39 @@ export class BuonduaService {
           page > 1 ? `&start=${(page - 1) * 10}` : ''
         }`,
     }
+  }
+
+  /** 站内搜索接口 fetch（FP-014 抽取：Google 降级与普通站内分支共用）：
+   *  jrants 页间强制间隔防限流；反爬拦截页跳过；无结果提前 break */
+  private async fetchSiteSearch(
+    site: GallerySiteConfig,
+    query: string,
+    pagesPerSite: number,
+    startPage: number,
+  ): Promise<{ items: BuonduaLinkItem[]; pages: number; error?: string }> {
+    const items: BuonduaLinkItem[] = []
+    let pages = 0
+    let error: string | undefined
+    for (let page = startPage; page < startPage + pagesPerSite; page++) {
+      const url = site.searchUrl?.(query, page)
+      if (!url) break
+      // jrants 连续快速搜索触发反爬限流（实测 2026-08-13/14），页间强制间隔
+      if (site.id === 'jrants' && page > 1) await sleep(2000)
+      const html = await this.fetchHtml(url)
+      pages++
+      if (isBlockedPage(html)) {
+        // 反爬拦截页：跳过该站（避免把热门/推荐链接当搜索结果）
+        error = '搜索被反爬拦截（限流），请稍后重试'
+        logger.warn('buondua', '站点搜索被反爬拦截', { site: site.id, len: html.length })
+        break
+      }
+      const parsed = parseLinksForSite(site.id, html, url)
+      if (parsed.length === 0) {
+        break // 无更多结果
+      }
+      items.push(...parsed)
+    }
+    return { items, pages, error }
   }
 
   /** Google 通道：页面降级搜索（FP-012/093）——后台静默打开 Google 搜索标签（真实浏览器 JS 渲染），
@@ -60,7 +94,7 @@ export class BuonduaService {
       if (!url) break
       const tab = await chrome.tabs.create({ url, active: false })
       try {
-        const ok = await this.waitForTabComplete(tab.id!)
+        const ok = await this.waitForTabComplete(tab.id!, 12000)
         if (!ok) {
           logger.warn('buondua', 'Google 标签页加载超时', { site: site.id, page })
           break
@@ -104,8 +138,8 @@ export class BuonduaService {
       .executeScript({
         target: { tabId },
         func: async () => {
-          // 等待结果渲染（最多 ~12s，500ms 轮询）
-          for (let i = 0; i < 24; i++) {
+          // 等待结果渲染（最多 ~8s，500ms 轮询；缩短防无响应卡死，FP-014 修复 5）
+          for (let i = 0; i < 16; i++) {
             if (document.querySelector('a.zReHs, h3.r')) break
             if (document.title.includes('未找到') || /did not match|No results found/i.test(document.body?.innerText ?? '')) break
             await new Promise((r) => setTimeout(r, 500))
@@ -293,7 +327,8 @@ export class BuonduaService {
    *  startPage：每站起始页（「下一批」续搜传上次结束页 +1，096）
    *  onSite：每站完成后回调（推送该站结果，增量展示）；返回全部合并去重结果
    *  useGoogleAll：Google 全站搜索开关（FP-013 调整）——开启后全部站点走 Google sitesearch
-   *  网页通道（标签页渲染，仅标题+链接，同站去重，速度快）；不读站内搜索接口 */
+   *  网页通道（标签页渲染，仅标题+链接，同站去重，速度快）；不读站内搜索接口
+   *  googleSites：Google 组站点（FP-014）——这些站优先走 Google，失败自动降级站内 */
   async searchSites(
     query: string,
     sites: string[],
@@ -301,6 +336,7 @@ export class BuonduaService {
     onSite: (siteId: string, items: BuonduaLinkItem[], error?: string) => Promise<void> | void,
     startPage = 1,
     useGoogleAll = false,
+    googleSites: string[] = [],
   ): Promise<BuonduaLinkItem[]> {
     const mergedMap = new Map<string, BuonduaLinkItem>()
     const siteStats: Record<string, { count: number; pages: number; error?: string }> = {}
@@ -315,36 +351,36 @@ export class BuonduaService {
       let error: string | undefined
       let pagesFetched = 0
       try {
-        // Google 通道站点（searchAlbumPath）或 Google 全站模式（useGoogleAll）：
+        // Google 通道站点（searchAlbumPath）或 Google 全站模式（useGoogleAll）或无站内搜索接口的站（isGoogleOnly）或
+        // Google 组站点（googleSites 显式指定，FP-014：pixibb/rrwsh/cangcuc 站内无结果 → 强制 Google 优先，失败降级站内）：
         // 后台 fetch 拿不到新版 Google 结果（JS 渲染壳），走页面降级通道（静默开标签渲染 + 提取，FP-012/093）
-        if (site.searchAlbumPath || useGoogleAll) {
-          const googleSite = useGoogleAll && !site.searchAlbumPath ? this.googleSearchConfig(site) : site
+        const isGoogleOnly = !site.searchUrl && !site.searchAlbumPath
+        if (site.searchAlbumPath || useGoogleAll || isGoogleOnly || googleSites.includes(siteId)) {
+          const googleSite = useGoogleAll || isGoogleOnly || googleSites.includes(siteId) ? this.googleSearchConfig(site) : site
           const tabRes = await this.searchGoogleViaTab(googleSite, query, pagesPerSite, startPage)
           pagesFetched = tabRes.pages
           for (const item of tabRes.items) items.push(item)
-          if (tabRes.items.length === 0) {
+          // FP-014 修复：Google 通道失败（0 结果，多为成人站触发 Google 安全拦截页）且该站有站内
+          // 搜索接口 → 自动降级站内 fetch（Google 全站模式下老站 buondua/rrwsh/jrants 等的救回路）
+          if (tabRes.items.length === 0 && site.searchUrl) {
+            logger.info('buondua', 'Google 通道无结果，降级站内搜索', { site: siteId, query })
+            const fallback = await this.fetchSiteSearch(site, query, pagesPerSite, startPage)
+            pagesFetched = Math.max(pagesFetched, fallback.pages)
+            for (const item of fallback.items) items.push(item)
+            if (fallback.items.length > 0) {
+              error = undefined // 降级成功：清掉 Google 错误提示
+            } else if (fallback.error) {
+              error = fallback.error
+            }
+          }
+          if (tabRes.items.length === 0 && items.length === 0 && !error) {
             error = 'Google 标签页未提取到相册结果（可能验证页/无匹配，日志含诊断）'
           }
         } else {
-          for (let page = startPage; page < startPage + pagesPerSite; page++) {
-            const url = site.searchUrl?.(query, page)
-            if (!url) break
-            // jrants 连续快速搜索触发反爬限流（实测 2026-08-13/14），页间强制间隔
-            if (siteId === 'jrants' && page > 1) await sleep(2000)
-            const html = await this.fetchHtml(url)
-            pagesFetched++
-            if (isBlockedPage(html)) {
-              // 反爬拦截页：跳过该站（避免把热门/推荐链接当搜索结果）
-              error = '搜索被反爬拦截（限流），请稍后重试'
-              logger.warn('buondua', '站点搜索被反爬拦截', { site: siteId, len: html.length })
-              break
-            }
-            const parsed = parseLinksForSite(siteId, html, url)
-            if (parsed.length === 0) {
-              break // 无更多结果
-            }
-            items.push(...parsed)
-          }
+          const fallback = await this.fetchSiteSearch(site, query, pagesPerSite, startPage)
+          pagesFetched = fallback.pages
+          for (const item of fallback.items) items.push(item)
+          if (fallback.error) error = fallback.error
         }
       } catch (err) {
         error = String(err)

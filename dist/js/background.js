@@ -696,8 +696,15 @@
   var PRODUCER_DB_VERSION = 1;
   var DEFAULT_SCORE_W1 = 0.6;
   var DEFAULT_SCORE_W2 = 0.4;
+  var STAR_WEIGHT = 0.5;
+  var MAX_STARS = 5;
   function emptyDb() {
     return { version: PRODUCER_DB_VERSION, updatedAt: Date.now(), entries: {} };
+  }
+  function clampStars(n) {
+    const v = Math.round(Number(n));
+    if (!Number.isFinite(v)) return 0;
+    return Math.max(0, Math.min(MAX_STARS, v));
   }
   function loadDb(raw) {
     if (raw && typeof raw === "object" && typeof raw.entries === "object") {
@@ -705,12 +712,52 @@
       const cleaned = {};
       for (const [k, v] of Object.entries(entries)) {
         if (v && typeof v.username === "string" && typeof v.inDegree === "number") {
-          cleaned[k] = v;
+          const copy = { ...v };
+          if (copy.starRating !== void 0) {
+            const stars = clampStars(copy.starRating);
+            if (stars > 0) copy.starRating = stars;
+            else delete copy.starRating;
+          }
+          cleaned[k] = copy;
         }
       }
       return { version: PRODUCER_DB_VERSION, updatedAt: Date.now(), entries: cleaned };
     }
     return emptyDb();
+  }
+  function ensureEntry(db, username, source = "star", now = Date.now()) {
+    if (db.entries[username]) return db;
+    return {
+      ...db,
+      updatedAt: now,
+      entries: {
+        ...db.entries,
+        [username]: { username, inDegree: 0, firstSeenAt: now, lastSeenAt: now, sources: [source] }
+      }
+    };
+  }
+  function starInfo(db, username) {
+    const e = db.entries[username];
+    return {
+      username,
+      starRating: e ? clampStars(e.starRating) : 0,
+      inDegree: e?.inDegree ?? 0,
+      albumCount: e?.albumsChecked ? e.albumCount : void 0,
+      albumsChecked: !!e?.albumsChecked,
+      inLibrary: !!e
+    };
+  }
+  function setStarRating(db, username, stars) {
+    const prev = db.entries[username];
+    if (!prev) return db;
+    const value = clampStars(stars);
+    const entries = { ...db.entries };
+    if (value > 0) entries[username] = { ...prev, starRating: value };
+    else {
+      const { starRating: _drop, ...rest } = prev;
+      entries[username] = rest;
+    }
+    return { ...db, updatedAt: Date.now(), entries };
   }
   function mergeInDegree(db, delta, source, now = Date.now()) {
     const entries = { ...db.entries };
@@ -742,7 +789,9 @@
           sources: Array.from(/* @__PURE__ */ new Set([...prev.sources, ...entry.sources])).slice(-20),
           albumCount: entry.albumCount ?? prev.albumCount,
           albumsChecked: prev.albumsChecked || entry.albumsChecked || void 0,
-          albums: entry.albums ?? prev.albums
+          albums: entry.albums ?? prev.albums,
+          // 星级为人工评定：本地已评则保留本地，本地未评才采纳外部
+          starRating: prev.starRating ?? entry.starRating
         };
       } else {
         merged[username] = { ...entry };
@@ -756,7 +805,9 @@
   }
   function computeScore(entry, maxInDegree, maxAlbumCount, w1 = DEFAULT_SCORE_W1, w2 = DEFAULT_SCORE_W2) {
     const albumCount = entry.albumsChecked ? entry.albumCount ?? 0 : 0;
-    return w1 * logNorm(entry.inDegree, maxInDegree) + w2 * logNorm(albumCount, maxAlbumCount);
+    const base = w1 * logNorm(entry.inDegree, maxInDegree) + w2 * logNorm(albumCount, maxAlbumCount);
+    const star = clampStars(entry.starRating) / MAX_STARS;
+    return STAR_WEIGHT * star + (1 - STAR_WEIGHT) * base;
   }
   function collectStats(db) {
     let maxInDegree = 0;
@@ -806,7 +857,12 @@
     })).sort((a, b) => b.score - a.score).slice(0, Math.max(0, n));
   }
   function degreeTop(db, n) {
-    return Object.values(db.entries).sort((a, b) => b.inDegree - a.inDegree).slice(0, Math.max(0, n)).map((e) => ({ username: e.username, url: `https://${e.username}.imgbb.com`, inDegree: e.inDegree }));
+    return Object.values(db.entries).sort((a, b) => b.inDegree - a.inDegree).slice(0, Math.max(0, n)).map((e) => ({
+      username: e.username,
+      url: `https://${e.username}.imgbb.com`,
+      inDegree: e.inDegree,
+      starRating: clampStars(e.starRating)
+    }));
   }
   function albumTop(db, n) {
     return Object.values(db.entries).filter((e) => e.albumsChecked && (e.albumCount ?? 0) > 0).sort((a, b) => (b.albumCount ?? 0) - (a.albumCount ?? 0)).slice(0, Math.max(0, n)).map((e) => ({ username: e.username, url: `https://${e.username}.imgbb.com`, albumCount: e.albumCount ?? 0, inDegree: e.inDegree, truncated: e.albumsTruncated }));
@@ -927,150 +983,350 @@
     return decodeURIComponent(escape(atob(b64)));
   }
 
-  // src/lib/tag-extract.ts
-  var TAG_MIN_ALBUMS = 10;
-  var TAG_MIN_USERS = 2;
-  var TAG_DEFAULT_TOP = 100;
-  var BRANDS = [
-    "tokyo hot",
-    "pornbox",
-    "jav",
-    "spermmania",
-    "pacific girls",
-    "pacificgirls",
-    "blacksonblondes",
-    "fellatiojapan",
-    "dpdiva",
-    "\u79C0\u4EBA\u7F51",
-    "ugirls",
-    "miko\u9171",
-    "little red",
-    "popdaily"
+  // src/lib/tag-dict.ts
+  var TAG_CATEGORY_LABEL = {
+    ip: "\u4F5C\u54C1\u89D2\u8272",
+    theme: "\u4E3B\u9898",
+    scene: "\u573A\u666F",
+    clothes: "\u670D\u88C5",
+    fetish: "\u604B\u7269",
+    act: "\u884C\u4E3A\u73A9\u6CD5",
+    prop: "\u9053\u5177",
+    body: "\u8EAB\u6750\u7279\u5F81",
+    relation: "\u5173\u7CFB\u4EBA\u6570",
+    japanese: "\u6F14\u5458",
+    korean: "\u97E9\u8BED",
+    brand: "\u54C1\u724C",
+    english: "\u82F1\u6587",
+    at: "\u5F15\u7528"
+  };
+  var TAG_DICT = [
+    // ---------- 服装 clothes ----------
+    { t: "\u4E1D\u889C", c: "clothes", syn: ["\u9ED1\u4E1D", "\u767D\u4E1D", "\u7F51\u889C", "\u6E14\u7F51\u889C", "\u8FDE\u88E4\u889C", "\u88E4\u889C", "\u540A\u5E26\u889C", "\u957F\u889C", "stockings", "pantyhose", "tights", "pantyhose", "\u7DB2\u30BF\u30A4\u30C4", "\u30B9\u30C8\u30C3\u30AD\u30F3\u30B0"] },
+    { t: "\u5185\u8863", c: "clothes", syn: ["\u6587\u80F8", "\u80F8\u7F69", "\u5185\u88E4", "underwear", "lingerie", "bra", "panties", "knickers", "\u4E0B\u7740", "\u30E9\u30F3\u30B8\u30A7\u30EA\u30FC", "\uBE0C\uB77C"] },
+    { t: "\u857E\u4E1D", c: "clothes", syn: ["lace", "\u30EC\u30FC\u30B9", "\uB808\uC774\uC2A4"] },
+    { t: "\u6CF3\u88C5", c: "clothes", syn: ["\u6CF3\u8863", "\u6BD4\u57FA\u5C3C", "\u6B7B\u5E93\u6C34", "\u6C34\u7740", "swimsuit", "bikini", "swimwear", "one-piece swimsuit", "\u30B9\u30AF\u6C34", "\uBE44\uD0A4\uB2C8"] },
+    { t: "\u5236\u670D", c: "clothes", syn: ["\u6821\u670D", "\u6C34\u624B\u670D", "uniform", "school uniform", "sailor uniform", "seifuku", "\u5236\u670D", "\u30BB\u30FC\u30E9\u30FC\u670D", "\uAD50\uBCF5"] },
+    { t: "OL\u88C5", c: "clothes", syn: ["ol", "office lady", "\u804C\u4E1A\u88C5", "ol\u5236\u670D", "\u5305\u81C0\u88D9", "\u94C5\u7B14\u88D9", "pencil skirt"] },
+    { t: "\u62A4\u58EB\u88C5", c: "clothes", syn: ["\u62A4\u58EB", "nurse", "nurse outfit", "\u30CA\u30FC\u30B9", "\uAC04\uD638\uC0AC"] },
+    { t: "\u5973\u4EC6\u88C5", c: "clothes", syn: ["\u5973\u4EC6", "maid", "maid outfit", "\u30E1\u30A4\u30C9", "\uBA54\uC774\uB4DC"] },
+    { t: "\u5154\u5973\u90CE", c: "clothes", syn: ["bunny", "bunny girl", "playboy bunny", "\u30D0\u30CB\u30FC\u30AC\u30FC\u30EB"] },
+    { t: "\u65D7\u888D", c: "clothes", syn: ["qipao", "cheongsam", "\u30C1\u30E3\u30A4\u30CA\u30C9\u30EC\u30B9", "\uCE58\uD30C\uC624"] },
+    { t: "\u548C\u670D", c: "clothes", syn: ["\u6D74\u8863", "kimono", "yukata", "\u7740\u7269", "\u6D74\u8863"] },
+    { t: "\u5A5A\u7EB1", c: "clothes", syn: ["\u82B1\u5AC1", "wedding dress", "bridal", "\u30A6\u30A7\u30C7\u30A3\u30F3\u30B0\u30C9\u30EC\u30B9", "\uC6E8\uB529\uB4DC\uB808\uC2A4"] },
+    { t: "\u7761\u8863", c: "clothes", syn: ["\u7761\u8863\u88E4", "pajamas", "pyjamas", "nightwear", "nightgown", "\u30D1\u30B8\u30E3\u30DE", "\uC7A0\uC637"] },
+    { t: "\u7D27\u8EAB\u8863", c: "clothes", syn: ["\u8FDE\u4F53\u8863", "bodysuit", "leotard", "body stocking", "\u30DC\u30C7\u30A3\u30B9\u30FC\u30C4"] },
+    { t: "\u4F53\u64CD\u670D", c: "clothes", syn: ["\u4F53\u80B2\u670D", "gym uniform", "gym suit", "\u30D6\u30EB\u30DE", "\uCCB4\uC721\uBCF5"] },
+    { t: "\u76AE\u8863", c: "clothes", syn: ["\u76AE\u88D9", "\u76AE\u88E4", "leather jacket", "leather skirt", "leather pants"] },
+    { t: "\u77ED\u88D9", c: "clothes", syn: ["\u8FF7\u4F60\u88D9", "\u767E\u8936\u88D9", "miniskirt", "pleated skirt", "\u30DE\u30A4\u30AF\u30ED\u30DF\u30CB"] },
+    { t: "\u70ED\u88E4", c: "clothes", syn: ["\u77ED\u88E4", "\u725B\u4ED4\u77ED\u88E4", "shorts", "hot pants", "denim shorts"] },
+    { t: "\u957F\u88D9", c: "clothes", syn: ["\u8FDE\u8863\u88D9", "\u88D9\u5B50", "dress", "long skirt", "\u30EF\u30F3\u30D4\u30FC\u30B9"] },
+    { t: "\u9AD8\u8DDF\u978B", c: "clothes", syn: ["\u9AD8\u8DDF", "\u7EC6\u8DDF", "heels", "high heels", "stilettos", "\u30CF\u30A4\u30D2\u30FC\u30EB", "\uD558\uC774\uD790"] },
+    { t: "\u957F\u9774", c: "clothes", syn: ["\u77ED\u9774", "\u8FC7\u819D\u9774", "\u9A6C\u4E01\u9774", "boots", "knee boots", "thigh boots", "\u30D6\u30FC\u30C4"] },
+    { t: "\u51C9\u978B", c: "clothes", syn: ["sandals", "\u30B5\u30F3\u30C0\u30EB"] },
+    { t: "\u88F8\u8DB3", c: "clothes", syn: ["\u7389\u8DB3", "\u8DB3\u88CF", "\u7F8E\u8DB3", "barefoot", "bare feet", "\u8DB3\u30B3\u30AD", "\u7D20\u8DB3", "\uB9E8\uBC1C"] },
+    { t: "\u624B\u5957", c: "clothes", syn: ["gloves", "\u624B\u888B", "\uC7A5\uAC11"] },
+    { t: "\u5E3D\u5B50", c: "clothes", syn: ["\u8D1D\u96F7\u5E3D", "\u68D2\u7403\u5E3D", "hat", "cap", "beret", "\u5E3D\u5B50", "\uBAA8\uC790"] },
+    { t: "\u56F4\u5DFE", c: "clothes", syn: ["\u4E1D\u5DFE", "scarf", "\u30DE\u30D5\u30E9\u30FC"] },
+    { t: "\u6BDB\u8863", c: "clothes", syn: ["\u9488\u7EC7\u886B", "sweater", "knitwear", "cardigan", "\u30CB\u30C3\u30C8"] },
+    { t: "\u886C\u886B", c: "clothes", syn: ["\u767D\u886C\u886B", "shirt", "blouse", "\u30EF\u30A4\u30B7\u30E3\u30C4", "\uC154\uCE20"] },
+    { t: "\u536B\u8863", c: "clothes", syn: ["hoodie", "sweatshirt", "\u30D1\u30FC\u30AB\u30FC"] },
+    { t: "\u98CE\u8863", c: "clothes", syn: ["\u5927\u8863", "\u5916\u5957", "coat", "trench coat", "jacket", "\u30B3\u30FC\u30C8"] },
+    { t: "\u6597\u7BF7", c: "clothes", syn: ["\u62AB\u98CE", "cloak", "cape", "\u30DE\u30F3\u30C8"] },
+    { t: "\u9886\u5E26", c: "clothes", syn: ["\u9886\u7ED3", "\u8774\u8776\u7ED3", "necktie", "necktie", "bow tie", "ribbon tie", "\u30CD\u30AF\u30BF\u30A4"] },
+    { t: "\u540A\u5E26", c: "clothes", syn: ["\u80CC\u5FC3", "camisole", "tank top", "\u30AD\u30E3\u30DF\u30BD\u30FC\u30EB"] },
+    { t: "\u6C49\u670D", c: "clothes", syn: ["\u53E4\u88C5", "hanfu", "ancient costume", "\u4E2D\u83EF\u670D"] },
+    { t: "\u8FD0\u52A8\u88C5", c: "clothes", syn: ["\u745C\u4F3D\u88E4", "sportswear", "yoga pants", "leggings", "track suit", "\u30B9\u30DD\u30FC\u30C4\u30A6\u30A7\u30A2"] },
+    { t: "\u725B\u4ED4\u88E4", c: "clothes", syn: ["\u725B\u4ED4", "jeans", "denim", "\u30B8\u30FC\u30F3\u30BA"] },
+    { t: "\u4E01\u5B57\u88E4", c: "clothes", syn: ["thong", "g-string", "g string", "t-back", "T\u30D0\u30C3\u30AF"] },
+    { t: "\u8FDE\u4F53\u889C", c: "clothes", syn: ["bodystocking", "body stocking", "\u5168\u8EAB\u30BF\u30A4\u30C4"] },
+    { t: "\u767D\u5927\u8902", c: "clothes", syn: ["\u533B\u751F", "lab coat", "doctor", "\u767D\u8863"] },
+    { t: "\u7A7A\u59D0\u88C5", c: "clothes", syn: ["\u7A7A\u59D0", "flight attendant", "cabin crew", "ca uniform"] },
+    { t: "\u8B66\u5BDF\u88C5", c: "clothes", syn: ["\u8B66\u5B98", "\u8B66\u5BDF", "police", "police uniform", "\u8B66\u5B98\u670D"] },
+    { t: "\u519B\u88C5", c: "clothes", syn: ["\u519B\u670D", "military uniform", "army", "army uniform", "\u30DF\u30EA\u30BF\u30EA\u30FC"] },
+    { t: "\u4FEE\u5973\u670D", c: "clothes", syn: ["\u4FEE\u5973", "nun", "nun outfit", "\u30B7\u30B9\u30BF\u30FC"] },
+    { t: "\u5DEB\u5973\u670D", c: "clothes", syn: ["\u5DEB\u5973", "miko", "shrine maiden", "\u5DEB\u5973\u88C5\u675F"] },
+    { t: "\u77ED\u889C", c: "clothes", syn: ["\u4E2D\u7B52\u889C", "\u8239\u889C", "\u5206\u8DBE\u889C", "ankle socks", "socks", "\u30BD\u30C3\u30AF\u30B9", "\uC591\uB9D0"] },
+    { t: "\u809A\u515C", c: "clothes", syn: ["dudou", "belly cover"] },
+    { t: "\u5934\u7EB1", c: "clothes", syn: ["\u9762\u7EB1", "veil", "head veil", "\u30D9\u30FC\u30EB"] },
+    { t: "\u675F\u8170", c: "clothes", syn: ["corset", "waist cincher", "\u30B3\u30EB\u30BB\u30C3\u30C8"] },
+    { t: "\u82AD\u857E\u821E\u88D9", c: "clothes", syn: ["\u82AD\u857E", "ballet", "tutu", "\u30D0\u30EC\u30A8"] },
+    { t: "\u6F5C\u6C34\u670D", c: "clothes", syn: ["wetsuit", "diving suit", "\u30A6\u30A7\u30C3\u30C8\u30B9\u30FC\u30C4"] },
+    // ---------- 恋物 fetish ----------
+    { t: "\u80F6\u8863", c: "fetish", syn: ["\u4E73\u80F6", "\u6A61\u80F6", "latex", "rubber", "pvc", "\u30E9\u30D0\u30FC"] },
+    { t: "\u675F\u7F1A", c: "fetish", syn: ["\u6346\u7ED1", "\u7EF3\u827A", "\u7EF3\u7F1A", "\u7D27\u7F1A", "bondage", "kinbaku", "shibari", "rope bondage", "\u7DCA\u7E1B"] },
+    { t: "\u9879\u5708", c: "fetish", syn: ["\u9888\u5708", "choker", "collar", "\u30C1\u30E7\u30FC\u30AB\u30FC", "\uBAA9\uAC78\uC774"] },
+    { t: "\u53E3\u7403", c: "fetish", syn: ["\u53E3\u585E", "\u53E3\u67B7", "ball gag", "gag", "\u30DC\u30FC\u30EB\u30AE\u30E3\u30B0"] },
+    { t: "\u624B\u94D0", c: "fetish", syn: ["\u9563\u94D0", "\u624B\u62F7", "handcuffs", "cuffs", "\u624B\u9320"] },
+    { t: "\u773C\u7F69", c: "fetish", syn: ["blindfold", "eye mask", "\u30A2\u30A4\u30DE\u30B9\u30AF"] },
+    { t: "\u76AE\u97AD", c: "fetish", syn: ["\u97AD\u5B50", "whip", "flogger", "\u97AD"] },
+    { t: "\u9501\u94FE", c: "fetish", syn: ["\u94C1\u94FE", "chain", "chains", "\u9396"] },
+    { t: "\u900F\u660E\u88C5", c: "fetish", syn: ["\u8584\u7EB1", "\u900F\u89C6", "transparent", "see-through", "sheer", "\u30B7\u30FC\u30B9\u30EB\u30FC"] },
+    { t: "\u6E7F\u8EAB", c: "fetish", syn: ["wetlook", "wet look", "wet body", "\u6FE1\u308C", "wet shirt"] },
+    { t: "\u88F8\u56F4\u88D9", c: "fetish", syn: ["naked apron", "\u88F8\u30A8\u30D7\u30ED\u30F3"] },
+    { t: "\u773C\u955C", c: "fetish", syn: ["\u773C\u93E1", "glasses", "megane", "\u30E1\u30AC\u30CD", "\uC548\uACBD"] },
+    { t: "\u732B\u8033", c: "fetish", syn: ["\u732B\u5A18", "\u5154\u8033", "\u72AC\u8033", "cat ears", "catgirl", "bunny ears", "nekomimi", "\u732B\u8033"] },
+    { t: "\u5C3E\u5DF4", c: "fetish", syn: ["tail", "\u5C3B\u5C3E", "\u30C6\u30FC\u30EB"] },
+    { t: "\u7FC5\u8180", c: "fetish", syn: ["wings", "wing", "\u7FFC"] },
+    { t: "\u7CBE\u7075\u8033", c: "fetish", syn: ["elf ears", "elf", "\u30A8\u30EB\u30D5\u8033"] },
+    { t: "\u7EB9\u8EAB", c: "fetish", syn: ["\u523A\u9752", "tattoo", "tattoos", "\u30BF\u30C8\u30A5\u30FC", "\uBB38\uC2E0"] },
+    { t: "\u7A7F\u5B54", c: "fetish", syn: ["\u820C\u9489", "\u8033\u73AF", "piercing", "piercings", "\u30D4\u30A2\u30B9"] },
+    { t: "\u4E1D\u5E26", c: "fetish", syn: ["\u7F0E\u5E26", "ribbon", "ribbons", "\u30EA\u30DC\u30F3"] },
+    { t: "\u4E73\u8D34", c: "fetish", syn: ["pasties", "pasties", "\u30CB\u30D7\u30EC\u30B9"] },
+    { t: "\u7EF7\u5E26", c: "fetish", syn: ["\u5305\u5E26", "bandage", "bandages", "\u5305\u5E2F"] },
+    { t: "\u8721\u70DB", c: "fetish", syn: ["\u6EF4\u8721", "candle", "wax play", "\u881F\u71ED"] },
+    { t: "\u51B0\u5757", c: "fetish", syn: ["ice", "ice cubes", "\u6C37"] },
+    { t: "\u5047\u53D1", c: "fetish", syn: ["wig", "wigs", "\u30A6\u30A3\u30C3\u30B0"] },
+    { t: "\u53E3\u7F69", c: "fetish", syn: ["\u9762\u7F69", "mouth mask", "face mask", "\u30DE\u30B9\u30AF"] },
+    { t: "\u5BA0\u7269\u88C5", c: "fetish", syn: ["\u5BA0\u7269", "pet play", "puppy play", "\u30B1\u30E2\u30CA\u30FC"] },
+    // ---------- 行为玩法 act ----------
+    { t: "\u81EA\u62CD", c: "act", syn: ["selfie", "self shot", "\u81EA\u62CD\u7167", "\uC140\uCE74"] },
+    { t: "\u9732\u51FA", c: "act", syn: ["\u91CE\u5916\u9732\u51FA", "\u6237\u5916\u9732\u51FA", "exhibitionism", "outdoor exposure", "public nudity", "\u9732\u51FA\u30D7\u30EC\u30A4"] },
+    { t: "\u6C90\u6D74", c: "act", syn: ["\u6DCB\u6D74", "\u6D17\u6FA1", "shower", "\u30B7\u30E3\u30EF\u30FC", "\uC0E4\uC6CC"] },
+    { t: "\u6CE1\u6FA1", c: "act", syn: ["\u6D74\u7F38", "\u5165\u6D74", "bath", "bathtub", "\u304A\u98A8\u5442", "\uC695\uC870"] },
+    { t: "\u6309\u6469", c: "act", syn: ["massage", "oil massage", "\u30DE\u30C3\u30B5\u30FC\u30B8", "\uB9C8\uC0AC\uC9C0"] },
+    { t: "\u745C\u4F3D", c: "act", syn: ["yoga", "\u30E8\u30AC", "\uC694\uAC00"] },
+    { t: "\u5065\u8EAB", c: "act", syn: ["\u8FD0\u52A8", "workout", "fitness", "training", "gym workout", "\u7B4B\u30C8\u30EC"] },
+    { t: "\u8DF3\u821E", c: "act", syn: ["\u821E\u8E48", "dance", "dancing", "\u30C0\u30F3\u30B9", "\uB304\uC2A4"] },
+    { t: "\u7761\u59FF", c: "act", syn: ["\u7761\u989C", "\u7761\u7720", "sleeping", "sleep", "\u5BDD\u9854", "\uC218\uBA74"] },
+    { t: "\u4F38\u5C55", c: "act", syn: ["\u62C9\u4F38", "stretching", "stretch", "\u30B9\u30C8\u30EC\u30C3\u30C1"] },
+    { t: "\u6362\u8863", c: "act", syn: ["\u6362\u88C5", "changing clothes", "undressing", "\u7740\u66FF\u3048"] },
+    { t: "\u66F4\u8863\u5BA4", c: "act", syn: ["locker room", "changing room", "\u8131\u8863\u6240"] },
+    { t: "\u8214", c: "act", syn: ["\u8214\u8DB3", "licking", "lick", "\u8210\u3081"] },
+    { t: "\u4EB2\u543B", c: "act", syn: ["\u63A5\u543B", "\u6E7F\u543B", "kiss", "kissing", "deep kiss", "\u30AD\u30B9"] },
+    { t: "\u62E5\u62B1", c: "act", syn: ["hug", "hugging", "embrace", "\u30CF\u30B0"] },
+    { t: "\u8DEA\u59FF", c: "act", syn: ["\u8DEA", "kneeling", "kneel", "\u571F\u4E0B\u5EA7", "\u3072\u3056\u307E\u305A\u304F"] },
+    { t: "\u5367\u59FF", c: "act", syn: ["\u8DB4\u59FF", "lying", "lying down", "on all fours", "\u5BDD\u305D\u3079\u308A"] },
+    { t: "\u629A\u6478", c: "act", syn: ["\u4E92\u6478", "touching", "caress", "fondling", "\u611B\u64AB"] },
+    { t: "\u81EA\u6170", c: "act", syn: ["masturbation", "masturbating", "\u30AA\u30CA\u30CB\u30FC", "\uC790\uC704"] },
+    { t: "\u53E3\u4EA4", c: "act", syn: ["\u6DF1\u5589", "oral", "fellatio", "blowjob", "deepthroat", "\u30D5\u30A7\u30E9", "\uAD6C\uAC15"] },
+    { t: "\u8DB3\u4EA4", c: "act", syn: ["footjob", "\u8DB3\u30B3\u30AD"] },
+    { t: "\u4E73\u4EA4", c: "act", syn: ["paizuri", "titjob", "\u30D1\u30A4\u30BA\u30EA"] },
+    { t: "\u624B\u4EA4", c: "act", syn: ["handjob", "\u624B\u30B3\u30AD"] },
+    { t: "69\u5F0F", c: "act", syn: ["69", "sixty nine", "\u30B7\u30C3\u30AF\u30B9\u30CA\u30A4\u30F3"] },
+    { t: "\u6027\u4EA4", c: "act", syn: ["\u505A\u7231", "sex", "sexual intercourse", "\u30BB\u30C3\u30AF\u30B9", "\uC139\uC2A4"] },
+    { t: "\u540E\u5165", c: "act", syn: ["doggystyle", "doggy style", "\u30D0\u30C3\u30AF"] },
+    { t: "\u9A91\u4E58", c: "act", syn: ["cowgirl", "riding", "\u9A0E\u4E57\u4F4D"] },
+    { t: "\u7FA4\u4EA4", c: "act", syn: ["\u4E71\u4EA4", "orgy", "gangbang", "group sex", "\u4E71\u4EA4\u30D1\u30FC\u30C6\u30A3"] },
+    { t: "\u767E\u5408", c: "act", syn: ["lesbian", "lesbians", "girls love", "\u30EC\u30BA", "\uBC31\uD569"] },
+    { t: "\u8C03\u6559", c: "act", syn: ["bdsm", "training", "domination", "sm", "\u8ABF\u6559"] },
+    { t: "\u704C\u80A0", c: "act", syn: ["enema", "\u6D63\u8178"] },
+    { t: "\u6392\u5C3F", c: "act", syn: ["\u653E\u5C3F", "peeing", "urination", "\u304A\u3057\u3063\u3053", "\uBC29\uB1E8"] },
+    { t: "\u989C\u5C04", c: "act", syn: ["facial", "cum on face", "\u9854\u5C04"] },
+    { t: "\u4E2D\u51FA", c: "act", syn: ["creampie", "internal cumshot", "\u4E2D\u51FA\u3057"] },
+    { t: "\u907F\u5B55\u5957", c: "act", syn: ["condom", "\u30B4\u30E0"] },
+    { t: "\u88F8\u4F53", c: "act", syn: ["\u5168\u88F8", "nude", "naked", "full nude", "\u30CC\u30FC\u30C9", "\uB204\uB4DC"] },
+    { t: "\u534A\u88F8", c: "act", syn: ["topless", "half naked", "\u534A\u88F8", "\u30BB\u30DF\u30CC\u30FC\u30C9"] },
+    // ---------- 道具 prop ----------
+    { t: "\u73A9\u5177", c: "prop", syn: ["\u5047\u9633\u5177", "toy", "sex toy", "dildo", "\u304A\u3082\u3061\u3083"] },
+    { t: "\u6309\u6469\u68D2", c: "prop", syn: ["vibrator", "wand", "\u30D0\u30A4\u30D6"] },
+    { t: "\u8DF3\u86CB", c: "prop", syn: ["egg vibrator", "love egg", "\u30ED\u30FC\u30BF\u30FC"] },
+    { t: "\u7EF3\u5B50", c: "prop", syn: ["rope", "ropes", "\u7E04"] },
+    { t: "\u955C\u5B50", c: "prop", syn: ["mirror", "\u93E1", "\uAC70\uC6B8"] },
+    { t: "\u6905\u5B50", c: "prop", syn: ["chair", "stool", "\u6905\u5B50", "\u30C1\u30A7\u30A2"] },
+    { t: "\u6C99\u53D1", c: "prop", syn: ["sofa", "couch", "\u30BD\u30D5\u30A1"] },
+    { t: "\u5E8A", c: "prop", syn: ["bed", "bedroom bed", "\u30D9\u30C3\u30C9", "\uCE68\uB300"] },
+    { t: "\u6C14\u7403", c: "prop", syn: ["balloon", "balloons", "\u98A8\u8239"] },
+    { t: "\u82B1\u675F", c: "prop", syn: ["\u82B1", "flower", "flowers", "bouquet", "\u82B1\u675F"] },
+    { t: "\u4E66\u672C", c: "prop", syn: ["book", "books", "\u672C"] },
+    { t: "\u98DF\u7269", c: "prop", syn: ["food", "snack", "\u6599\u7406", "\uC74C\uC2DD"] },
+    { t: "\u51B0\u6DC7\u6DCB", c: "prop", syn: ["ice cream", "\u30A2\u30A4\u30B9\u30AF\u30EA\u30FC\u30E0"] },
+    { t: "\u9152\u676F", c: "prop", syn: ["\u9152", "wine", "cocktail", "\u30B0\u30E9\u30B9"] },
+    { t: "\u9999\u70DF", c: "prop", syn: ["cigarette", "smoking", "\u30BF\u30D0\u30B3", "\uB2F4\uBC30"] },
+    { t: "\u9EA6\u514B\u98CE", c: "prop", syn: ["microphone", "mic", "\u30DE\u30A4\u30AF"] },
+    { t: "\u6E38\u620F\u624B\u67C4", c: "prop", syn: ["game controller", "controller", "\u30B2\u30FC\u30E0\u30D1\u30C3\u30C9"] },
+    { t: "\u6444\u50CF\u673A", c: "prop", syn: ["camera", "camcorder", "\u30AB\u30E1\u30E9"] },
+    { t: "\u6BDB\u5DFE", c: "prop", syn: ["\u6D74\u5DFE", "towel", "\u30BF\u30AA\u30EB", "\uC218\uAC74"] },
+    { t: "\u6795\u5934", c: "prop", syn: ["pillow", "\u6795"] },
+    // ---------- 身材特征 body ----------
+    { t: "\u5DE8\u4E73", c: "body", syn: ["\u7206\u4E73", "\u5927\u80F8", "\u4E30\u6EE1", "big breasts", "big boobs", "large breasts", "\u5DE8\u4E73", "\uAC70\uC720"] },
+    { t: "\u8D2B\u4E73", c: "body", syn: ["\u5FAE\u4E73", "\u5E73\u80F8", "small breasts", "flat chest", "\u8CA7\u4E73", "\uBE48\uC720"] },
+    { t: "\u957F\u817F", c: "body", syn: ["\u7F8E\u817F", "\u5927\u957F\u817F", "long legs", "legs", "\u7F8E\u811A", "\uB871\uB2E4\uB9AC"] },
+    { t: "\u7FD8\u81C0", c: "body", syn: ["\u7F8E\u81C0", "\u81C0\u90E8", "big ass", "big butt", "ass", "\u304A\u5C3B", "\uD799"] },
+    { t: "\u7EC6\u8170", c: "body", syn: ["\u5C0F\u86EE\u8170", "slim waist", "narrow waist", "\u304F\u3073\u308C"] },
+    { t: "\u8179\u808C", c: "body", syn: ["\u9A6C\u7532\u7EBF", "abs", "six pack", "\u8179\u7B4B"] },
+    { t: "\u77ED\u53D1", c: "body", syn: ["short hair", "\u30B7\u30E7\u30FC\u30C8\u30D8\u30A2", "\uB2E8\uBC1C"] },
+    { t: "\u957F\u53D1", c: "body", syn: ["long hair", "\u30ED\u30F3\u30B0\u30D8\u30A2", "\uC7A5\uBC1C"] },
+    { t: "\u53CC\u9A6C\u5C3E", c: "body", syn: ["twintails", "twin tails", "\u30C4\u30A4\u30F3\u30C6\u30FC\u30EB"] },
+    { t: "\u9A6C\u5C3E", c: "body", syn: ["ponytail", "\u30DD\u30CB\u30FC\u30C6\u30FC\u30EB"] },
+    { t: "\u4E38\u5B50\u5934", c: "body", syn: ["\u56E2\u5B50\u5934", "bun hair", "hair bun", "\u304A\u56E3\u5B50"] },
+    { t: "\u5377\u53D1", c: "body", syn: ["curly hair", "wavy hair", "\u30D1\u30FC\u30DE"] },
+    { t: "\u91D1\u53D1", c: "body", syn: ["blonde", "blond", "golden hair", "\u30D6\u30ED\u30F3\u30C9", "\uAE08\uBC1C"] },
+    { t: "\u9ED1\u53D1", c: "body", syn: ["brunette", "black hair", "\u9ED2\u9AEA", "\uD751\uBC1C"] },
+    { t: "\u67D3\u53D1", c: "body", syn: ["\u5F69\u53D1", "colored hair", "dyed hair", "\u30AB\u30E9\u30FC\u9AEA"] },
+    { t: "\u96C0\u6591", c: "body", syn: ["freckles", "\u305D\u3070\u304B\u3059"] },
+    { t: "\u9152\u7A9D", c: "body", syn: ["dimples", "\u3048\u304F\u307C"] },
+    { t: "\u767D\u7699", c: "body", syn: ["\u767D\u808C", "\u7F8E\u767D", "pale skin", "fair skin", "\u767D\u808C", "\uBC31\uD53C\uBD80"] },
+    { t: "\u5C0F\u9EA6\u8272", c: "body", syn: ["\u65E5\u70E7", "tan", "tanned", "suntan", "\u65E5\u713C\u3051"] },
+    { t: "\u808C\u8089", c: "body", syn: ["muscular", "muscle", "\u7B4B\u8089"] },
+    { t: "\u5B55\u5987", c: "body", syn: ["pregnant", "pregnancy", "\u598A\u5A66", "\uC784\uC0B0\uBD80"] },
+    { t: "\u6210\u719F", c: "body", syn: ["\u719F\u5973", "mature", "milf", "mature woman", "\u719F\u5973"] },
+    { t: "\u5A07\u5C0F", c: "body", syn: ["\u5C0F\u53EA", "petite", "small body", "\u30DF\u30CB"] },
+    { t: "\u9AD8\u4E2A", c: "body", syn: ["\u957F\u8EAB", "tall", "tall girl", "\u9577\u8EAB"] },
+    { t: "\u6E05\u7EAF", c: "body", syn: ["\u7D20\u989C", "innocent", "pure face", "no makeup", "\u3059\u3063\u3074\u3093"] },
+    { t: "\u6CEA\u75E3", c: "body", syn: ["\u7F8E\u4EBA\u75E3", "mole under eye", "\u6CE3\u304D\u307C\u304F\u308D"] },
+    { t: "\u864E\u7259", c: "body", syn: ["\u516B\u91CD\u9F7F", "fang tooth", "yaeba", "\u516B\u91CD\u6B6F"] },
+    { t: "\u841D\u8389", c: "body", syn: ["loli", "lolita", "\u30ED\u30EA", "\uB85C\uB9AC"] },
+    { t: "\u5FA1\u59D0", c: "body", syn: ["onee-san", "oneesan", "\u304A\u59C9\u3055\u3093", "\uB204\uB098"] },
+    // ---------- 关系人数 relation ----------
+    { t: "\u53CC\u4EBA", c: "relation", syn: ["\u4E8C\u4EBA", "two girls", "pair", "2 girls", "\u30DA\u30A2"] },
+    { t: "\u4E09\u4EBA", c: "relation", syn: ["3p", "threesome", "three girls", "\u30B9\u30EA\u30FC"] },
+    { t: "\u591A\u4EBA", c: "relation", syn: ["\u7FA4\u4F53", "group", "multiple girls", "several girls", "\u96C6\u56E3"] },
+    { t: "\u60C5\u4FA3", c: "relation", syn: ["\u604B\u4EBA", "couple", "couples", "\u30AB\u30C3\u30D7\u30EB", "\uCEE4\uD50C"] },
+    { t: "\u95FA\u871C", c: "relation", syn: ["\u597D\u53CB", "besties", "best friends", "friends", "\u89AA\u53CB"] },
+    { t: "\u59D0\u59B9", c: "relation", syn: ["\u59C9\u59B9", "sisters", "sister", "\u59C9\u59B9"] },
+    { t: "\u6BCD\u5973", c: "relation", syn: ["\u89AA\u5B50", "mother daughter", "mom and daughter"] },
+    { t: "\u5E08\u751F", c: "relation", syn: ["teacher student", "teacher and student", "\u5E2B\u5F1F"] },
+    { t: "\u7537\u5973", c: "relation", syn: ["hetero", "male and female", "couple man woman", "\u7537\u5973"] },
+    { t: "\u5355\u4EBA", c: "relation", syn: ["\u4E00\u4EBA", "solo", "single girl", "1girl", "\u30BD\u30ED"] },
+    { t: "\u9732\u8138", c: "relation", syn: ["\u6B63\u8138", "face visible", "face shot", "\u9854\u51FA\u3057"] },
+    { t: "\u8499\u9762", c: "relation", syn: ["masked", "mask", "face covered", "\u8986\u9762"] },
+    { t: "\u592B\u59BB", c: "relation", syn: ["husband wife", "married couple", "\u592B\u5A66"] },
+    // ---------- 场景 scene ----------
+    { t: "\u6D77\u8FB9", c: "scene", syn: ["\u6C99\u6EE9", "\u6D77\u6EE9", "beach", "seaside", "\u30D3\u30FC\u30C1", "\uD574\uBCC0"] },
+    { t: "\u6CF3\u6C60", c: "scene", syn: ["\u6E38\u6CF3\u6C60", "pool", "swimming pool", "\u30D7\u30FC\u30EB", "\uC218\uC601\uC7A5"] },
+    { t: "\u6E29\u6CC9", c: "scene", syn: ["\u6D74\u573A", "onsen", "hot spring", "\u6E29\u6CC9", "\uC628\uCC9C"] },
+    { t: "\u6D74\u5BA4", c: "scene", syn: ["\u536B\u751F\u95F4", "bathroom", "bath room", "\u304A\u98A8\u5442\u5834", "\uC695\uC2E4"] },
+    { t: "\u5367\u5BA4", c: "scene", syn: ["\u5BDD\u5BA4", "bedroom", "\u30D9\u30C3\u30C9\u30EB\u30FC\u30E0", "\uCE68\uC2E4"] },
+    { t: "\u53A8\u623F", c: "scene", syn: ["kitchen", "\u30AD\u30C3\u30C1\u30F3", "\uC8FC\uBC29"] },
+    { t: "\u5BA2\u5385", c: "scene", syn: ["living room", "lounge", "\u30EA\u30D3\u30F3\u30B0"] },
+    { t: "\u6559\u5BA4", c: "scene", syn: ["classroom", "school room", "\u6559\u5BA4", "\uAD50\uC2E4"] },
+    { t: "\u529E\u516C\u5BA4", c: "scene", syn: ["office", "\u30AA\u30D5\u30A3\u30B9", "\uC0AC\uBB34\uC2E4"] },
+    { t: "\u56FE\u4E66\u9986", c: "scene", syn: ["library", "\u56F3\u66F8\u9928", "\uB3C4\uC11C\uAD00"] },
+    { t: "\u5065\u8EAB\u623F", c: "scene", syn: ["gym", "\u4F53\u80B2\u9928", "\u30B8\u30E0", "\uD5EC\uC2A4\uC7A5"] },
+    { t: "\u5929\u53F0", c: "scene", syn: ["\u5C4B\u9876", "rooftop", "roof", "\u5C4B\u4E0A"] },
+    { t: "\u697C\u68AF", c: "scene", syn: ["stairs", "staircase", "\u968E\u6BB5"] },
+    { t: "\u8D70\u5ECA", c: "scene", syn: ["corridor", "hallway", "\u5ECA\u4E0B"] },
+    { t: "\u9633\u53F0", c: "scene", syn: ["balcony", "\u30D9\u30E9\u30F3\u30C0", "\uBC1C\uCF54\uB2C8"] },
+    { t: "\u9152\u5E97", c: "scene", syn: ["\u5BBE\u9986", "hotel", "motel", "\u30DB\u30C6\u30EB", "\uD638\uD154"] },
+    { t: "\u8F66\u5185", c: "scene", syn: ["\u8F66\u91CC", "car", "in car", "car interior", "\u8ECA\u5185"] },
+    { t: "\u5730\u94C1", c: "scene", syn: ["\u7535\u8F66", "subway", "train", "\u96FB\u8ECA", "\uC9C0\uD558\uCCA0"] },
+    { t: "\u8857\u5934", c: "scene", syn: ["\u8857\u9053", "street", "street shot", "\u8DEF\u4E0A", "\uAC70\uB9AC"] },
+    { t: "\u516C\u56ED", c: "scene", syn: ["park", "\u516C\u5712", "\uACF5\uC6D0"] },
+    { t: "\u68EE\u6797", c: "scene", syn: ["forest", "woods", "\u68EE", "\uC232"] },
+    { t: "\u96EA\u5730", c: "scene", syn: ["\u96EA\u666F", "snow", "snowy", "\u96EA", "\uC124\uC6D0"] },
+    { t: "\u96E8\u5929", c: "scene", syn: ["\u96E8\u666F", "rain", "rainy", "\u96E8"] },
+    { t: "\u591C\u666F", c: "scene", syn: ["\u591C\u665A", "night", "night view", "\u591C", "\uC57C\uACBD"] },
+    { t: "\u65E5\u843D", c: "scene", syn: ["\u5915\u9633", "sunset", "\u5915\u65E5", "\uC11D\uC591"] },
+    { t: "\u65E5\u51FA", c: "scene", syn: ["\u671D", "sunrise", "morning light", "\u65E5\u306E\u51FA"] },
+    { t: "\u6444\u5F71\u68DA", c: "scene", syn: ["studio", "photography studio", "\u30B9\u30BF\u30B8\u30AA", "\uC2A4\uD29C\uB514\uC624"] },
+    { t: "\u6D17\u8863\u623F", c: "scene", syn: ["laundry", "laundry room", "\u30E9\u30F3\u30C9\u30EA\u30FC"] },
+    { t: "\u533B\u9662", c: "scene", syn: ["hospital", "clinic", "\u75C5\u9662", "\uBCD1\uC6D0"] },
+    { t: "\u82B1\u56ED", c: "scene", syn: ["\u5EAD", "garden", "\u5EAD\u5712"] },
+    { t: "\u5496\u5561\u9986", c: "scene", syn: ["cafe", "coffee shop", "\u30AB\u30D5\u30A7", "\uCE74\uD398"] },
+    { t: "\u9152\u5427", c: "scene", syn: ["bar", "pub", "\u30D0\u30FC"] },
+    // ---------- 主题 theme ----------
+    { t: "\u5723\u8BDE", c: "theme", syn: ["christmas", "xmas", "\u30AF\u30EA\u30B9\u30DE\u30B9", "\uD06C\uB9AC\uC2A4\uB9C8\uC2A4"] },
+    { t: "\u65B0\u5E74", c: "theme", syn: ["\u6B63\u6708", "new year", "lunar new year", "\u65B0\u5E74", "\uC124\uB0A0"] },
+    { t: "\u4E07\u5723\u8282", c: "theme", syn: ["halloween", "\u30CF\u30ED\u30A6\u30A3\u30F3", "\uD57C\uB7EC\uC708"] },
+    { t: "\u60C5\u4EBA\u8282", c: "theme", syn: ["valentine", "valentine's day", "\u30D0\u30EC\u30F3\u30BF\u30A4\u30F3", "\uBC38\uB7F0\uD0C0\uC778"] },
+    { t: "\u751F\u65E5", c: "theme", syn: ["\u8A95\u751F\u65E5", "birthday", "birthday party", "\uC0DD\uC77C"] },
+    { t: "\u590F\u65E5", c: "theme", syn: ["\u590F\u5929", "summer", "\u590F", "\uC5EC\uB984"] },
+    { t: "\u51AC\u65E5", c: "theme", syn: ["\u51AC\u5929", "winter", "\u51AC", "\uACA8\uC6B8"] },
+    { t: "\u6625\u65E5", c: "theme", syn: ["\u6625\u5929", "spring", "\u6625", "\uBD04"] },
+    { t: "\u79CB\u65E5", c: "theme", syn: ["\u79CB\u5929", "autumn", "fall", "\u79CB", "\uAC00\uC744"] },
+    { t: "\u7761\u8863\u6D3E\u5BF9", c: "theme", syn: ["pajama party", "pyjama party", "\u30D1\u30B8\u30E3\u30DE\u30D1\u30FC\u30C6\u30A3\u30FC"] },
+    { t: "\u796D\u5178", c: "theme", syn: ["\u590F\u65E5\u796D", "festival", "matsuri", "\u304A\u796D\u308A", "\uCD95\uC81C"] },
+    { t: "\u5A5A\u793C", c: "theme", syn: ["wedding", "bride", "\u7D50\u5A5A\u5F0F", "\uACB0\uD63C\uC2DD"] },
+    { t: "\u6821\u56ED", c: "theme", syn: ["\u5B66\u6821", "school", "campus", "\u5B66\u5712", "\uD559\uAD50"] },
+    { t: "\u5C45\u5BB6", c: "theme", syn: ["\u5B85\u5BB6", "home", "at home", "stay home", "\u304A\u3046\u3061"] },
+    { t: "\u65C5\u884C", c: "theme", syn: ["\u65C5", "travel", "trip", "vacation", "\u65C5\u884C"] },
+    { t: "\u9732\u8425", c: "theme", syn: ["camping", "camp", "\u30AD\u30E3\u30F3\u30D7"] },
+    { t: "\u89D2\u8272\u626E\u6F14", c: "theme", syn: ["cosplay", "cos", "role play", "\u30B3\u30B9\u30D7\u30EC", "\uCF54\uC2A4\uD504\uB808"] },
+    { t: "\u6A31\u82B1", c: "theme", syn: ["sakura", "cherry blossom", "\u685C", "\uBC9A\uAF43"] },
+    { t: "\u7EA2\u53F6", c: "theme", syn: ["autumn leaves", "momiji", "\u7D05\u8449"] },
+    { t: "\u82B1\u5F00", c: "theme", syn: ["flower field", "bloom", "\u82B1\u7551"] },
+    { t: "\u7530\u56ED", c: "theme", syn: ["countryside", "farm", "\u7530\u5712"] },
+    { t: "\u5496\u5561\u9986\u4E3B\u9898", c: "theme", syn: ["cafe date", "cafe theme"] },
+    // ---------- 作品角色 ip ----------
+    { t: "\u539F\u795E", c: "ip", syn: ["genshin", "genshin impact", "\u539F\u795E"] },
+    { t: "\u78A7\u84DD\u822A\u7EBF", c: "ip", syn: ["azur lane", "\u30A2\u30BA\u30FC\u30EB\u30EC\u30FC\u30F3", "\u78A7\u84DD\u822A\u7EBF"] },
+    { t: "\u660E\u65E5\u65B9\u821F", c: "ip", syn: ["arknights", "\u30A2\u30FC\u30AF\u30CA\u30A4\u30C4", "\u660E\u65E5\u65B9\u821F"] },
+    { t: "FGO", c: "ip", syn: ["fate grand order", "fate", "fgo", "\u30D5\u30A7\u30A4\u30C8"] },
+    { t: "\u8D5B\u9A6C\u5A18", c: "ip", syn: ["uma musume", "\u30A6\u30DE\u5A18", "\u8D5B\u9A6C\u5A18"] },
+    { t: "\u8230\u5A18", c: "ip", syn: ["kancolle", "kan colle", "\u8266\u3053\u308C", "\u8230\u5A18"] },
+    { t: "\u521D\u97F3\u672A\u6765", c: "ip", syn: ["hatsune miku", "\u521D\u97F3\u30DF\u30AF", "miku", "\u521D\u97F3"] },
+    { t: "\u857E\u59C6", c: "ip", syn: ["rem", "\u30EC\u30E0", "\u857E\u59C6"] },
+    { t: "\u62C9\u59C6", c: "ip", syn: ["ram", "\u30E9\u30E0", "\u62C9\u59C6"] },
+    { t: "\u96F7\u7535\u5C06\u519B", c: "ip", syn: ["raiden shogun", "raiden", "\u96F7\u96FB\u5C06\u8ECD", "\u96F7\u7535\u5C06\u519B"] },
+    { t: "\u80E1\u6843", c: "ip", syn: ["hutao", "hu tao", "\u80E1\u6843"] },
+    { t: "\u7518\u96E8", c: "ip", syn: ["ganyu", "\u7518\u96E8"] },
+    { t: "\u516B\u91CD\u795E\u5B50", c: "ip", syn: ["yae miko", "yae", "\u516B\u91CD\u795E\u5B50"] },
+    { t: "\u523B\u6674", c: "ip", syn: ["keqing", "\u523B\u6674"] },
+    { t: "\u795E\u91CC\u7EEB\u534E", c: "ip", syn: ["ayaka", "kamisato ayaka", "\u795E\u91CC\u7DBE\u83EF", "\u795E\u91CC\u7EEB\u534E"] },
+    { t: "2B", c: "ip", syn: ["2b", "nier automata", "\u30E8\u30EB\u30CF\u4E8C\u53F7B\u578B", "\u5C3C\u5C14"] },
+    { t: "\u8482\u6CD5", c: "ip", syn: ["tifa", "tifa lockhart", "\u30C6\u30A3\u30D5\u30A1", "\u8482\u6CD5"] },
+    { t: "\u827E\u8FBE\u738B", c: "ip", syn: ["ada wong", "ada", "\u30A8\u30A4\u30C0", "\u827E\u8FBE\u738B"] },
+    { t: "\u4E0D\u77E5\u706B\u821E", c: "ip", syn: ["mai shiranui", "shiranui mai", "\u4E0D\u77E5\u706B\u821E"] },
+    { t: "\u6625\u4E3D", c: "ip", syn: ["chun li", "chun-li", "\u6625\u9E97", "\u6625\u4E3D"] },
+    { t: "D.Va", c: "ip", syn: ["dva", "d.va", "\u30C7\u30A3\u30FC\u30F4\u30A1"] },
+    { t: "\u52B3\u62C9", c: "ip", syn: ["lara croft", "tomb raider", "\u30E9\u30E9", "\u53E4\u5893\u4E3D\u5F71"] },
+    { t: "Love Live", c: "ip", syn: ["lovelive", "love live", "\u30E9\u30D6\u30E9\u30A4\u30D6"] },
+    { t: "\u5076\u50CF\u5927\u5E08", c: "ip", syn: ["idolmaster", "idol master", "\u30A2\u30A4\u30DE\u30B9", "\u30C7\u30EC\u30B9\u30C6"] },
+    { t: "VTuber", c: "ip", syn: ["vtuber", "virtual youtuber", "\u30D0\u30FC\u30C1\u30E3\u30EByoutuber", "\uBC84\uD29C\uBC84"] },
+    { t: "\u6D77\u8D3C\u738B", c: "ip", syn: ["one piece", "\u30EF\u30F3\u30D4\u30FC\u30B9", "\u6D77\u8D3C\u738B"] },
+    { t: "\u706B\u5F71\u5FCD\u8005", c: "ip", syn: ["naruto", "\u30CA\u30EB\u30C8", "\u706B\u5F71"] },
+    { t: "\u7F8E\u5C11\u5973\u6218\u58EB", c: "ip", syn: ["sailor moon", "\u30BB\u30FC\u30E9\u30FC\u30E0\u30FC\u30F3", "\u7F8E\u5C11\u5973\u6226\u58EB"] },
+    { t: "EVA", c: "ip", syn: ["evangelion", "eva", "\u30A8\u30F4\u30A1", "\u65B0\u4E16\u7EAA\u798F\u97F3\u6218\u58EB"] },
+    { t: "\u585E\u5C14\u8FBE", c: "ip", syn: ["zelda", "\u30BC\u30EB\u30C0"] },
+    { t: "\u9A6C\u91CC\u5965", c: "ip", syn: ["mario", "\u30DE\u30EA\u30AA"] },
+    { t: "\u8857\u5934\u9738\u738B", c: "ip", syn: ["street fighter", "\u30B9\u30C8\u30EA\u30FC\u30C8\u30D5\u30A1\u30A4\u30BF\u30FC"] },
+    { t: "\u62F3\u7687", c: "ip", syn: ["king of fighters", "kof", "kof", "\u30B6\u30FB\u30AD\u30F3\u30B0\u30FB\u30AA\u30D6\u30FB\u30D5\u30A1\u30A4\u30BF\u30FC\u30BA"] },
+    { t: "\u5F39\u4E38\u8BBA\u7834", c: "ip", syn: ["danganronpa", "\u30C0\u30F3\u30AC\u30F3\u30ED\u30F3\u30D1"] },
+    { t: "\u5C3C\u5C14\u673A\u68B0\u7EAA\u5143", c: "ip", syn: ["nier", "\u30CB\u30FC\u30A2"] },
+    // ---------- 品牌 brand（原 BRANDS，保留并归并） ----------
+    { t: "tokyo hot", c: "brand", syn: ["tokyo hot", "tokyohot"] },
+    { t: "pornbox", c: "brand", syn: ["pornbox"] },
+    { t: "jav", c: "brand", syn: ["jav"] },
+    { t: "spermmania", c: "brand", syn: ["spermmania"] },
+    { t: "pacific girls", c: "brand", syn: ["pacific girls", "pacificgirls"] },
+    { t: "blacksonblondes", c: "brand", syn: ["blacksonblondes"] },
+    { t: "fellatiojapan", c: "brand", syn: ["fellatiojapan"] },
+    { t: "dpdiva", c: "brand", syn: ["dpdiva"] },
+    { t: "\u79C0\u4EBA\u7F51", c: "brand", syn: ["\u79C0\u4EBA\u7F51", "xiuren"] },
+    { t: "ugirls", c: "brand", syn: ["ugirls"] },
+    { t: "miko\u9171", c: "brand", syn: ["miko\u9171"] },
+    { t: "little red", c: "brand", syn: ["little red"] },
+    { t: "popdaily", c: "brand", syn: ["popdaily"] }
   ];
-  var THEMES = /* @__PURE__ */ new Set([
-    "\u857E\u59C6",
-    "\u62C9\u59C6",
-    "\u539F\u795E",
-    "\u78A7\u84DD\u822A\u7EBF",
-    "\u96F7\u7535\u5C06\u519B",
-    "\u80E1\u6843",
-    "\u7518\u96E8",
-    "\u521D\u97F3",
-    "\u660E\u65E5\u65B9\u821F",
-    "fgo",
-    "\u8D5B\u9A6C\u5A18",
-    "\u8230\u5A18",
-    "fate",
-    "\u841D\u8389",
-    "\u5FA1\u59D0",
-    "\u6E29\u6CC9",
-    "\u6D74\u8863",
-    "\u5C45\u5BB6",
-    "\u5065\u8EAB",
-    "\u8FD0\u52A8",
-    "\u5723\u8BDE",
-    "\u65B0\u5E74",
-    "\u751F\u65E5",
-    "\u60C5\u4FA3",
-    "\u95FA\u871C",
-    "\u53CC\u4EBA",
-    "\u59D0\u59B9",
-    "\u6D77\u8FB9",
-    "\u6C99\u6EE9",
-    "\u6CF3\u6C60",
-    "\u9152\u5E97",
-    "\u6559\u5BA4",
-    "\u529E\u516C\u5BA4",
-    "\u5929\u53F0",
-    "\u591C\u666F",
-    "\u96E8\u5929",
-    "\u96EA\u5730"
-  ]);
-  var CLOTHES_CN = /* @__PURE__ */ new Set([
-    "\u9ED1\u4E1D",
-    "\u767D\u4E1D",
-    "\u4E1D\u889C",
-    "\u6E14\u7F51\u889C",
-    "\u8FC7\u819D\u889C",
-    "\u889C",
-    "\u5236\u670D",
-    "\u4F53\u64CD\u670D",
-    "\u6C34\u624B\u670D",
-    "\u6821\u670D",
-    "\u6CF3\u88C5",
-    "\u6BD4\u57FA\u5C3C",
-    "\u6B7B\u5E93\u6C34",
-    "\u6C49\u670D",
-    "\u65D7\u888D",
-    "\u5A5A\u7EB1",
-    "\u5154\u5973\u90CE",
-    "\u5973\u4EC6",
-    "\u62A4\u58EB\u88C5",
-    "\u62A4\u58EB",
-    "\u732B\u8033",
-    "\u5154\u8033",
-    "\u53E4\u88C5",
-    "\u548C\u670D",
-    "\u6D74\u8863",
-    "\u809A\u515C",
-    "\u7761\u8863",
-    "\u5185\u8863",
-    "\u857E\u4E1D",
-    "\u900F\u660E",
-    "\u8584\u7EB1",
-    "\u7EB1\u88D9",
-    "\u540A\u5E26",
-    "\u7D27\u8EAB\u8863",
-    "\u7D27\u8EAB",
-    "\u8FDE\u4F53",
-    "\u80F6\u8863",
-    "\u76AE\u8863",
-    "\u76AE\u88E4",
-    "\u76AE\u88D9",
-    "\u6E14\u7F51",
-    "\u77ED\u88E4",
-    "\u70ED\u88E4",
-    "\u957F\u88D9",
-    "\u77ED\u88D9",
-    "\u8FF7\u4F60\u88D9",
-    "\u767E\u8936\u88D9",
-    "\u5305\u81C0\u88D9",
-    "\u886C\u886B",
-    "\u767D\u886C\u886B",
-    "\u536B\u8863",
-    "\u6BDB\u8863",
-    "\u9488\u7EC7",
-    "\u98CE\u8863",
-    "\u5927\u8863",
-    "\u6597\u7BF7",
-    "\u9886\u5E26",
-    "\u9886\u7ED3",
-    "\u8774\u8776\u7ED3",
-    "\u957F\u9774",
-    "\u77ED\u9774",
-    "\u9A6C\u4E01\u9774",
-    "\u9AD8\u8DDF\u978B",
-    "\u51C9\u978B",
-    "\u88F8\u8DB3",
-    "\u7389\u8DB3",
-    "\u624B\u5957",
-    "\u8D1D\u96F7\u5E3D",
-    "\u68D2\u7403\u5E3D",
-    "\u9762\u5177",
-    "\u9762\u7EB1",
-    "\u5934\u7EB1",
-    "\u56F4\u5DFE",
-    "\u4E1D\u5DFE",
-    "\u88E4\u889C",
-    "\u8FDE\u88E4\u889C",
-    "\u540A\u5E26\u889C",
-    "\u957F\u889C",
-    "\u4E2D\u7B52\u889C",
-    "\u77ED\u889C",
-    "\u8239\u889C",
-    "\u5206\u8DBE\u889C"
-  ]);
-  var CLOTHES_EN = /* @__PURE__ */ new Set(["ol", "jk", "lolita", "latex", "cosplay", "t"]);
+  var DICT_BY_STANDARD = new Map(TAG_DICT.map((e) => [e.t, e]));
+  var SYNONYM_TO_STANDARD = (() => {
+    const m = /* @__PURE__ */ new Map();
+    for (const e of TAG_DICT) {
+      m.set(e.t.toLowerCase(), e.t);
+      for (const s of e.syn) {
+        const key = s.toLowerCase();
+        if (!m.has(key)) m.set(key, e.t);
+      }
+    }
+    return m;
+  })();
+  var CATEGORY_OF_STANDARD = new Map(TAG_DICT.map((e) => [e.t, e.c]));
+
+  // src/lib/tag-extract.ts
+  var TAG_MIN_ALBUMS = 5;
+  var TAG_MIN_USERS = 1;
+  var TAG_DEFAULT_TOP = 200;
+  function emptyCustomDict() {
+    return { entries: [], blocked: [] };
+  }
+  function loadCustomDict(raw) {
+    const out = emptyCustomDict();
+    if (!raw || typeof raw !== "object") return out;
+    const obj = raw;
+    if (Array.isArray(obj.entries)) {
+      for (const e of obj.entries) {
+        if (!e || typeof e.t !== "string" || !e.t.trim()) continue;
+        const c = typeof e.c === "string" && e.c in TAG_CATEGORY_LABEL ? e.c : "english";
+        const syn = Array.isArray(e.syn) ? e.syn.filter((s) => typeof s === "string" && !!s.trim()) : [];
+        out.entries.push({ t: e.t.trim(), c, syn });
+      }
+    }
+    if (Array.isArray(obj.blocked)) {
+      out.blocked = obj.blocked.filter((s) => typeof s === "string" && !!s.trim()).map((s) => s.trim());
+    }
+    return out;
+  }
   var STOP = /* @__PURE__ */ new Set([
     "model",
     "models",
@@ -1100,6 +1356,7 @@
     "preview",
     "gallery",
     "album",
+    "albums",
     "video",
     "videos",
     "update",
@@ -1107,9 +1364,38 @@
     "exclusive",
     "bts",
     "cover",
-    "cos",
-    "irl",
-    "ootd",
+    "random",
+    "various",
+    "deleted",
+    "test",
+    "shoots",
+    "photoshoot",
+    "digital",
+    "series",
+    "official",
+    "photography",
+    "media",
+    "expensive",
+    "delicious",
+    "overseas",
+    "last",
+    "first",
+    "best",
+    "good",
+    "nice",
+    "beautiful",
+    "beauty",
+    "pretty",
+    "cute",
+    "style",
+    "pure",
+    "stop",
+    "love",
+    "like",
+    "studio",
+    "indoor",
+    "outdoor",
+    "amateur",
     "\u5199\u771F",
     "\u753B\u50CF",
     "\u7167\u7247",
@@ -1120,72 +1406,20 @@
     "\u5408\u96C6",
     "\u7CFB\u5217",
     "\u9884\u89C8",
-    "\u65E0\u7801",
-    "\u6709\u7801",
     "\u62CD\u6444",
     "\u4F5C\u54C1",
-    "\u798F\u5229",
     "\u65E5\u5E38",
     "\u751F\u6D3B",
     "\u6742\u56FE",
     "\u7F8E\u5973",
     "\u58C1\u7EB8",
-    "\u81EA\u62CD",
+    "\u81EA\u62CD\u7167",
     "\u5B9A\u5236",
     "\u7D27\u6025\u4F01\u5212",
     "\u65E0\u6C34\u5370",
-    "\u798F\u5229\u59EC",
     "\u6A21\u7279",
-    "sexy",
-    "random",
-    "my",
-    "the",
-    "girl",
-    "asian",
-    "chinese",
-    "tits",
-    "feb",
-    "prompt",
-    "deleted",
-    "test shoots",
-    "may",
-    "various",
-    "onlyfans",
-    "amateur",
-    "jan",
-    "feb",
-    "mar",
-    "apr",
-    "may",
-    "jun",
-    "jul",
-    "aug",
-    "sep",
-    "oct",
-    "nov",
-    "dec",
-    "photobook",
-    "pure",
-    "media",
-    "expensive",
-    "delicious",
-    "naked",
-    "overseas",
-    "last",
-    "stop",
-    "love",
-    "style",
-    "cute",
-    "pretty",
-    "beauty",
-    "beautiful",
-    "photoshoot",
-    "digital",
-    "series",
-    "official",
-    "hardcore",
-    "softcore",
-    "photography",
+    "\u56FE",
+    "\u96C6",
     "\uC139\uC2DC",
     "\uC0AC\uC9C4",
     "\uBAA8\uC74C",
@@ -1194,8 +1428,6 @@
     "\uD558\uC774\uD004\uB9AC\uD2F0",
     "\uD648\uD2B8\uB808\uC774\uB2DD",
     "\uBE68\uB798",
-    "\uC0E4\uC6CC",
-    "\uC218\uC601",
     "\uCC28\uC6D0",
     "\uB208\uBE5B",
     "\uCC98\uC74C",
@@ -1208,70 +1440,250 @@
     "\uC0AC\uC9C4\uC9D1",
     "\uB514\uC9C0\uD138\uD654\uBCF4"
   ]);
+  var EN_FUNCTION = /* @__PURE__ */ new Set([
+    "the",
+    "and",
+    "with",
+    "for",
+    "from",
+    "this",
+    "that",
+    "these",
+    "those",
+    "into",
+    "over",
+    "under",
+    "about",
+    "after",
+    "before",
+    "very",
+    "just",
+    "only",
+    "also",
+    "more",
+    "most",
+    "some",
+    "such",
+    "than",
+    "then",
+    "them",
+    "they",
+    "their",
+    "there",
+    "here",
+    "when",
+    "where",
+    "what",
+    "which",
+    "while",
+    "your",
+    "you",
+    "her",
+    "his",
+    "she",
+    "him",
+    "our",
+    "are",
+    "was",
+    "were",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "will",
+    "would",
+    "could",
+    "should",
+    "can",
+    "may",
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
+    "vol",
+    "no",
+    "yes",
+    "day",
+    "days",
+    "one",
+    "two",
+    "three",
+    "first",
+    "second",
+    "third",
+    "last",
+    "next",
+    "back",
+    "top",
+    "new",
+    "old",
+    "big",
+    "small",
+    "long",
+    "short",
+    "high",
+    "low",
+    "hot",
+    "cold",
+    "white",
+    "black",
+    "red",
+    "blue",
+    "green",
+    "pink",
+    "yellow",
+    "purple",
+    "brown",
+    "gray",
+    "grey",
+    "gold",
+    "silver",
+    "pink"
+  ]);
   var PINYIN_MERGE = {
     "wang yu chun": "\u738B\u96E8\u7EAF",
     "xia mei jiang": "\u590F\u7F8E\u9171",
     "huang le ran": "\u9EC4\u697D\u7136",
     "li ke ke": "\u674E\u53EF\u53EF"
   };
+  var CJK_RE = /[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]/;
+  function escapeRe(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  function buildMatcher(custom) {
+    const entries = [
+      ...TAG_DICT,
+      ...(custom?.entries ?? []).map((e) => ({ t: e.t, c: e.c, syn: e.syn ?? [] }))
+    ];
+    const map = new Map(SYNONYM_TO_STANDARD);
+    const cjkKeys = /* @__PURE__ */ new Set();
+    const latinKeys = /* @__PURE__ */ new Set();
+    for (const e of entries) {
+      const keys = [e.t, ...e.syn];
+      for (const k of keys) {
+        const raw = k.trim();
+        if (!raw) continue;
+        const lower = raw.toLowerCase();
+        map.set(lower, e.t);
+        if (CJK_RE.test(raw)) cjkKeys.add(raw);
+        else latinKeys.add(lower);
+      }
+    }
+    const byLenDesc = (a, b) => b.length - a.length || a.localeCompare(b);
+    const cjkList = [...cjkKeys].sort(byLenDesc);
+    const latinList = [...latinKeys].sort(byLenDesc);
+    const words = new Set([...cjkKeys, ...latinKeys].map((k) => k.toLowerCase()));
+    return {
+      cjk: cjkList.length ? new RegExp(cjkList.map(escapeRe).join("|"), "g") : null,
+      latin: latinList.length ? new RegExp(`(?<![a-z0-9])(?:${latinList.map(escapeRe).join("|")})(?![a-z0-9])`, "gi") : null,
+      map,
+      words
+    };
+  }
+  function matchDict(name, m) {
+    const hits = [];
+    for (const re of [m.cjk, m.latin]) {
+      if (!re) continue;
+      re.lastIndex = 0;
+      let mt;
+      while ((mt = re.exec(name)) !== null) {
+        const std = m.map.get(mt[0].toLowerCase());
+        if (std) hits.push({ s: mt.index, e: mt.index + mt[0].length, raw: mt[0], std });
+        if (mt[0].length === 0) re.lastIndex++;
+      }
+    }
+    hits.sort((a, b) => b.e - b.s - (a.e - a.s) || a.s - b.s);
+    const used = [];
+    const tags = /* @__PURE__ */ new Map();
+    const literals = /* @__PURE__ */ new Set();
+    for (const h of hits) {
+      if (used.some(([s, e]) => h.s < e && s < h.e)) continue;
+      used.push([h.s, h.e]);
+      tags.set(h.std, CATEGORY_OF_STANDARD.get(h.std) ?? "english");
+      literals.add(h.raw.toLowerCase());
+    }
+    return { tags, literals };
+  }
   function cleanEmoji(s) {
     return s.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2B50}\u{2B06}\u{2B07}\u{25B6}\u{25C0}]/gu, " ");
   }
-  function extractTags(raw) {
-    let s = cleanEmoji(raw).replace(/&amp;/g, "&");
-    const tags = [];
-    s = s.replace(/@([a-zA-Z0-9_]+)/g, (_m, u) => {
-      tags.push({ t: "@" + u, c: "at" });
-      return " ";
-    });
-    for (const b of BRANDS) {
-      if (s.toLowerCase().startsWith(b.toLowerCase())) {
-        tags.push({ t: b.toLowerCase(), c: "brand" });
-        s = s.slice(b.length);
-        break;
+  function matchFree(name, dictLiterals, dictWords, out) {
+    let s = cleanEmoji(name).replace(/&amp;/g, "&");
+    for (const m of s.match(/@[a-zA-Z0-9_]+/g) ?? []) out.set(m, "at");
+    s = s.replace(/@([a-zA-Z0-9_]+)/g, " ");
+    s = s.replace(/\bE\d{2,4}\b/gi, " ").replace(/-\d{2,4}/g, " ").replace(/\d+/g, " ");
+    const coveredByDict = (seg) => {
+      const low = seg.toLowerCase();
+      if (dictWords.has(low)) return true;
+      for (const lit of dictLiterals) {
+        if (low.includes(lit) || lit.includes(low)) return true;
       }
-    }
-    s = s.replace(/E\d{2,4}/gi, " ").replace(/-\d{2,4}/g, " ").replace(/\d+/g, " ");
-    for (const b of BRANDS) s = s.replace(new RegExp(b, "ig"), " ");
-    for (const part of s.split(/[,&;()]|[(（)]/).map((p) => p.trim()).filter(Boolean)) {
-      for (const m of part.match(/[\uac00-\ud7af]{2,}/g) ?? []) {
-        if (!STOP.has(m)) tags.push({ t: m, c: "korean" });
+      return false;
+    };
+    const parts = s.split(/[,&;()|·•\-_/\\、。！？!?【】\[\]「」『』<>~～+]+/).map((p) => p.trim()).filter(Boolean);
+    const usedWords = /* @__PURE__ */ new Set();
+    for (const part of parts) {
+      for (const k of part.match(/[\uac00-\ud7af]{2,}/g) ?? []) {
+        if (!STOP.has(k) && !coveredByDict(k)) out.set(k, "korean");
       }
-      const jap = part.match(/[\u3040-\u30ff\u4e00-\u9fff]+/g);
-      if (jap) {
-        for (const j of jap) if (j.length >= 2 && !STOP.has(j)) tags.push({ t: j, c: THEMES.has(j) ? "theme" : "japanese" });
+      for (const j of part.match(/[\u3040-\u30ff\u4e00-\u9fff]+/g) ?? []) {
+        if (j.length >= 2 && !STOP.has(j) && !coveredByDict(j)) out.set(PINYIN_MERGE[j] ?? j, "japanese");
       }
-      const en = part.split(/[\s\-]+/).filter((w) => /^[A-Z][a-z']{1,}$/.test(w) && !STOP.has(w.toLowerCase()));
-      if (en.length >= 1) {
-        const name = en.join(" ").toLowerCase();
-        if (name.length >= 2 && name.length <= 40) {
-          tags.push({ t: name, c: THEMES.has(en.length === 1 ? en[0].toLowerCase() : "") ? "theme" : "english" });
+      const words = part.split(/[\s\-]+/).filter(Boolean);
+      const cap = words.filter(
+        (w) => /^[A-Z][a-z']{1,}$/.test(w) && !STOP.has(w.toLowerCase()) && !EN_FUNCTION.has(w.toLowerCase()) && !dictWords.has(w.toLowerCase())
+      );
+      if (cap.length >= 1 && cap.length <= 3) {
+        const phrase = cap.join(" ").toLowerCase();
+        if (phrase.length >= 3 && phrase.length <= 40) {
+          out.set(PINYIN_MERGE[phrase] ?? phrase, "english");
+          for (const w of cap) usedWords.add(w.toLowerCase());
         }
       }
+      for (const w of words) {
+        const lw = w.toLowerCase().replace(/[^a-z]/g, "");
+        if (lw.length < 4 || STOP.has(lw) || EN_FUNCTION.has(lw) || dictWords.has(lw) || usedWords.has(lw)) continue;
+        if (!out.has(lw)) out.set(lw, "english");
+      }
     }
-    return tags;
   }
-  function extractClothes(raw) {
-    const lower = raw.toLowerCase();
-    const tokens = new Set(lower.split(/[^a-z0-9]+/).filter(Boolean));
-    const hit = /* @__PURE__ */ new Set();
-    for (const c of CLOTHES_CN) if (raw.includes(c)) hit.add(c);
-    for (const c of CLOTHES_EN) if (tokens.has(c)) hit.add(c);
-    return [...hit].map((c) => ({ t: c, c: "clothes" }));
+  function extractFromName(name, matcher) {
+    const dict = matchDict(name, matcher);
+    matchFree(name, dict.literals, matcher.words, dict.tags);
+    return dict.tags;
   }
-  function computeTags(entries, topN = TAG_DEFAULT_TOP) {
+  function computeTags(entries, opts = {}) {
+    const o = typeof opts === "number" ? { topN: opts } : opts;
+    const topN = o.topN ?? TAG_DEFAULT_TOP;
+    const minAlbums = Math.max(1, o.minAlbums ?? TAG_MIN_ALBUMS);
+    const minUsers = Math.max(1, o.minUsers ?? TAG_MIN_USERS);
+    const matcher = buildMatcher(o.custom);
+    const blocked = new Set((o.custom?.blocked ?? []).map((s) => s.trim().toLowerCase()).filter(Boolean));
     const total = /* @__PURE__ */ new Map();
     const users = /* @__PURE__ */ new Map();
     const catOf = /* @__PURE__ */ new Map();
     for (const e of entries) {
       if (!e.albums) continue;
       for (const a of e.albums) {
-        const tags = [...extractTags(a.name), ...extractClothes(a.name)];
-        for (const { t, c } of tags) {
-          total.set(t, (total.get(t) ?? 0) + 1);
-          if (!users.has(t)) users.set(t, /* @__PURE__ */ new Set());
-          users.get(t).add(e.username);
-          if (!catOf.has(t)) catOf.set(t, c);
+        const names = o.includeSlug && a.url ? [a.name, slugOf(a.url)] : [a.name];
+        for (const nm of names) {
+          if (!nm) continue;
+          for (const [t, c] of extractFromName(nm, matcher)) {
+            if (blocked.has(t.toLowerCase())) continue;
+            total.set(t, (total.get(t) ?? 0) + 1);
+            if (!users.has(t)) users.set(t, /* @__PURE__ */ new Set());
+            users.get(t).add(e.username);
+            if (!catOf.has(t)) catOf.set(t, c);
+          }
         }
       }
     }
@@ -1279,7 +1691,7 @@
     for (const [t, c] of catOf) {
       const albums = total.get(t) ?? 0;
       const uc = users.get(t)?.size ?? 0;
-      if (albums < TAG_MIN_ALBUMS || uc < TAG_MIN_USERS) continue;
+      if (albums < minAlbums || uc < minUsers) continue;
       const cn = PINYIN_MERGE[t];
       const k = cn && merged.has(cn) ? cn : t;
       const prev = merged.get(k);
@@ -1290,7 +1702,15 @@
         merged.set(k, { t: k, c, albums, users: uc });
       }
     }
-    return [...merged.values()].sort((a, b) => b.albums - a.albums).slice(0, Math.max(0, topN));
+    return [...merged.values()].sort((a, b) => b.albums - a.albums || a.t.localeCompare(b.t)).slice(0, Math.max(0, topN));
+  }
+  function slugOf(url) {
+    try {
+      const seg = new URL(url).pathname.split("/").filter(Boolean).pop() ?? "";
+      return decodeURIComponent(seg).replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ");
+    } catch {
+      return "";
+    }
   }
 
   // src/background/imgbb-service.ts
@@ -1585,7 +2005,8 @@
     },
     {
       id: "rrwsh",
-      hosts: ["rrwsh.uuss.uk", "4khd.com"],
+      // FP-014 修复 8：iftye.uuss.uk 为同体系镜像（uuss.uk 系，4khd 模板 /content/N/slug.html），加入后全套解析复用
+      hosts: ["rrwsh.uuss.uk", "4khd.com", "iftye.uuss.uk"],
       containerOpen: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/,
       pagePattern: /Page\s+\d+\s+of\s+(\d+)/i,
       pageUrl: (base, page) => `${base}/${page}`,
@@ -2073,13 +2494,39 @@
   var CONCURRENCY2 = 3;
   var BuonduaService = class {
     /** Google 全站模式：为无 sitesearch 配置的站点构造 Google sitesearch 搜索配置（FP-013 调整）
-     *  gbv=1 强制基础 HTML 版；结果提取走 searchGoogleViaTab（标签页 + executeScript，仅标题+链接） */
+     *  gbv=1 强制基础 HTML 版；结果提取走 searchGoogleViaTab（标签页 + executeScript，仅标题+链接）
+     *  FP-014：优先主域（m./www./mobile. 子域 Google 索引差，如 phimvuspot 用 phimvuspot.com 而非 m. 版） */
     googleSearchConfig(site) {
-      const host = site.hosts[0] ?? site.id;
+      const host = site.hosts.find((h) => !/^(m|www|mobile)\./i.test(h)) ?? site.hosts[0] ?? site.id;
       return {
         ...site,
         searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=${host}&gbv=1${page > 1 ? `&start=${(page - 1) * 10}` : ""}`
       };
+    }
+    /** 站内搜索接口 fetch（FP-014 抽取：Google 降级与普通站内分支共用）：
+     *  jrants 页间强制间隔防限流；反爬拦截页跳过；无结果提前 break */
+    async fetchSiteSearch(site, query, pagesPerSite, startPage) {
+      const items = [];
+      let pages = 0;
+      let error;
+      for (let page = startPage; page < startPage + pagesPerSite; page++) {
+        const url = site.searchUrl?.(query, page);
+        if (!url) break;
+        if (site.id === "jrants" && page > 1) await sleep(2e3);
+        const html = await this.fetchHtml(url);
+        pages++;
+        if (isBlockedPage(html)) {
+          error = "\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A\uFF08\u9650\u6D41\uFF09\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5";
+          logger4.warn("buondua", "\u7AD9\u70B9\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A", { site: site.id, len: html.length });
+          break;
+        }
+        const parsed = parseLinksForSite(site.id, html, url);
+        if (parsed.length === 0) {
+          break;
+        }
+        items.push(...parsed);
+      }
+      return { items, pages, error };
     }
     /** Google 通道：页面降级搜索（FP-012/093）——后台静默打开 Google 搜索标签（真实浏览器 JS 渲染），
      *  提取渲染后结果（a.zReHs + h3 / h3.r > a），逐页进行，完成后关闭标签。
@@ -2093,7 +2540,7 @@
         if (!url) break;
         const tab = await chrome.tabs.create({ url, active: false });
         try {
-          const ok = await this.waitForTabComplete(tab.id);
+          const ok = await this.waitForTabComplete(tab.id, 12e3);
           if (!ok) {
             logger4.warn("buondua", "Google \u6807\u7B7E\u9875\u52A0\u8F7D\u8D85\u65F6", { site: site.id, page });
             break;
@@ -2135,7 +2582,7 @@
       return chrome.scripting.executeScript({
         target: { tabId },
         func: async () => {
-          for (let i = 0; i < 24; i++) {
+          for (let i = 0; i < 16; i++) {
             if (document.querySelector("a.zReHs, h3.r")) break;
             if (document.title.includes("\u672A\u627E\u5230") || /did not match|No results found/i.test(document.body?.innerText ?? "")) break;
             await new Promise((r) => setTimeout(r, 500));
@@ -2300,8 +2747,9 @@
      *  startPage：每站起始页（「下一批」续搜传上次结束页 +1，096）
      *  onSite：每站完成后回调（推送该站结果，增量展示）；返回全部合并去重结果
      *  useGoogleAll：Google 全站搜索开关（FP-013 调整）——开启后全部站点走 Google sitesearch
-     *  网页通道（标签页渲染，仅标题+链接，同站去重，速度快）；不读站内搜索接口 */
-    async searchSites(query, sites, pagesPerSite, onSite, startPage = 1, useGoogleAll = false) {
+     *  网页通道（标签页渲染，仅标题+链接，同站去重，速度快）；不读站内搜索接口
+     *  googleSites：Google 组站点（FP-014）——这些站优先走 Google，失败自动降级站内 */
+    async searchSites(query, sites, pagesPerSite, onSite, startPage = 1, useGoogleAll = false, googleSites = []) {
       const mergedMap = /* @__PURE__ */ new Map();
       const siteStats = {};
       for (const siteId of sites) {
@@ -2314,32 +2762,31 @@
         let error;
         let pagesFetched = 0;
         try {
-          if (site.searchAlbumPath || useGoogleAll) {
-            const googleSite = useGoogleAll && !site.searchAlbumPath ? this.googleSearchConfig(site) : site;
+          const isGoogleOnly = !site.searchUrl && !site.searchAlbumPath;
+          if (site.searchAlbumPath || useGoogleAll || isGoogleOnly || googleSites.includes(siteId)) {
+            const googleSite = useGoogleAll || isGoogleOnly || googleSites.includes(siteId) ? this.googleSearchConfig(site) : site;
             const tabRes = await this.searchGoogleViaTab(googleSite, query, pagesPerSite, startPage);
             pagesFetched = tabRes.pages;
             for (const item of tabRes.items) items.push(item);
-            if (tabRes.items.length === 0) {
+            if (tabRes.items.length === 0 && site.searchUrl) {
+              logger4.info("buondua", "Google \u901A\u9053\u65E0\u7ED3\u679C\uFF0C\u964D\u7EA7\u7AD9\u5185\u641C\u7D22", { site: siteId, query });
+              const fallback = await this.fetchSiteSearch(site, query, pagesPerSite, startPage);
+              pagesFetched = Math.max(pagesFetched, fallback.pages);
+              for (const item of fallback.items) items.push(item);
+              if (fallback.items.length > 0) {
+                error = void 0;
+              } else if (fallback.error) {
+                error = fallback.error;
+              }
+            }
+            if (tabRes.items.length === 0 && items.length === 0 && !error) {
               error = "Google \u6807\u7B7E\u9875\u672A\u63D0\u53D6\u5230\u76F8\u518C\u7ED3\u679C\uFF08\u53EF\u80FD\u9A8C\u8BC1\u9875/\u65E0\u5339\u914D\uFF0C\u65E5\u5FD7\u542B\u8BCA\u65AD\uFF09";
             }
           } else {
-            for (let page = startPage; page < startPage + pagesPerSite; page++) {
-              const url = site.searchUrl?.(query, page);
-              if (!url) break;
-              if (siteId === "jrants" && page > 1) await sleep(2e3);
-              const html = await this.fetchHtml(url);
-              pagesFetched++;
-              if (isBlockedPage(html)) {
-                error = "\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A\uFF08\u9650\u6D41\uFF09\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5";
-                logger4.warn("buondua", "\u7AD9\u70B9\u641C\u7D22\u88AB\u53CD\u722C\u62E6\u622A", { site: siteId, len: html.length });
-                break;
-              }
-              const parsed = parseLinksForSite(siteId, html, url);
-              if (parsed.length === 0) {
-                break;
-              }
-              items.push(...parsed);
-            }
+            const fallback = await this.fetchSiteSearch(site, query, pagesPerSite, startPage);
+            pagesFetched = fallback.pages;
+            for (const item of fallback.items) items.push(item);
+            if (fallback.error) error = fallback.error;
           }
         } catch (err) {
           error = String(err);
@@ -2546,6 +2993,54 @@
     logger5.info("diffuse", "\u751F\u4EA7\u8005\u5E93\u5DF2\u6062\u590D", { total: Object.keys(producerDb.entries).length });
   })();
   var DIFFUSE_STATE_KEY = "diffuse_state";
+  var TAG_CUSTOM_KEY = "tag_custom";
+  var tagCustomDict = emptyCustomDict();
+  var tagCustomReady = (async () => {
+    tagCustomDict = loadCustomDict(await storageGet(TAG_CUSTOM_KEY));
+  })();
+  var STAR_OVERLAY_KEY = "star_overlay_enabled";
+  var STAR_OVERLAY_ID = "star-overlay";
+  var STAR_OVERLAY_ORIGINS = ["*://*.imgbb.com/*", "*://ibb.co/*"];
+  async function registerStarOverlay() {
+    try {
+      const granted = await chrome.permissions.contains({ origins: STAR_OVERLAY_ORIGINS });
+      if (!granted) return false;
+      const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [STAR_OVERLAY_ID] });
+      if (existing.length === 0) {
+        await chrome.scripting.registerContentScripts([
+          {
+            id: STAR_OVERLAY_ID,
+            matches: STAR_OVERLAY_ORIGINS,
+            js: ["js/star-overlay.js"],
+            runAt: "document_idle",
+            allFrames: false,
+            persistAcrossSessions: true
+          }
+        ]);
+        logger5.info("star", "\u6807\u661F\u60AC\u6D6E\u7A97\u5DF2\u6CE8\u518C", { matches: STAR_OVERLAY_ORIGINS });
+      }
+      return true;
+    } catch (err) {
+      logger5.error("star", "\u6807\u661F\u60AC\u6D6E\u7A97\u6CE8\u518C\u5931\u8D25", String(err));
+      return false;
+    }
+  }
+  async function unregisterStarOverlay() {
+    try {
+      await chrome.scripting.unregisterContentScripts({ ids: [STAR_OVERLAY_ID] });
+      logger5.info("star", "\u6807\u661F\u60AC\u6D6E\u7A97\u5DF2\u6CE8\u9500");
+    } catch {
+    }
+  }
+  void (async () => {
+    const enabled = await storageGet(STAR_OVERLAY_KEY);
+    if (!enabled) return;
+    const ok = await registerStarOverlay();
+    if (!ok) {
+      await storageSet(STAR_OVERLAY_KEY, false);
+      logger5.warn("star", "\u6807\u661F\u60AC\u6D6E\u7A97\u6743\u9650\u5DF2\u5931\u6548\uFF0C\u5F00\u5173\u7F6E\u4E3A\u5173\u95ED");
+    }
+  })();
   async function ensureDiffuseRestored() {
     try {
       const r = await chrome.storage.session.get(DIFFUSE_STATE_KEY);
@@ -2978,6 +3473,19 @@
           rankAlbum
         };
       }
+      case "IMG_DB_SET_STAR": {
+        await producerDbReady;
+        if (message.autoCreate) producerDb = ensureEntry(producerDb, message.username, "star");
+        producerDb = setStarRating(producerDb, message.username, message.stars);
+        await storageSet(PRODUCER_DB_KEY, producerDb);
+        const stars = producerDb.entries[message.username]?.starRating ?? 0;
+        logger5.info("score", "\u624B\u52A8\u661F\u7EA7\u5DF2\u8BBE\u7F6E", { username: message.username, stars, autoCreate: !!message.autoCreate });
+        return { ok: true, starRating: stars, starInfo: starInfo(producerDb, message.username) };
+      }
+      case "IMG_DB_GET_STAR": {
+        await producerDbReady;
+        return { ok: true, starInfo: starInfo(producerDb, message.username) };
+      }
       case "IMG_DB_SAVE": {
         await producerDbReady;
         await storageSet(PRODUCER_DB_KEY, producerDb);
@@ -3005,9 +3513,52 @@
       }
       case "IMG_TAG_GET": {
         await producerDbReady;
-        const tags = computeTags(Object.values(producerDb.entries), message.topN ?? 100);
-        logger5.info("tag", "\u6807\u7B7E\u4E91\u7EDF\u8BA1\u5B8C\u6210", { tags: tags.length, topN: message.topN ?? 100 });
+        await tagCustomReady;
+        const tags = computeTags(Object.values(producerDb.entries), {
+          topN: message.topN ?? 200,
+          minAlbums: message.minAlbums ?? 5,
+          minUsers: message.minUsers ?? 1,
+          custom: tagCustomDict,
+          includeSlug: !!message.includeSlug
+        });
+        logger5.info("tag", "\u6807\u7B7E\u4E91\u7EDF\u8BA1\u5B8C\u6210", {
+          tags: tags.length,
+          topN: message.topN ?? 200,
+          minAlbums: message.minAlbums ?? 5,
+          minUsers: message.minUsers ?? 1,
+          custom: tagCustomDict.entries.length,
+          blocked: tagCustomDict.blocked.length
+        });
         return { ok: true, tags };
+      }
+      case "IMG_TAG_DICT_GET": {
+        await tagCustomReady;
+        return { ok: true, tagDict: tagCustomDict };
+      }
+      case "IMG_TAG_DICT_SAVE": {
+        tagCustomDict = loadCustomDict(message.tagDict);
+        await storageSet(TAG_CUSTOM_KEY, tagCustomDict);
+        logger5.info("tag", "\u81EA\u5B9A\u4E49\u6807\u7B7E\u8BCD\u5178\u5DF2\u4FDD\u5B58", {
+          entries: tagCustomDict.entries.length,
+          blocked: tagCustomDict.blocked.length
+        });
+        return { ok: true, tagDict: tagCustomDict };
+      }
+      case "STAR_OVERLAY_STATUS": {
+        const enabled = await storageGet(STAR_OVERLAY_KEY) === true;
+        const regs = await chrome.scripting.getRegisteredContentScripts({ ids: [STAR_OVERLAY_ID] }).catch(() => []);
+        return { ok: true, overlay: { enabled, registered: regs.length > 0 } };
+      }
+      case "STAR_OVERLAY_SET": {
+        if (message.enabled) {
+          const ok = await registerStarOverlay();
+          await storageSet(STAR_OVERLAY_KEY, ok);
+          const regs = await chrome.scripting.getRegisteredContentScripts({ ids: [STAR_OVERLAY_ID] }).catch(() => []);
+          return { ok: true, overlay: { enabled: ok, registered: regs.length > 0 } };
+        }
+        await unregisterStarOverlay();
+        await storageSet(STAR_OVERLAY_KEY, false);
+        return { ok: true, overlay: { enabled: false, registered: false } };
       }
       case "IMG_DB_IMPORT": {
         await producerDbReady;
@@ -3258,7 +3809,8 @@
               });
             },
             message.startPage ?? 1,
-            message.useGoogleAll === true
+            message.useGoogleAll === true,
+            message.googleSites ?? []
           );
           await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "search", data: [], done: true });
         } catch (err) {
