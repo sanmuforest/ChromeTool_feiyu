@@ -124,16 +124,17 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
   }
 
   function collectSelectedItems(): DownloadItem[] {
-    const urls: { url: string; sort: string }[] = []
+    // 命名顺序 = 抓取顺序（images 数组顺序）：
+    // - 多页图站：页序 × 页内 DOM 序（fetchAlbumAllPages 串行按页收集）
+    // - imgbb：翻页序；主抓取页：DOM / 滚动序
+    // 注意：禁止按 URL 字典序重排——曾导致 hash / base64 文件名的站点（imgbb、phimvuspot 等）
+    //      编号与页面顺序错位（变更日志 2026-09-29-004）
+    const items: { url: string }[] = []
     for (const img of images) {
-      if (selected.has(img.url)) {
-        urls.push({ url: downloadUrlOf(img), sort: img.url })
-      }
+      if (selected.has(img.url)) items.push({ url: downloadUrlOf(img) })
     }
-    // 按 images 顺序输出（selected 是 Set，需要还原顺序）
-    urls.sort((a, b) => a.sort.localeCompare(b.sort))
     const albumName = options.getAlbumName ? options.getAlbumName() : ''
-    return urls.map((u, i) => ({ url: u.url, filename: extractFilename(u.url, i + 1, albumName || undefined) }))
+    return items.map((u, i) => ({ url: u.url, filename: extractFilename(u.url, i + 1, albumName || undefined) }))
   }
 
   // ---------- 去重 ----------

@@ -3129,15 +3129,12 @@
       return img.downloadUrl ?? img.url;
     }
     function collectSelectedItems() {
-      const urls = [];
+      const items = [];
       for (const img of images) {
-        if (selected.has(img.url)) {
-          urls.push({ url: downloadUrlOf(img), sort: img.url });
-        }
+        if (selected.has(img.url)) items.push({ url: downloadUrlOf(img) });
       }
-      urls.sort((a, b) => a.sort.localeCompare(b.sort));
       const albumName = options.getAlbumName ? options.getAlbumName() : "";
-      return urls.map((u, i) => ({ url: u.url, filename: extractFilename(u.url, i + 1, albumName || void 0) }));
+      return items.map((u, i) => ({ url: u.url, filename: extractFilename(u.url, i + 1, albumName || void 0) }));
     }
     function normalizeKey(url) {
       try {
@@ -6214,7 +6211,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20260929234200" : "dev";
+  var BUILD_TIME = true ? "20261006234841" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
