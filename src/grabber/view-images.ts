@@ -3,7 +3,7 @@
 
 import { initLogger } from '../lib/logger'
 import { sendMessage } from '../lib/messages'
-import { matchGallerySite } from '../lib/gallery-sites'
+import { matchGallerySite } from '../sites/registry'
 import type { DownloadJob, GrabSession, GrabbedImage } from '../lib/types'
 import { createGrabView, type GrabViewHandle } from './image-grab-view'
 

@@ -110,6 +110,8 @@ export type Message =
   | { type: 'BD_FETCH_ALBUM'; srcTabId: number; url: string }
   | { type: 'BD_SCAN_LINKS'; srcTabId: number; url: string; kind: 'recommended' | 'popular' }
   | { type: 'BD_FETCH_ALBUMS'; srcTabId: number; targets: BuonduaTarget[] }
+  // ---- 站内列表浏览（FP-023）：不依赖搜索引擎，直接遍历站点分类/列表页 ----
+  | { type: 'BD_FETCH_LIST'; srcTabId: number; siteId: string; listUrl: string; pages: number }
   // ---- 多页图站聚合搜索（FP-010/096）：grabber → bg ----
   // startPage：每站起始页（默认 1）；「下一批」续搜时传上次结束页 +1，结果追加扩充
   // useGoogleAll：Google 全站搜索开关（FP-013 调整：开启后全部站点走 Google sitesearch 网页通道，仅标题+链接，速度快）
@@ -126,7 +128,7 @@ export type Message =
 
 export type ImgResultKind = 'album-images' | 'gallery' | 'gallery-range' | 'albums' | 'following'
 
-export type BuonduaResultKind = 'album' | 'scan' | 'batch-item' | 'search' | 'search-site'
+export type BuonduaResultKind = 'album' | 'scan' | 'batch-item' | 'search' | 'search-site' | 'list'
 
 /** 聚合搜索单站结果（BD_RESULT kind=search-site 的 data） */
 export interface SearchSiteResult {

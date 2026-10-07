@@ -5016,211 +5016,349 @@
     return name.replace(/[\\/:*?"<>|\n\r]/g, "_").trim() || "album";
   }
 
-  // src/lib/gallery-sites.ts
-  var GALLERY_SITES = [
-    {
-      id: "buondua",
-      hosts: ["buondua.com"],
-      containerOpen: /<div[^>]*class="[^"]*article-fulltext[^"]*"[^>]*>/,
-      pagePattern: /\(\s*Page\s+\d+\s*\/\s*(\d+)\s*\)/i,
-      pageUrl: (base, page) => `${base}?page=${page}`,
-      baseUrlOf: (url) => {
-        try {
-          const u = new URL(url);
-          u.search = "";
-          u.hash = "";
-          return u.href;
-        } catch {
-          return url;
-        }
-      },
-      cleanTitle: (title) => title.replace(/\s*[-–—]\s*\(\s*Page\s+\d+\s*\/\s*\d+\s*\)\s*$/i, "").trim(),
-      // buondua 站内搜索（2026-08-14 实测恢复可用）：GET ?search={q}，分页 &start={offset}（每页 20 条）
-      // 结果卡片与推荐区同构（items-row），parseRecommendedLinks 直接解析（parseLinksForSite 路由）
-      searchUrl: (q, page) => page <= 1 ? `https://buondua.com/?search=${encodeURIComponent(q)}` : `https://buondua.com/?search=${encodeURIComponent(q)}&start=${(page - 1) * 20}`
+  // src/sites/defs/buondua.ts
+  var buondua = {
+    id: "buondua",
+    label: "Buondua",
+    uiOrder: 10,
+    channels: ["site"],
+    defaultChecked: true,
+    folderTag: "buondua",
+    endpoints: [{ host: "buondua.com", role: "primary" }],
+    container: { tag: "div", className: "article-fulltext" },
+    pagination: { kind: "query", param: "page" },
+    maxPagePattern: { source: "\\(\\s*Page\\s+\\d+\\s*\\/\\s*(\\d+)\\s*\\)", flags: "i" },
+    titleStrip: [{ source: "\\s*[-\u2013\u2014]\\s*\\(\\s*Page\\s+\\d+\\s*\\/\\s*\\d+\\s*\\)\\s*$", flags: "i" }],
+    imageHosts: ["buondua.com"],
+    // 站内搜索（2026-08-14 实测恢复可用）：GET ?search={q}，分页 &start={offset}（每页 20 条）
+    search: { kind: "query", path: "/", param: "search", pageParam: "start", pageStep: 20 },
+    linkParser: "buondua-items-row"
+  };
+
+  // src/sites/defs/rrwsh.ts
+  var rrwsh = {
+    id: "rrwsh",
+    label: "RRWSH (4KHD)",
+    uiOrder: 20,
+    channels: ["site"],
+    // 2026-10-07 实测：rrwsh.uuss.uk 背后已换成「豆豆」视频站（iozl.uuss.uk），
+    // 原 4KHD 图集站不在该域，解析器依赖的 li.wp-block-post 结构也已消失 → 暂不默认勾选（避免聚合搜索白跑）
+    defaultChecked: false,
+    folderTag: "buondua",
+    endpoints: [
+      { host: "rrwsh.uuss.uk", role: "primary" },
+      { host: "4khd.com", role: "mirror" },
+      { host: "iftye.uuss.uk", role: "mirror" }
+    ],
+    container: { tag: "div", className: "entry-content" },
+    pagination: { kind: "path" },
+    baseUrl: { stripPagePath: "suffix" },
+    maxPagePattern: { source: "Page\\s+\\d+\\s+of\\s+(\\d+)", flags: "i" },
+    titleStrip: [
+      { source: "\\s*[-\u2013\u2014]\\s*Page\\s+\\d+\\s+of\\s+\\d+\\s*[-\u2013\u2014]\\s*[^-]*$", flags: "i" },
+      { source: "\\s*[-\u2013\u2014]\\s*4KHD\\s*$", flags: "i" }
+    ],
+    imageHosts: ["wp.com"],
+    // 搜索无分页（实测 2026-08-14：/search/{q}/2 为空白页），每页固定 4 条
+    search: { kind: "path-template", template: "/search/{q}" },
+    // 4khd.com 结果链接改写回 rrwsh 域（primary）
+    urlRewrite: [{ fromHost: "4khd.com" }],
+    linkParser: "rrwsh-cards",
+    imageCountRule: "rrwsh-photos"
+  };
+
+  // src/sites/defs/hitxhot.ts
+  var hitxhot = {
+    id: "hitxhot",
+    label: "Hitxhot",
+    uiOrder: 30,
+    channels: ["google"],
+    defaultChecked: false,
+    folderTag: "buondua",
+    endpoints: [{ host: "hitxhot.org", role: "primary" }],
+    container: { tag: "div", className: "contentme" },
+    pagination: { kind: "query", param: "page" },
+    maxPagePattern: {
+      source: "\\|\\s*(?:Page\\s+\\d+\\s*\\/\\s*(\\d+)|\u7B2C\\s*\\d+\\s*\\/\\s*(\\d+)\\s*\u9875)",
+      flags: "i"
     },
-    {
-      id: "rrwsh",
-      // FP-014 修复 8：iftye.uuss.uk 为同体系镜像（uuss.uk 系，4khd 模板 /content/N/slug.html），加入后全套解析复用
-      hosts: ["rrwsh.uuss.uk", "4khd.com", "iftye.uuss.uk"],
-      containerOpen: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/,
-      pagePattern: /Page\s+\d+\s+of\s+(\d+)/i,
-      pageUrl: (base, page) => `${base}/${page}`,
-      baseUrlOf: (url) => {
-        try {
-          const u = new URL(url);
-          u.search = "";
-          u.hash = "";
-          const path = u.pathname.replace(/\/\d+$/, "");
-          return `${u.origin}${path}`;
-        } catch {
-          return url;
-        }
-      },
-      cleanTitle: (title) => title.replace(/\s*[-–—]\s*Page\s+\d+\s+of\s+\d+\s*[-–—]\s*[^-]*$/i, "").replace(/\s*[-–—]\s*4KHD\s*$/i, "").trim(),
-      // rrwsh 为 4khd 镜像：搜索页可达（curl 200，实测 2026-08-14），结果链接指向 4khd.com
-      // 4khd.com 相册页被反爬网关拦截（302 → y5gx.uuss.uk/4khd.php），但 rrwsh.uuss.uk 同路径直接可达
-      // → 结果 URL 改写为 rrwsh 域（rewriteUrl），抓取/分页（/content/N/slug.html/2）均正常
-      // 搜索无分页（实测 2026-08-14：/search/{q}/2 为空白页，页面无分页链接），每页固定 4 条
-      searchUrl: (q, page) => page > 1 ? null : `https://rrwsh.uuss.uk/search/${encodeURIComponent(q)}`,
-      rewriteUrl: (url) => url.replace(/https?:\/\/(?:www\.)?4khd\.com/i, "https://rrwsh.uuss.uk")
+    titleStrip: [{ source: "\\s*\\|\\s*(?:Page\\s+\\d+\\s*\\/\\s*\\d+|\u7B2C\\s*\\d+\\s*\\/\\s*\\d+\\s*\u9875)\\s*$", flags: "i" }],
+    search: { kind: "google-sitesearch" },
+    searchAlbumPath: "/gallerys/",
+    // FP-023 列表浏览：站内相册列表页（不依赖搜索引擎，Google 通道被拒时的替代通道）
+    listPages: [{ label: "\u76F8\u518C\u5217\u8868 /gallerys/", path: "/gallerys/", pageKind: "query", param: "page" }],
+    linkParser: "google-serp",
+    hint: "\u65E0\u7AD9\u5185\u641C\u7D22\uFF1A\u8D70 Google \u7AD9\u5185\u641C\u7D22\uFF08sitesearch\uFF09"
+  };
+
+  // src/sites/defs/kaizty.ts
+  var kaizty = {
+    id: "kaizty",
+    label: "Kaizty",
+    uiOrder: 40,
+    channels: ["google"],
+    defaultChecked: false,
+    folderTag: "buondua",
+    endpoints: [{ host: "kaizty.com", role: "primary" }],
+    container: { tag: "div", className: "contentme" },
+    pagination: { kind: "query", param: "page" },
+    maxPagePattern: {
+      source: "\\|\\s*(?:Page\\s+\\d+\\s*\\/\\s*(\\d+)|\u7B2C\\s*\\d+\\s*\\/\\s*(\\d+)\\s*\u9875)",
+      flags: "i"
     },
-    {
-      id: "hitxhot",
-      hosts: ["hitxhot.org"],
-      containerOpen: /<div[^>]*class="[^"]*contentme[^"]*"[^>]*>/,
-      // 兼容英文 "| Page 2/3" 与中文 "| 第1/6页"（组2 = 总页数）
-      pagePattern: /\|\s*(?:Page\s+\d+\s*\/\s*(\d+)|第\s*\d+\s*\/\s*(\d+)\s*页)/i,
-      pageUrl: (base, page) => `${base}?page=${page}`,
-      baseUrlOf: (url) => {
-        try {
-          const u = new URL(url);
-          u.search = "";
-          u.hash = "";
-          return u.href;
-        } catch {
-          return url;
-        }
-      },
-      cleanTitle: (title) => title.replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
-      // hitxhot 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004）；gbv=1 强制基础 HTML 版
-      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.hitxhot.org&gbv=1${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
-      searchAlbumPath: "/gallerys/"
-    },
-    {
-      id: "kaizty",
-      hosts: ["kaizty.com"],
-      containerOpen: /<div[^>]*class="[^"]*contentme[^"]*"[^>]*>/,
-      // 与 hitxhot 同模板：标题含 "| Page X/Y"（组2 = 总页数）
-      pagePattern: /\|\s*(?:Page\s+\d+\s*\/\s*(\d+)|第\s*\d+\s*\/\s*(\d+)\s*页)/i,
-      pageUrl: (base, page) => `${base}?page=${page}`,
-      baseUrlOf: (url) => {
-        try {
-          const u = new URL(url);
-          u.search = "";
-          u.hash = "";
-          return u.href;
-        } catch {
-          return url;
-        }
-      },
-      cleanTitle: (title) => title.replace(/^Kaizty Photos:\s*/i, "").replace(/^Kaizty 照片：\s*/i, "").replace(/\s*\|\s*(?:Page\s+\d+\s*\/\s*\d+|第?\s*\d+\s*\/\s*\d+\s*页)\s*$/i, "").trim(),
-      // kaizty 无站内搜索：官方搜索表单即 Google sitesearch（FP-012 预研 004，用户代理环境实测可用）
-      // gbv=1 强制 Google 基础 HTML 版（无 JS 服务端渲染，h3.r > a 直链结构，插件 fetch 可解析）
-      searchUrl: (q, page) => `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=www.kaizty.com&gbv=1${page > 1 ? `&start=${(page - 1) * 10}` : ""}`,
-      searchAlbumPath: "/photos/"
-    },
-    {
-      id: "jrants",
-      hosts: ["jrants.com"],
-      containerOpen: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/,
-      // WP 多页文章：标题无 Page 标记（h1 不分页），总页数靠分页链接兜底（见 parseGalleryMaxPage 兜底3）
-      pagePattern: /(?!)0/,
-      pageUrl: (base, page) => page <= 1 ? base : `${base}/${page}`,
-      baseUrlOf: (url) => {
-        try {
-          const u = new URL(url);
-          u.search = "";
-          u.hash = "";
-          const path = u.pathname.replace(/\/\d+$/, "");
-          return `${u.origin}${path}`;
-        } catch {
-          return url;
-        }
-      },
-      cleanTitle: (title) => title.trim(),
-      // WP 搜索：路径式分页（实测 2026-08-14：/page/2?s={q}，&paged= 无效）
-      searchUrl: (q, page) => page <= 1 ? `https://jrants.com/?s=${encodeURIComponent(q)}` : `https://jrants.com/page/${page}?s=${encodeURIComponent(q)}`
-    },
-    {
-      id: "pixibb",
-      hosts: ["pixibb.com"],
-      containerOpen: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/,
-      // WP 多页文章（magezix 主题）：标题无 Page 标记，总页数靠分页链接兜底（post-page-numbers，尾斜杠 /N/）
-      pagePattern: /(?!)0/,
-      pageUrl: (base, page) => page <= 1 ? base : `${base.replace(/\/?$/, "/")}${page}/`,
-      baseUrlOf: (url) => {
-        try {
-          const u = new URL(url);
-          u.search = "";
-          u.hash = "";
-          const path = u.pathname.replace(/\/\d+\/$/, "").replace(/\/\d+$/, "");
-          return `${u.origin}${path}`;
-        } catch {
-          return url;
-        }
-      },
-      cleanTitle: (title) => title.trim(),
-      // WP 搜索：路径式分页（实测 2026-08-14：/page/N/?s={q}，&paged= 无效；主内容子域 sexy）
-      searchUrl: (q, page) => page <= 1 ? `https://sexy.pixibb.com/?s=${encodeURIComponent(q)}` : `https://sexy.pixibb.com/page/${page}/?s=${encodeURIComponent(q)}`
-    },
-    {
-      // FP-014 新站（2026-08-17 探测适配）：
-      id: "cangcuc",
-      hosts: ["cangcuc.com"],
-      // 探测：正文容器 post-single-body(57)；图片 media01.cangcuc.com/size_large_v1/{相册}_{ts}/NNN.jpg
-      // 单文章页图集全展示（探测页无分页链接）；标题「李佳 - OL | Căng Cực」
-      containerOpen: /<div[^>]*class="[^"]*post-single-body[^"]*"[^>]*>/,
-      pagePattern: /(?!)0/,
-      // 无标题分页标记；分页链接兜底（parseGalleryMaxPage）
-      pageUrl: (base, _page) => base,
-      baseUrlOf: (url) => {
-        try {
-          const u = new URL(url);
-          u.search = "";
-          u.hash = "";
-          return u.href;
-        } catch {
-          return url;
-        }
-      },
-      cleanTitle: (title) => title.replace(/\s*\|\s*Căng\s*Cực\s*$/i, "").trim(),
-      // WP 站内搜索（FP-014：标准 ?s= + 路径式分页，搜索结果页链接为文章页，parseSitePostLinks 通用解析）
-      searchUrl: (q, page) => page <= 1 ? `https://cangcuc.com/?s=${encodeURIComponent(q)}` : `https://cangcuc.com/page/${page}/?s=${encodeURIComponent(q)}`
-    },
-    {
-      id: "phimvuspot",
-      hosts: ["m.phimvuspot.com", "phimvuspot.com"],
-      // 探测：标题含「Page 1/18」；分页 ?page=N；图片 iN.wp.com/im.thismore.fun/s2/{base64}.jpg?w=640
-      // （WordPress Photon CDN 代理，?w 参数可放大原图）；容器 contentme（与 hitxhot 同模板）
-      containerOpen: /<div[^>]*class="[^"]*contentme[^"]*"[^>]*>/,
-      pagePattern: /\|\s*Page\s+\d+\s*\/\s*(\d+)/i,
-      pageUrl: (base, page) => `${base}?page=${page}`,
-      baseUrlOf: (url) => {
-        try {
-          const u = new URL(url);
-          u.search = "";
-          u.hash = "";
-          return u.href;
-        } catch {
-          return url;
-        }
-      },
-      cleanTitle: (title) => title.replace(/^PhimVu\s*Blog:\s*/i, "").replace(/\s*\|\s*Page\s+\d+\s*\/\s*\d+\s*$/i, "").trim(),
-      // Photon 缩放参数放大：?w=640 → ?w=1920（高清原图级）
-      imageUrlClean: (url) => url.replace(/[?&]w=\d+/, "?w=1920")
-    },
-    {
-      id: "ilovexs",
-      hosts: ["ilovexs.com"],
-      // 探测：图片画廊容器 image-gallery/gallery-item（内容图在 reiobox.top/wp-content/uploads，跨域图床）；
-      // 相册卡片 album-card 为相关推荐（必须隔离，用 image-gallery 容器）；标题「... | Nongmo.Zone」
-      containerOpen: /<div[^>]*class="[^"]*image-gallery[^"]*"[^>]*>/,
-      pagePattern: /(?!)0/,
-      pageUrl: (base, _page) => base,
-      baseUrlOf: (url) => {
-        try {
-          const u = new URL(url);
-          u.search = "";
-          u.hash = "";
-          return u.href;
-        } catch {
-          return url;
-        }
-      },
-      cleanTitle: (title) => title.replace(/\s*\|\s*Nongmo\.Zone\s*$/i, "").trim()
-    }
+    titleStrip: [
+      { source: "^Kaizty Photos:\\s*", flags: "i" },
+      { source: "^Kaizty \u7167\u7247\uFF1A\\s*", flags: "i" },
+      { source: "\\s*\\|\\s*(?:Page\\s+\\d+\\s*\\/\\s*\\d+|\u7B2C?\\s*\\d+\\s*\\/\\s*\\d+\\s*\u9875)\\s*$", flags: "i" }
+    ],
+    search: { kind: "google-sitesearch" },
+    searchAlbumPath: "/photos/",
+    // FP-023 列表浏览：站内相册列表页（不依赖搜索引擎，Google 通道被拒时的替代通道）
+    listPages: [{ label: "\u76F8\u518C\u5217\u8868 /photos/", path: "/photos/", pageKind: "query", param: "page" }],
+    linkParser: "kaizty-photos",
+    hint: "\u65E0\u7AD9\u5185\u641C\u7D22\uFF1A\u8D70 Google \u7AD9\u5185\u641C\u7D22\uFF08sitesearch\uFF09"
+  };
+
+  // src/sites/defs/jrants.ts
+  var jrants = {
+    id: "jrants",
+    label: "Jrants",
+    uiOrder: 50,
+    // 2026-10-07：站内搜索被反爬拒绝（HTTP 403，首页亦不可后台直接访问）→ 改走 Google 站内搜索通道
+    channels: ["google"],
+    defaultChecked: false,
+    folderTag: "buondua",
+    endpoints: [{ host: "jrants.com", role: "primary" }],
+    container: { tag: "div", className: "entry-content" },
+    pagination: { kind: "path-from-2" },
+    baseUrl: { stripPagePath: "suffix" },
+    // maxPagePattern 缺省 = 无标题标记
+    imageHosts: ["jrants.com"],
+    search: { kind: "google-sitesearch" },
+    linkParser: "google-serp",
+    scan: { recommended: "jrants-recommended", others: "jrants-others" },
+    imageCountRule: "jrants-p",
+    // jrants 连续快速搜索触发反爬限流（实测 2026-08-13/14），页间强制间隔
+    throttle: { fromPage: 2, delayMs: 2e3 }
+  };
+
+  // src/sites/defs/pixibb.ts
+  var pixibb = {
+    id: "pixibb",
+    label: "PixiBB",
+    uiOrder: 60,
+    channels: ["google"],
+    defaultChecked: false,
+    folderTag: "buondua",
+    endpoints: [{ host: "pixibb.com", role: "primary" }],
+    container: { tag: "div", className: "entry-content" },
+    pagination: { kind: "path-slash-from-2" },
+    baseUrl: { stripPagePath: "trailing-slash" },
+    // maxPagePattern 缺省 = 无标题标记
+    imageHosts: ["pixibb.com"],
+    search: { kind: "wp-query-path-page", param: "s", trailingSlash: true },
+    searchBaseHost: "sexy.pixibb.com",
+    linkParser: "pixibb-magezix",
+    scan: { recommended: "pixibb-recommended", others: "pixibb-others" },
+    imageCountRule: "pixibb-slug",
+    hint: "\u7AD9\u5185\u641C\u7D22\u65E0\u7ED3\u679C\uFF1A\u8D70 Google \u901A\u9053"
+  };
+
+  // src/sites/defs/cangcuc.ts
+  var cangcuc = {
+    id: "cangcuc",
+    label: "Cangcuc",
+    uiOrder: 70,
+    channels: ["site"],
+    // 2026-10-07 实测：cangcuc.com DNS 已失效（getaddrinfo ENOTFOUND），暂无新域名 → 暂不默认勾选
+    defaultChecked: false,
+    folderTag: "buondua",
+    endpoints: [{ host: "cangcuc.com", role: "primary" }],
+    container: { tag: "div", className: "post-single-body" },
+    pagination: { kind: "single" },
+    // maxPagePattern 缺省 = 无标题标记
+    titleStrip: [{ source: "\\s*\\|\\s*C\u0103ng\\s*C\u1EF1c\\s*$", flags: "i" }],
+    // WP 站内搜索（标准 ?s= + 路径式分页 /page/N/?s=）
+    search: { kind: "wp-query-path-page", param: "s", trailingSlash: true },
+    linkParser: "generic-post-links"
+  };
+
+  // src/sites/defs/phimvuspot.ts
+  var phimvuspot = {
+    id: "phimvuspot",
+    label: "PhimVuSpot",
+    uiOrder: 80,
+    channels: ["google"],
+    defaultChecked: false,
+    folderTag: "buondua",
+    // 主域优先：m. 子域 Google 索引差（FP-014）
+    endpoints: [{ host: "m.phimvuspot.com", role: "mirror" }, { host: "phimvuspot.com", role: "primary" }],
+    container: { tag: "div", className: "contentme" },
+    pagination: { kind: "query", param: "page" },
+    maxPagePattern: { source: "\\|\\s*Page\\s+\\d+\\s*\\/\\s*(\\d+)", flags: "i" },
+    titleStrip: [
+      { source: "^PhimVu\\s*Blog:\\s*", flags: "i" },
+      { source: "\\s*\\|\\s*Page\\s+\\d+\\s*\\/\\s*\\d+\\s*$", flags: "i" }
+    ],
+    imageHosts: ["wp.com", "thismore.fun"],
+    // Photon 缩放参数放大：?w=640 → ?w=1920（高清原图级）
+    imageQueryFix: [{ param: "w", value: "1920" }],
+    linkParser: "generic-post-links"
+  };
+
+  // src/sites/defs/ilovexs.ts
+  var ilovexs = {
+    id: "ilovexs",
+    label: "iLoveXS",
+    uiOrder: 90,
+    channels: ["google"],
+    defaultChecked: false,
+    folderTag: "buondua",
+    endpoints: [{ host: "ilovexs.com", role: "primary" }],
+    container: { tag: "div", className: "image-gallery" },
+    pagination: { kind: "single" },
+    // maxPagePattern 缺省 = 无标题标记
+    titleStrip: [{ source: "\\s*\\|\\s*Nongmo\\.Zone\\s*$", flags: "i" }],
+    linkParser: "generic-post-links"
+  };
+
+  // src/sites/defs/index.ts
+  var SITE_DEFS = [
+    buondua,
+    rrwsh,
+    hitxhot,
+    kaizty,
+    jrants,
+    pixibb,
+    cangcuc,
+    phimvuspot,
+    ilovexs
   ];
+
+  // src/sites/engine.ts
+  function escapeRegex(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  function toRegExp(spec) {
+    return new RegExp(spec.source, spec.flags ?? "");
+  }
+  function primaryHostOf(def) {
+    const explicit = def.endpoints.find((e) => e.role === "primary");
+    if (explicit) return explicit.host;
+    const bare = def.endpoints.find((e) => !/^(m|www|mobile)\./i.test(e.host));
+    return (bare ?? def.endpoints[0]).host;
+  }
+  function searchHostOf(def) {
+    if (def.searchBaseHost) return def.searchBaseHost;
+    const search = def.endpoints.find((e) => e.role === "search");
+    return search ? search.host : primaryHostOf(def);
+  }
+  function buildPageUrl(def, base, page) {
+    switch (def.pagination.kind) {
+      case "query":
+        return `${base}?${def.pagination.param ?? "page"}=${page}`;
+      case "path":
+        return `${base}/${page}`;
+      case "path-from-2":
+        return page <= 1 ? base : `${base}/${page}`;
+      case "path-slash-from-2":
+        return page <= 1 ? base : `${base.replace(/\/?$/, "/")}${page}/`;
+      case "single":
+        return base;
+      default:
+        return base;
+    }
+  }
+  function buildBaseUrl(def, url) {
+    try {
+      const u = new URL(url);
+      u.search = "";
+      u.hash = "";
+      const strip = def.baseUrl?.stripPagePath ?? "none";
+      if (strip === "none") return u.href;
+      const path = strip === "suffix" ? u.pathname.replace(/\/\d+$/, "") : u.pathname.replace(/\/\d+\/$/, "").replace(/\/\d+$/, "");
+      return `${u.origin}${path}`;
+    } catch {
+      return url;
+    }
+  }
+  function buildCleanTitle(def, title) {
+    let out = title;
+    for (const spec of def.titleStrip ?? []) out = out.replace(toRegExp(spec), "");
+    return out.trim();
+  }
+  function buildSearchUrl(def, q, page) {
+    const search = def.search;
+    if (!search) return null;
+    const host = searchHostOf(def);
+    const query = encodeURIComponent(q);
+    switch (search.kind) {
+      case "query": {
+        const base = `https://${host}${search.path ?? "/"}?${search.param}=${query}`;
+        if (page > 1 && search.pageParam) {
+          return `${base}&${search.pageParam}=${(page - 1) * (search.pageStep ?? 10)}`;
+        }
+        return base;
+      }
+      case "path-template": {
+        if (page > 1) return null;
+        return `https://${host}${search.template.replace("{q}", query)}`;
+      }
+      case "wp-query-path-page": {
+        if (page <= 1) return `https://${host}/?${search.param}=${query}`;
+        return `https://${host}/page/${page}${search.trailingSlash ? "/" : ""}?${search.param}=${query}`;
+      }
+      case "google-sitesearch": {
+        const siteHost = `www.${primaryHostOf(def)}`;
+        const siteQuery = encodeURIComponent(`${q} site:${siteHost}`);
+        return `https://www.google.com/search?q=${siteQuery}&hl=zh-CN${page > 1 ? `&start=${(page - 1) * 10}` : ""}`;
+      }
+      default:
+        return null;
+    }
+  }
+  function buildRewriteUrl(def, url) {
+    let out = url;
+    for (const rule of def.urlRewrite ?? []) {
+      out = out.replace(
+        new RegExp(`https?://(?:www\\.)?${escapeRegex(rule.fromHost)}`, "i"),
+        `https://${primaryHostOf(def)}`
+      );
+    }
+    return out;
+  }
+  function buildImageUrlClean(def, url) {
+    let out = url;
+    for (const fix of def.imageQueryFix ?? []) {
+      out = out.replace(new RegExp(`[?&]${escapeRegex(fix.param)}=\\d+`), `?${fix.param}=${fix.value}`);
+    }
+    return out;
+  }
+  function compileSite(def) {
+    const site = {
+      id: def.id,
+      hosts: def.endpoints.map((e) => e.host),
+      containerOpen: new RegExp(
+        `<${def.container.tag}[^>]*class="[^"]*${escapeRegex(def.container.className)}[^"]*"[^>]*>`
+      ),
+      pagePattern: def.maxPagePattern ? toRegExp(def.maxPagePattern) : /(?!)0/,
+      pageUrl: (base, page) => buildPageUrl(def, base, page),
+      baseUrlOf: (url) => buildBaseUrl(def, url),
+      cleanTitle: (title) => buildCleanTitle(def, title),
+      searchAlbumPath: def.searchAlbumPath,
+      def
+    };
+    if (def.search) site.searchUrl = (q, page) => buildSearchUrl(def, q, page);
+    if (def.urlRewrite?.length) site.rewriteUrl = (url) => buildRewriteUrl(def, url);
+    if (def.imageQueryFix?.length) site.imageUrlClean = (url) => buildImageUrlClean(def, url);
+    return site;
+  }
+  var COMPILED_SITES = SITE_DEFS.map(compileSite);
+  var IMAGE_HOSTS = [...new Set(SITE_DEFS.flatMap((d) => d.imageHosts ?? []))];
+  var IMG_HOST = IMAGE_HOSTS.length > 0 ? new RegExp(IMAGE_HOSTS.map(escapeRegex).join("|"), "i") : /(?!)/;
+
+  // src/sites/registry.ts
+  var GALLERY_SITES = COMPILED_SITES;
   function matchGallerySite(url) {
     try {
       const host = new URL(url).hostname.replace(/^www\./, "");
@@ -5230,6 +5368,9 @@
     } catch {
     }
     return null;
+  }
+  function siteById(id) {
+    return GALLERY_SITES.find((s) => s.id === id);
   }
 
   // src/lib/jrants-parse.ts
@@ -5242,8 +5383,76 @@
     return title.replace(/\s*[-–—]\s*PixiBB\s*$/i, "").replace(/[\\/:*?"<>|\n\r]/g, "_").trim().slice(0, 120) || "pixibb";
   }
 
-  // src/grabber/view-buondua.ts
+  // src/lib/translate.ts
   var logger5 = initLogger("grabber");
+  var KEY_ENABLED = "translate_enabled";
+  var KEY_CACHE = "translate_cache";
+  var ENDPOINT = "https://translate.googleapis.com/translate_a/single";
+  var TIMEOUT_MS = 8e3;
+  var CACHE_LIMIT = 500;
+  var MAX_NAME_LEN = 120;
+  var HAS_CJK = /[\u4e00-\u9fff]/;
+  async function isTranslateEnabled() {
+    return await storageGet(KEY_ENABLED) ?? true;
+  }
+  async function setTranslateEnabled(enabled) {
+    await storageSet(KEY_ENABLED, enabled);
+  }
+  function sanitize(text) {
+    return text.replace(/^["'“”\s]+|["'“”\s]+$/g, "").replace(/[\\/:*?"<>|\n\r\t]+/g, " ").replace(/\s{2,}/g, " ").trim().slice(0, MAX_NAME_LEN);
+  }
+  async function requestTranslate(text) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      const url = `${ENDPOINT}?client=gtx&sl=auto&tl=zh-CN&dt=t&q=${encodeURIComponent(text)}`;
+      const resp = await fetch(url, { signal: controller.signal });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      if (!Array.isArray(data) || !Array.isArray(data[0])) return null;
+      const parts = data[0].map((seg) => Array.isArray(seg) && typeof seg[0] === "string" ? seg[0] : "").join("");
+      return parts.trim() || null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function saveCache(cache, source, translated) {
+    cache[source] = translated;
+    const keys = Object.keys(cache);
+    if (keys.length <= CACHE_LIMIT) {
+      await storageSet(KEY_CACHE, cache);
+      return;
+    }
+    const kept = {};
+    for (const key of keys.slice(-Math.floor(CACHE_LIMIT / 2))) {
+      kept[key] = cache[key];
+    }
+    await storageSet(KEY_CACHE, kept);
+  }
+  async function translateTitleToChinese(title) {
+    const source = title.trim();
+    if (!source) return title;
+    try {
+      if (!await isTranslateEnabled()) return title;
+      if (HAS_CJK.test(source)) return title;
+      const cache = await storageGet(KEY_CACHE) ?? {};
+      const hit = cache[source];
+      if (hit) return hit;
+      const raw = await requestTranslate(source);
+      if (!raw) return title;
+      const translated = sanitize(raw);
+      if (!translated) return title;
+      await saveCache(cache, source, translated);
+      logger5.info("translate", "\u76F8\u518C\u6807\u9898\u5DF2\u7FFB\u8BD1", { source: source.slice(0, 40), translated });
+      return translated;
+    } catch (err) {
+      logger5.warn("translate", "\u7FFB\u8BD1\u5931\u8D25\uFF0C\u56DE\u9000\u539F\u6587", { source: source.slice(0, 40), error: String(err) });
+      return title;
+    }
+  }
+
+  // src/grabber/view-buondua.ts
+  var logger6 = initLogger("grabber");
   var BATCH_SIZE = 10;
   function toGrabbed2(img) {
     return {
@@ -5267,6 +5476,7 @@
       <div class="adapter-head">
         <h3>\u591A\u9875\u56FE\u7AD9</h3>
         <span class="adapter-hint">buondua / rrwsh / hitxhot / jrants / pixibb / kaizty\uFF1A\u5168\u5B50\u9875\u6293\u53D6 / \u63A8\u8350 / \u5176\u4ED6\u94FE\u63A5\u6279\u91CF\u6293\u53D6</span>
+        <label class="bd-google-all-check" title="\u7528 Google \u7FFB\u8BD1\u628A\u76F8\u518C\u540D\u8BD1\u6210\u4E2D\u6587\uFF08\u6587\u4EF6\u5939\u540D\u4E0E\u56FE\u7247\u540D\u524D\u7F00\u4E00\u8D77\u751F\u6548\uFF1B\u5173\u95ED\u6216\u7FFB\u8BD1\u5931\u8D25\u65F6\u81EA\u52A8\u7528\u539F\u6587\uFF09"><input type="checkbox" id="bd-translate" checked> \u76F8\u518C\u540D\u8BD1\u6210\u4E2D\u6587</label>
       </div>
       <div class="adapter-tabs">
         <button data-sub="bd-album" class="adapter-tab active">\u6293\u53D6</button>
@@ -5306,6 +5516,19 @@
         <div class="row">
           <input id="bd-pop-url" class="text-input" placeholder="\u76F8\u518C URL\uFF08\u626B\u63CF\u5168\u9875\u5176\u4ED6\u5E16\u5B50\u94FE\u63A5\uFF09">
           <button id="bd-pop-scan" class="btn primary">\u626B\u63CF\u5168\u90E8\u94FE\u63A5</button>
+        </div>
+        <div class="row">
+          <span class="ctrl-label">\u5217\u8868\u6D4F\u89C8</span>
+          <select id="bd-list-site" class="num-input" title="\u9009\u62E9\u7AD9\u70B9\uFF08\u76F4\u63A5\u904D\u5386\u7AD9\u70B9\u5206\u7C7B/\u5217\u8868\u9875\uFF0C\u4E0D\u4F9D\u8D56\u641C\u7D22\u5F15\u64CE\uFF09"></select>
+          <input id="bd-list-path" class="text-input" placeholder="\u5217\u8868\u8DEF\u5F84\uFF0C\u5982 /gallerys/">
+          <select id="bd-list-pages" class="num-input" title="\u6293\u53D6\u9875\u6570">
+            <option value="1">1 \u9875</option>
+            <option value="2" selected>2 \u9875</option>
+            <option value="3">3 \u9875</option>
+            <option value="5">5 \u9875</option>
+          </select>
+          <button id="bd-list-fetch" class="btn">\u6293\u53D6\u5217\u8868\u9875</button>
+          <span id="bd-list-status" class="status-text"></span>
         </div>
         <div class="row">
           <button class="btn bd-select-all">\u5168\u9009\u672C\u6279/\u53D6\u6D88</button>
@@ -5365,6 +5588,20 @@
     const batchFolders = /* @__PURE__ */ new Map();
     const batchAlbumNames = /* @__PURE__ */ new Map();
     const linkLists = [];
+    const translateCheck = root.querySelector("#bd-translate");
+    if (translateCheck) {
+      void isTranslateEnabled().then((on) => {
+        translateCheck.checked = on;
+      });
+      translateCheck.addEventListener("change", () => {
+        void setTranslateEnabled(translateCheck.checked);
+        logger6.info("view", "\u76F8\u518C\u540D\u4E2D\u6587\u5316\u5F00\u5173\u5DF2\u5207\u6362", { enabled: translateCheck.checked });
+      });
+    }
+    async function localizeName(title) {
+      if (!translateCheck?.checked) return title;
+      return await translateTitleToChinese(title);
+    }
     root.querySelectorAll(".adapter-tab").forEach((tab) => {
       tab.addEventListener("click", () => {
         root.querySelectorAll(".adapter-tab").forEach((t) => t.classList.remove("active"));
@@ -5420,7 +5657,7 @@ og:image: ${p.ogImage || "\u65E0"}
 \u5BB9\u5668\u5019\u9009: ${p.containerCandidates.map((c) => `${c.cls}(${c.n})`).join(" ")}
 \u5206\u9875(${p.pagination.length}):
   ${p.pagination.map((pg) => `${pg.href} [${pg.text}]`).join("\n  ") || "\uFF08\u65E0\uFF09"}`;
-          logger5.info("view", "\u9875\u9762\u7ED3\u6784\u63A2\u6D4B\u5B8C\u6210", {
+          logger6.info("view", "\u9875\u9762\u7ED3\u6784\u63A2\u6D4B\u5B8C\u6210", {
             url,
             imgs: p.imgSrcs.length,
             containers: p.containerCandidates.slice(0, 5),
@@ -5463,8 +5700,9 @@ og:image: ${p.ogImage || "\u65E0"}
         url
       });
       if (res.ok) {
-        lastAlbumFolder = buildBuonduaFolderName(res.name ?? url, url);
-        lastAlbumShort = extractBuonduaAlbumShortName(res.name ?? url);
+        const name = await localizeName(res.name ?? url);
+        lastAlbumFolder = buildBuonduaFolderName(name, url);
+        lastAlbumShort = extractBuonduaAlbumShortName(name);
       } else {
         albumGrabView.setBusyParsing(false);
         albumGrabView.setParseText(`\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`);
@@ -5563,22 +5801,31 @@ og:image: ${p.ogImage || "\u65E0"}
           renderList();
         }
       });
-      btnFetch.addEventListener("click", () => {
+      btnFetch.addEventListener("click", async () => {
         if (btnFetch.disabled) return;
-        const targets = [...selected].sort((a, b) => a - b).map((idx) => ({
-          url: items[idx].url,
-          folderName: buildBuonduaFolderName(items[idx].title, items[idx].url)
-        }));
-        if (targets.length === 0) {
+        const picked = [...selected].sort((a, b) => a - b);
+        if (picked.length === 0) {
           setStatus(statusEl, "\u8BF7\u5148\u52FE\u9009\u8981\u6293\u53D6\u7684\u76F8\u518C", true);
           return;
+        }
+        setBusy(true);
+        const prepared = [];
+        for (const [n, idx] of picked.entries()) {
+          const item = items[idx];
+          setStatus(statusEl, `\u7FFB\u8BD1\u76F8\u518C\u540D ${n + 1}/${picked.length}\u2026`);
+          const name = await localizeName(item.title);
+          prepared.push({
+            url: item.url,
+            folderName: buildBuonduaFolderName(name, item.url),
+            albumName: extractBuonduaAlbumShortName(name)
+          });
         }
         resultsHost.innerHTML = "";
         batchViews.clear();
         batchFolders.clear();
-        targets.forEach((target, idx) => {
+        prepared.forEach((target, idx) => {
           batchFolders.set(idx, target.folderName);
-          batchAlbumNames.set(idx, extractBuonduaAlbumShortName(target.folderName));
+          batchAlbumNames.set(idx, target.albumName);
           const card = document.createElement("div");
           card.className = "bd-batch-card";
           const head = document.createElement("div");
@@ -5589,7 +5836,20 @@ og:image: ${p.ogImage || "\u65E0"}
           const status = document.createElement("span");
           status.className = "bd-batch-status";
           status.textContent = "\u7B49\u5F85\u6293\u53D6\u2026";
-          head.append(title, status);
+          const closeBtn = document.createElement("button");
+          closeBtn.type = "button";
+          closeBtn.className = "bd-batch-close";
+          closeBtn.title = "\u79FB\u9664\u6B64\u76F8\u518C\u7ED3\u679C\u5361\u7247";
+          closeBtn.textContent = "\xD7";
+          closeBtn.addEventListener("click", () => {
+            batchViews.get(idx)?.clear();
+            batchViews.delete(idx);
+            batchFolders.delete(idx);
+            batchAlbumNames.delete(idx);
+            card.remove();
+            logger6.info("view", "\u5DF2\u79FB\u9664\u6279\u91CF\u7ED3\u679C\u5361\u7247", { index: idx });
+          });
+          head.append(title, status, closeBtn);
           const host = document.createElement("div");
           host.className = "grab-view-host";
           card.append(head, host);
@@ -5605,9 +5865,13 @@ og:image: ${p.ogImage || "\u65E0"}
           grabView.setParseText("\u6293\u53D6\u4E2D\u2026");
           batchViews.set(idx, grabView);
         });
-        setStatus(statusEl, `\u5F00\u59CB\u6279\u91CF\u6293\u53D6 ${targets.length} \u4E2A\u76F8\u518C\uFF08\u5E76\u53D1 3\uFF09\u2026`);
+        setStatus(statusEl, `\u5F00\u59CB\u6279\u91CF\u6293\u53D6 ${prepared.length} \u4E2A\u76F8\u518C\uFF08\u5E76\u53D1 3\uFF09\u2026`);
         setBusy(true);
-        void sendMessage({ type: "BD_FETCH_ALBUMS", srcTabId: srcTabId2, targets }).then((res) => {
+        void sendMessage({
+          type: "BD_FETCH_ALBUMS",
+          srcTabId: srcTabId2,
+          targets: prepared.map((t) => ({ url: t.url, folderName: t.folderName }))
+        }).then((res) => {
           if (!res.ok) {
             setStatus(statusEl, `\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`, true);
             setBusy(false);
@@ -5644,6 +5908,55 @@ og:image: ${p.ogImage || "\u65E0"}
     const recList = setupBatchPanel("bd-recommended", "recommended");
     const popList = setupBatchPanel("bd-popular", "popular");
     linkLists.push(recList, popList);
+    const listSiteSelect = root.querySelector("#bd-list-site");
+    const listPathInput = root.querySelector("#bd-list-path");
+    const listPagesSelect = root.querySelector("#bd-list-pages");
+    const listFetchBtn = root.querySelector("#bd-list-fetch");
+    const listStatusEl = root.querySelector("#bd-list-status");
+    if (listSiteSelect) {
+      for (const site of GALLERY_SITES) {
+        const option = document.createElement("option");
+        option.value = site.id;
+        option.textContent = site.def.label;
+        listSiteSelect.appendChild(option);
+      }
+      const applyListDefault = () => {
+        const site = siteById(listSiteSelect.value);
+        const cfg = site?.def.listPages?.[0];
+        if (listPathInput) listPathInput.value = cfg?.path ?? "/";
+        setStatus(listStatusEl, cfg ? `\u5217\u8868\uFF1A${cfg.label}` : "\u672A\u9884\u7F6E\u5217\u8868\u8DEF\u5F84\uFF0C\u53EF\u81EA\u884C\u586B\u5199\u540E\u6293\u53D6");
+      };
+      listSiteSelect.addEventListener("change", applyListDefault);
+      applyListDefault();
+    }
+    listFetchBtn?.addEventListener("click", async () => {
+      const siteId = listSiteSelect?.value ?? "";
+      const site = siteById(siteId);
+      if (!site) {
+        setStatus(listStatusEl, "\u8BF7\u5148\u9009\u62E9\u7AD9\u70B9", true);
+        return;
+      }
+      if (!await ensureHostPermission()) {
+        setStatus(listStatusEl, "\u9700\u8981\u6388\u6743\u8BBF\u95EE <all_urls> \u540E\u624D\u80FD\u6293\u53D6\u5217\u8868\u9875", true);
+        return;
+      }
+      const path = (listPathInput?.value.trim() || "/").replace(/^\/?/, "/");
+      const host = site.hosts.find((h) => !/^(m|www|mobile)\./i.test(h)) ?? site.hosts[0];
+      if (!host) {
+        setStatus(listStatusEl, "\u7AD9\u70B9\u4E3B\u57DF\u672A\u914D\u7F6E", true);
+        return;
+      }
+      const pages = Number(listPagesSelect?.value) || 1;
+      const listUrl = `https://${host}${path}`;
+      setStatus(listStatusEl, `\u6293\u53D6\u5217\u8868\u9875 ${pages} \u9875\uFF1A${listUrl}`);
+      listFetchBtn.disabled = true;
+      try {
+        const res = await sendMessage({ type: "BD_FETCH_LIST", srcTabId: srcTabId2, siteId, listUrl, pages });
+        if (!res.ok) setStatus(listStatusEl, `\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`, true);
+      } finally {
+        listFetchBtn.disabled = false;
+      }
+    });
     function setupSearchPanel() {
       const panel = root.querySelector("#sub-bd-search");
       const queryInput = panel.querySelector("#bd-search-q");
@@ -5659,8 +5972,8 @@ og:image: ${p.ogImage || "\u65E0"}
       const googleTestBtn = panel.querySelector("#bd-google-test");
       const googleStatus = panel.querySelector("#bd-google-status");
       const btnNext = panel.querySelector(".bd-next-batch");
-      const googleGroupIds = ["hitxhot", "kaizty", "phimvuspot", "ilovexs", "pixibb"];
-      const defaultChecked = /* @__PURE__ */ new Set(["buondua", "jrants", "rrwsh", "cangcuc"]);
+      const googleGroupIds = ["hitxhot", "kaizty", "phimvuspot", "ilovexs", "pixibb", "jrants"];
+      const defaultChecked = /* @__PURE__ */ new Set(["buondua"]);
       const googleChannel = new Set(googleGroupIds);
       const googleAllCheck = panel.querySelector("#bd-google-all");
       let googleAll = false;
@@ -5681,7 +5994,7 @@ og:image: ${p.ogImage || "\u65E0"}
             (id) => `<label class="bd-site-check ${disabledNotes[id] ? "disabled" : ""}" title="${disabledNotes[id] ?? ""}"><input type="checkbox" value="${id}" ${defaultChecked.has(id) ? "checked" : ""} ${disabledNotes[id] ? "disabled" : ""}> <a class="bd-site-name" href="#" data-site="${id}" title="\u6253\u5F00\u7F51\u7AD9\u9996\u9875">${id}</a>${googleChannel.has(id) ? '<span class="bd-site-note">\uFF08Google\uFF09</span>' : ""}${disabledNotes[id] ? `<span class="bd-site-note">\uFF08${disabledNotes[id]}\uFF09</span>` : ""}</label>`
           ).join("");
         };
-        renderGroup(["buondua", "jrants", "rrwsh", "cangcuc", "imgbb"], "bd-search-sites-site");
+        renderGroup(["buondua", "rrwsh", "cangcuc", "imgbb"], "bd-search-sites-site");
         renderGroup(googleGroupIds, "bd-search-sites-google");
         panel.querySelectorAll(".bd-site-boxes").forEach((box) => {
           box.addEventListener("click", (ev) => {
@@ -5886,22 +6199,31 @@ og:image: ${p.ogImage || "\u65E0"}
           }
         });
       });
-      btnFetch.addEventListener("click", () => {
+      btnFetch.addEventListener("click", async () => {
         if (btnFetch.disabled) return;
-        const targets = [...selected].sort((a, b) => a - b).map((idx) => ({
-          url: items[idx].url,
-          folderName: buildBuonduaFolderName(items[idx].title, items[idx].url)
-        }));
-        if (targets.length === 0) {
+        const picked = [...selected].sort((a, b) => a - b);
+        if (picked.length === 0) {
           setStatus(statusEl, "\u8BF7\u5148\u52FE\u9009\u8981\u6293\u53D6\u7684\u76F8\u518C", true);
           return;
+        }
+        setBusy(true);
+        const prepared = [];
+        for (const [n, idx] of picked.entries()) {
+          const item = items[idx];
+          setStatus(statusEl, `\u7FFB\u8BD1\u76F8\u518C\u540D ${n + 1}/${picked.length}\u2026`);
+          const name = await localizeName(item.title);
+          prepared.push({
+            url: item.url,
+            folderName: buildBuonduaFolderName(name, item.url),
+            albumName: extractBuonduaAlbumShortName(name)
+          });
         }
         resultsHost.innerHTML = "";
         batchViews.clear();
         batchFolders.clear();
-        targets.forEach((target, idx) => {
+        prepared.forEach((target, idx) => {
           batchFolders.set(idx, target.folderName);
-          batchAlbumNames.set(idx, extractBuonduaAlbumShortName(target.folderName));
+          batchAlbumNames.set(idx, target.albumName);
           const card = document.createElement("div");
           card.className = "bd-batch-card";
           const head = document.createElement("div");
@@ -5912,7 +6234,20 @@ og:image: ${p.ogImage || "\u65E0"}
           const status = document.createElement("span");
           status.className = "bd-batch-status";
           status.textContent = "\u7B49\u5F85\u6293\u53D6\u2026";
-          head.append(title, status);
+          const closeBtn = document.createElement("button");
+          closeBtn.type = "button";
+          closeBtn.className = "bd-batch-close";
+          closeBtn.title = "\u79FB\u9664\u6B64\u76F8\u518C\u7ED3\u679C\u5361\u7247";
+          closeBtn.textContent = "\xD7";
+          closeBtn.addEventListener("click", () => {
+            batchViews.get(idx)?.clear();
+            batchViews.delete(idx);
+            batchFolders.delete(idx);
+            batchAlbumNames.delete(idx);
+            card.remove();
+            logger6.info("view", "\u5DF2\u79FB\u9664\u6279\u91CF\u7ED3\u679C\u5361\u7247", { index: idx });
+          });
+          head.append(title, status, closeBtn);
           const host = document.createElement("div");
           host.className = "grab-view-host";
           card.append(head, host);
@@ -5928,9 +6263,13 @@ og:image: ${p.ogImage || "\u65E0"}
           grabView.setParseText("\u6293\u53D6\u4E2D\u2026");
           batchViews.set(idx, grabView);
         });
-        setStatus(statusEl, `\u5F00\u59CB\u6279\u91CF\u6293\u53D6 ${targets.length} \u4E2A\u76F8\u518C\uFF08\u5E76\u53D1 3\uFF09\u2026`);
+        setStatus(statusEl, `\u5F00\u59CB\u6279\u91CF\u6293\u53D6 ${prepared.length} \u4E2A\u76F8\u518C\uFF08\u5E76\u53D1 3\uFF09\u2026`);
         setBusy(true);
-        void sendMessage({ type: "BD_FETCH_ALBUMS", srcTabId: srcTabId2, targets }).then((res) => {
+        void sendMessage({
+          type: "BD_FETCH_ALBUMS",
+          srcTabId: srcTabId2,
+          targets: prepared.map((t) => ({ url: t.url, folderName: t.folderName }))
+        }).then((res) => {
           if (!res.ok) {
             setStatus(statusEl, `\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`, true);
             setBusy(false);
@@ -5982,7 +6321,7 @@ og:image: ${p.ogImage || "\u65E0"}
           return;
         }
         lastQuery = query;
-        logger5.info("view", "\u805A\u5408\u641C\u7D22\u53D1\u8D77", { query, sites, googleSites, pagesPerSite: Number(pagesInput.value) || 2 });
+        logger6.info("view", "\u805A\u5408\u641C\u7D22\u53D1\u8D77", { query, sites, googleSites, pagesPerSite: Number(pagesInput.value) || 2 });
         if (!await ensureHostPermission()) {
           setStatus(statusEl, "\u9700\u8981\u6388\u6743\u8BBF\u95EE\u591A\u9875\u56FE\u7AD9\uFF08<all_urls>\uFF09\u540E\u624D\u80FD\u641C\u7D22", true);
           return;
@@ -6039,7 +6378,7 @@ og:image: ${p.ogImage || "\u65E0"}
           setBusy(false);
           siteStatus.textContent = `\u641C\u7D22\u5B8C\u6210\uFF1A${items.length} \u4E2A\u7ED3\u679C`;
           setStatus(statusEl, `\u641C\u7D22\u5B8C\u6210\uFF1A\u5171 ${items.length} \u4E2A\u7ED3\u679C\uFF08\u6309\u7AD9\u70B9\u5206\u680F\u5C55\u793A\uFF09`);
-          logger5.info("view", "\u805A\u5408\u641C\u7D22\u5B8C\u6210", { query: lastQuery, total: items.length, sites: new Set(itemSites).size });
+          logger6.info("view", "\u805A\u5408\u641C\u7D22\u5B8C\u6210", { query: lastQuery, total: items.length, sites: new Set(itemSites).size });
         }
       };
     }
@@ -6049,7 +6388,7 @@ og:image: ${p.ogImage || "\u65E0"}
       albumUrlInput.value = sourceUrl;
       root.querySelector("#bd-rec-url").value = sourceUrl;
       root.querySelector("#bd-pop-url").value = sourceUrl;
-      logger5.info("view", "\u5DF2\u81EA\u52A8\u586B\u5145\u591A\u9875\u56FE\u7AD9\u7F51\u5740", { sourceUrl, site: matchGallerySite(sourceUrl)?.id });
+      logger6.info("view", "\u5DF2\u81EA\u52A8\u586B\u5145\u591A\u9875\u56FE\u7AD9\u7F51\u5740", { sourceUrl, site: matchGallerySite(sourceUrl)?.id });
     }
     function routeDownload(job) {
       if (job.folderName === lastAlbumFolder) {
@@ -6076,7 +6415,7 @@ og:image: ${p.ogImage || "\u65E0"}
           } else {
             albumGrabView.setParseText(`\u5168\u5B50\u9875\u6293\u53D6\u5B8C\u6210\uFF0C\u5171 ${images.length} \u5F20\uFF08\u5DF2\u53BB\u91CD\uFF09`);
           }
-          logger5.info("view", "buondua \u5168\u5B50\u9875\u6293\u53D6\u7ED3\u679C", { count: images.length });
+          logger6.info("view", "buondua \u5168\u5B50\u9875\u6293\u53D6\u7ED3\u679C", { count: images.length });
         } else if (kind === "scan") {
           const items = data;
           const activePanel = root.querySelector(".adapter-panel.active")?.id ?? "";
@@ -6087,7 +6426,7 @@ og:image: ${p.ogImage || "\u65E0"}
           } else {
             recList.show(items);
           }
-          logger5.info("view", "buondua \u94FE\u63A5\u8BC6\u522B\u7ED3\u679C", { count: items.length, panel: activePanel });
+          logger6.info("view", "buondua \u94FE\u63A5\u8BC6\u522B\u7ED3\u679C", { count: items.length, panel: activePanel });
         } else if (kind === "batch-item") {
           const item = data;
           const view = batchViews.get(item.index);
@@ -6103,8 +6442,12 @@ og:image: ${p.ogImage || "\u65E0"}
           }
           if (done) {
             linkLists.forEach((l) => l.setBusy(false));
-            logger5.info("view", "buondua \u6279\u91CF\u6293\u53D6\u5B8C\u6210", { index: item.index, count: item.images.length });
+            logger6.info("view", "buondua \u6279\u91CF\u6293\u53D6\u5B8C\u6210", { index: item.index, count: item.images.length });
           }
+        } else if (kind === "list") {
+          const items = data;
+          popList.show(items);
+          logger6.info("view", "\u5217\u8868\u9875\u94FE\u63A5\u5DF2\u8F7D\u5165", { count: items.length });
         } else if (kind === "search-site") {
           const r = data;
           searchList.append(r.items, error, r.siteId);
@@ -6115,13 +6458,13 @@ og:image: ${p.ogImage || "\u65E0"}
       onDownloadProgress: (job) => routeDownload(job),
       onDownloadDone: (job) => {
         routeDownload(job);
-        logger5.info("view", "buondua \u4E0B\u8F7D\u4EFB\u52A1\u7ED3\u675F", { jobId: job.id, done: job.done, failed: job.failed });
+        logger6.info("view", "buondua \u4E0B\u8F7D\u4EFB\u52A1\u7ED3\u675F", { jobId: job.id, done: job.done, failed: job.failed });
       }
     };
   }
 
   // src/grabber/view-images.ts
-  var logger6 = initLogger("grabber");
+  var logger7 = initLogger("grabber");
   function initImagesView(root, session) {
     let totalImages = 0;
     if (matchGallerySite(session.url)) {
@@ -6129,7 +6472,7 @@ og:image: ${p.ogImage || "\u65E0"}
       tip.className = "bd-site-tip";
       tip.textContent = "\u6B64\u7AD9\u70B9\u4E3A\u591A\u9875\u76F8\u518C\uFF1A\u8BF7\u5207\u6362\u5230\u300C\u591A\u9875\u56FE\u7AD9\u300D\u9875\u7B7E\uFF0C\u4F7F\u7528\u300C\u6293\u53D6\u5168\u90E8\u5B50\u9875\u300D\u83B7\u53D6\u5B8C\u6574\u5185\u5BB9";
       root.prepend(tip);
-      logger6.info("view", "\u591A\u9875\u7AD9\u70B9\u63D0\u793A\u5DF2\u663E\u793A", { url: session.url });
+      logger7.info("view", "\u591A\u9875\u7AD9\u70B9\u63D0\u793A\u5DF2\u663E\u793A", { url: session.url });
     }
     const grabView = createGrabView(root, {
       srcTabId: session.srcTabId,
@@ -6163,30 +6506,30 @@ og:image: ${p.ogImage || "\u65E0"}
         }
         const limitText = reachedLimit ? "\uFF08\u5DF2\u8FBE\u5355\u6279\u4E0A\u9650\uFF0C\u53EF\u52A0\u8F7D\u4E0B\u4E00\u6279\uFF09" : "";
         grabView.setParseText((cancelled ? "\u5DF2\u53D6\u6D88\uFF0C\u5C55\u793A\u5DF2\u89E3\u6790 " : "\u89E3\u6790\u5B8C\u6210\uFF0C\u5171 ") + totalImages + " \u5F20" + limitText);
-        logger6.info("view", cancelled ? "\u89E3\u6790\u5DF2\u53D6\u6D88\uFF0C\u4FDD\u7559\u5DF2\u89E3\u6790\u5185\u5BB9" : "\u89E3\u6790\u5B8C\u6210\uFF08\u9ED8\u8BA4\u5168\u9009\uFF09", { count: totalImages, reachedLimit });
+        logger7.info("view", cancelled ? "\u89E3\u6790\u5DF2\u53D6\u6D88\uFF0C\u4FDD\u7559\u5DF2\u89E3\u6790\u5185\u5BB9" : "\u89E3\u6790\u5B8C\u6210\uFF08\u9ED8\u8BA4\u5168\u9009\uFF09", { count: totalImages, reachedLimit });
       },
       onParseError: (error) => {
         grabView.setBusyParsing(false);
         grabView.setLoadMoreEnabled(false);
         grabView.setParseText(`\u89E3\u6790\u5931\u8D25\uFF0C\u5C55\u793A\u5DF2\u89E3\u6790 ${totalImages} \u5F20`);
-        logger6.error("view", "\u89E3\u6790\u5931\u8D25\uFF08\u5DF2\u4FDD\u7559\u5DF2\u89E3\u6790\u5185\u5BB9\uFF09", error);
+        logger7.error("view", "\u89E3\u6790\u5931\u8D25\uFF08\u5DF2\u4FDD\u7559\u5DF2\u89E3\u6790\u5185\u5BB9\uFF09", error);
       },
       onDownloadProgress: (job) => {
         grabView.setDownloadJob(job);
       },
       onDownloadDone: (job) => {
         grabView.setDownloadJob(job);
-        logger6.info("view", "\u4E0B\u8F7D\u4EFB\u52A1\u7ED3\u675F", { jobId: job.id, done: job.done, failed: job.failed });
+        logger7.info("view", "\u4E0B\u8F7D\u4EFB\u52A1\u7ED3\u675F", { jobId: job.id, done: job.done, failed: job.failed });
       },
       onSessionEnd: () => {
         root.innerHTML = '<div class="empty-tip">\u6E90\u7F51\u9875\u5DF2\u5173\u95ED\uFF0C\u6B64\u6293\u53D6\u9875\u5DF2\u5931\u6548\u3002\u8BF7\u5728\u6E90\u7F51\u9875\u91CD\u65B0\u70B9\u51FB\u63D2\u4EF6\u56FE\u6807\u3002</div>';
-        logger6.info("view", "\u6E90\u7F51\u9875\u5DF2\u5173\u95ED\uFF0C\u6293\u53D6\u9875\u5931\u6548");
+        logger7.info("view", "\u6E90\u7F51\u9875\u5DF2\u5173\u95ED\uFF0C\u6293\u53D6\u9875\u5931\u6548");
       }
     };
   }
 
   // src/grabber/view-template.ts
-  var logger7 = initLogger("grabber");
+  var logger8 = initLogger("grabber");
   function initTemplateView(root) {
     root.innerHTML = `
     <div class="adapters-view">
@@ -6206,12 +6549,76 @@ og:image: ${p.ogImage || "\u65E0"}
       </div>
     </div>
   `;
-    logger7.info("view", "\u7AD9\u70B9\u9002\u914D\u6A21\u677F\u9875\u5DF2\u6302\u8F7D\uFF08\u7A7A\u6A21\u677F\uFF09");
+    logger8.info("view", "\u7AD9\u70B9\u9002\u914D\u6A21\u677F\u9875\u5DF2\u6302\u8F7D\uFF08\u7A7A\u6A21\u677F\uFF09");
+  }
+
+  // src/grabber/wheel-forward.ts
+  function isScrollable(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    const overflowY = getComputedStyle(el).overflowY;
+    if (overflowY !== "auto" && overflowY !== "scroll") return false;
+    return el.scrollHeight - el.clientHeight > 1;
+  }
+  function scrollableAncestor(target) {
+    let el = target instanceof HTMLElement ? target : null;
+    while (el) {
+      if (isScrollable(el)) return el;
+      el = el.parentElement;
+    }
+    return null;
+  }
+  var cachedScroller = null;
+  var cachedAt = 0;
+  var CACHE_MS = 300;
+  function primaryScroller() {
+    const now = Date.now();
+    if (cachedScroller && now - cachedAt < CACHE_MS && cachedScroller.isConnected && isScrollable(cachedScroller)) {
+      return cachedScroller;
+    }
+    const panel = document.querySelector(".panel.active");
+    if (!panel) {
+      cachedScroller = null;
+      cachedAt = now;
+      return null;
+    }
+    let best = null;
+    let bestRange = 0;
+    panel.querySelectorAll("*").forEach((el) => {
+      if (!isScrollable(el)) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 60 || rect.height < 60) return;
+      const range = el.scrollHeight - el.clientHeight;
+      if (range > bestRange) {
+        bestRange = range;
+        best = el;
+      }
+    });
+    cachedScroller = best;
+    cachedAt = now;
+    return best;
+  }
+  function initWheelForward() {
+    document.addEventListener(
+      "wheel",
+      (ev) => {
+        if (ev.defaultPrevented) return;
+        const target = ev.target instanceof HTMLElement ? ev.target : null;
+        if (target && (target.tagName === "SELECT" || target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+        if (target && target.closest(".preview-layer")) return;
+        if (scrollableAncestor(ev.target)) return;
+        const scroller = primaryScroller();
+        if (!scroller) return;
+        const delta = ev.deltaMode === 1 ? ev.deltaY * 16 : ev.deltaMode === 2 ? ev.deltaY * scroller.clientHeight : ev.deltaY;
+        scroller.scrollTop += delta;
+        ev.preventDefault();
+      },
+      { passive: false }
+    );
   }
 
   // src/grabber/grabber.ts
-  var logger8 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261006234841" : "dev";
+  var logger9 = initLogger("grabber");
+  var BUILD_TIME = true ? "20261007233645" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
@@ -6231,6 +6638,7 @@ og:image: ${p.ogImage || "\u65E0"}
   document.querySelectorAll(".grab-tab").forEach((tab) => {
     tab.addEventListener("click", () => switchTab(tab.dataset.panel || "images"));
   });
+  initWheelForward();
   chrome.runtime.onMessage.addListener((msg) => {
     if (!imagesView) return;
     switch (msg?.type) {
@@ -6293,7 +6701,7 @@ og:image: ${p.ogImage || "\u65E0"}
       if (concurrencyInput) concurrencyInput.value = String(n);
       void sendMessage({ type: "GRAB_SET_CONCURRENCY", concurrency: n }).then((res) => {
         if (res.ok) {
-          logger8.info("grabber", "\u4E0B\u8F7D\u5E76\u53D1\u5DF2\u8BBE\u7F6E", { concurrency: res.concurrency });
+          logger9.info("grabber", "\u4E0B\u8F7D\u5E76\u53D1\u5DF2\u8BBE\u7F6E", { concurrency: res.concurrency });
           if (pageInfo) {
             const old = pageInfo.innerHTML;
             pageInfo.innerHTML = old + `<br><span class="folder">\u4E0B\u8F7D\u5E76\u53D1\uFF1A${res.concurrency}</span>`;
@@ -6304,7 +6712,7 @@ og:image: ${p.ogImage || "\u65E0"}
     try {
       const currentTab = await chrome.tabs.getCurrent();
       const grabTabId = currentTab?.id ?? 0;
-      logger8.info("grabber", "\u5F00\u59CB\u521D\u59CB\u5316", { srcTabId, grabTabId });
+      logger9.info("grabber", "\u5F00\u59CB\u521D\u59CB\u5316", { srcTabId, grabTabId });
       let session;
       let lastError = "";
       let created = false;
@@ -6327,7 +6735,7 @@ og:image: ${p.ogImage || "\u65E0"}
           }
         } catch (err) {
           lastError = String(err);
-          logger8.warn("grabber", `\u4F1A\u8BDD\u6CE8\u518C\u7B2C ${attempt} \u6B21\u5931\u8D25\uFF0C\u91CD\u8BD5\u4E2D`, lastError);
+          logger9.warn("grabber", `\u4F1A\u8BDD\u6CE8\u518C\u7B2C ${attempt} \u6B21\u5931\u8D25\uFF0C\u91CD\u8BD5\u4E2D`, lastError);
         }
       }
       if (!created || !session) {
@@ -6342,11 +6750,11 @@ og:image: ${p.ogImage || "\u65E0"}
       buonduaView = initBuonduaView(document.getElementById("panel-buondua"), srcTabId, session.url);
       initTemplateView(document.getElementById("panel-template"));
       void withTimeout(sendMessage({ type: "GRAB_PARSE_START", srcTabId }), 5e3, "\u89E3\u6790\u542F\u52A8\u8D85\u65F6").then(() => {
-      }).catch((err) => logger8.warn("grabber", "\u89E3\u6790\u542F\u52A8\u5931\u8D25", String(err)));
-      logger8.info("grabber", "\u6293\u53D6\u9875\u5C31\u7EEA\uFF0C\u5DF2\u8BF7\u6C42\u89E3\u6790", { srcTabId, title: session.title });
+      }).catch((err) => logger9.warn("grabber", "\u89E3\u6790\u542F\u52A8\u5931\u8D25", String(err)));
+      logger9.info("grabber", "\u6293\u53D6\u9875\u5C31\u7EEA\uFF0C\u5DF2\u8BF7\u6C42\u89E3\u6790", { srcTabId, title: session.title });
     } catch (err) {
       if (pageInfo) pageInfo.textContent = "\u9519\u8BEF\uFF1A" + String(err);
-      logger8.error("grabber", "\u521D\u59CB\u5316\u5931\u8D25", String(err));
+      logger9.error("grabber", "\u521D\u59CB\u5316\u5931\u8D25", String(err));
     }
   })();
 })();

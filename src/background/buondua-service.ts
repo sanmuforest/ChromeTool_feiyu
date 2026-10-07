@@ -3,24 +3,23 @@
 // 通道：全部为公开页面，实测无需登录、图片直连可下载
 
 import { initLogger } from '../lib/logger'
+import { extractBuonduaAlbumName } from '../lib/buondua-parse'
 import {
-  extractBuonduaAlbumName,
-  parseAllPostLinks,
-  parseRecommendedLinks,
-} from '../lib/buondua-parse'
-import {
-  GALLERY_SITES,
+  listPageUrl,
   matchGallerySite,
   parseGalleryImages,
   parseGalleryMaxPage,
   parseGalleryPageTitle,
-  parseKaiztyPostLinks,
-  parseRrwshSearchLinks,
-  parseSitePostLinks,
+  siteById,
   type GallerySiteConfig,
-} from '../lib/gallery-sites'
-import { parseJrantsPostLinks } from '../lib/jrants-parse'
-import { parsePixibbPostLinks } from '../lib/pixibb-parse'
+} from '../sites/registry'
+import {
+  cleanGoogleResult,
+  extractSearchImageCount,
+  parseLinksForSite,
+  parseListPageLinks,
+  scanSiteLinks,
+} from '../sites/parsers'
 import type { BuonduaImage, BuonduaLinkItem } from '../lib/types'
 
 const logger = initLogger('background')
@@ -30,15 +29,16 @@ const FETCH_ATTEMPTS = 2
 const CONCURRENCY = 3 // 批量抓取并发（用户确认）
 
 export class BuonduaService {
-  /** Google 全站模式：为无 sitesearch 配置的站点构造 Google sitesearch 搜索配置（FP-013 调整）
-   *  gbv=1 强制基础 HTML 版；结果提取走 searchGoogleViaTab（标签页 + executeScript，仅标题+链接）
+  /** Google 全站模式：为无 sitesearch 配置的站点构造 Google 搜索配置（FP-013 调整）
+   *  2026-10-07（FP-022）：Google 已拒绝 gbv=1 / sitesearch= 老参数（实测 403），改用现行 site: 语法；
+   *  结果提取走 searchGoogleViaTab（标签页 + executeScript，仅标题+链接）
    *  FP-014：优先主域（m./www./mobile. 子域 Google 索引差，如 phimvuspot 用 phimvuspot.com 而非 m. 版） */
   private googleSearchConfig(site: GallerySiteConfig): GallerySiteConfig {
     const host = site.hosts.find((h) => !/^(m|www|mobile)\./i.test(h)) ?? site.hosts[0] ?? site.id
     return {
       ...site,
       searchUrl: (q, page) =>
-        `https://www.google.com/search?q=${encodeURIComponent(q)}&sitesearch=${host}&gbv=1${
+        `https://www.google.com/search?q=${encodeURIComponent(`${q} site:${host}`)}&hl=zh-CN${
           page > 1 ? `&start=${(page - 1) * 10}` : ''
         }`,
     }
@@ -58,8 +58,9 @@ export class BuonduaService {
     for (let page = startPage; page < startPage + pagesPerSite; page++) {
       const url = site.searchUrl?.(query, page)
       if (!url) break
-      // jrants 连续快速搜索触发反爬限流（实测 2026-08-13/14），页间强制间隔
-      if (site.id === 'jrants' && page > 1) await sleep(2000)
+      // 页间节流：按站点定义 throttle（jrants 连续快速搜索触发反爬限流，实测 2026-08-13/14）
+      const throttle = site.def.throttle
+      if (throttle && page >= throttle.fromPage) await sleep(throttle.delayMs)
       const html = await this.fetchHtml(url)
       pages++
       if (isBlockedPage(html)) {
@@ -85,10 +86,11 @@ export class BuonduaService {
     query: string,
     pagesPerSite: number,
     startPage = 1,
-  ): Promise<{ items: BuonduaLinkItem[]; pages: number }> {
+  ): Promise<{ items: BuonduaLinkItem[]; pages: number; blocked?: boolean }> {
     const items: BuonduaLinkItem[] = []
     const seen = new Set<string>()
     let pagesFetched = 0
+    let blocked = false
     for (let page = startPage; page < startPage + pagesPerSite; page++) {
       const url = site.searchUrl?.(query, page)
       if (!url) break
@@ -100,10 +102,20 @@ export class BuonduaService {
           break
         }
         const extracted = await this.extractGoogleTabResults(tab.id!)
-        logger.info('buondua', 'Google 标签页提取', { site: site.id, page, count: extracted.length })
-        if (extracted.length === 0) break // 无结果（验证页/无匹配）
+        logger.info('buondua', 'Google 标签页提取', {
+          site: site.id,
+          page,
+          count: extracted.items.length,
+          blocked: extracted.blocked,
+        })
+        // Google 明确拒绝（403 / 人机验证）：停止翻页，标签页保留给用户手动完成验证（FP-022）
+        if (extracted.blocked) {
+          blocked = true
+          break
+        }
+        if (extracted.items.length === 0) break // 无结果（无匹配）
         pagesFetched++
-        for (const { url: rawUrl, title } of extracted) {
+        for (const { url: rawUrl, title } of extracted.items) {
           const clean = cleanGoogleResult(site, rawUrl, title)
           if (clean && !seen.has(clean.url)) {
             seen.add(clean.url)
@@ -111,10 +123,11 @@ export class BuonduaService {
           }
         }
       } finally {
-        await chrome.tabs.remove(tab.id!).catch(() => {})
+        // 被拒时保留标签页（用户需在其中手动完成验证），其余情况关闭
+        if (!blocked) await chrome.tabs.remove(tab.id!).catch(() => {})
       }
     }
-    return { items, pages: pagesFetched }
+    return { items, pages: pagesFetched, blocked }
   }
 
   /** 等待标签页加载完成（tabs.create 后页面加载是异步的，未加载完 executeScript 会失败） */
@@ -132,8 +145,11 @@ export class BuonduaService {
     return false
   }
 
-  /** 在 Google 搜索标签内等待 JS 渲染并提取结果（executeScript 注入，func 返回 Promise 会被等待） */
-  private extractGoogleTabResults(tabId: number): Promise<{ url: string; title: string }[]> {
+  /** 在 Google 搜索标签内等待 JS 渲染并提取结果；同时识别 403 / 人机验证页（FP-022）
+   *  被拒时返回 blocked=true（调用方据此保留标签页供用户手动完成验证） */
+  private extractGoogleTabResults(
+    tabId: number,
+  ): Promise<{ items: { url: string; title: string }[]; blocked: boolean }> {
     return chrome.scripting
       .executeScript({
         target: { tabId },
@@ -144,6 +160,11 @@ export class BuonduaService {
             if (document.title.includes('未找到') || /did not match|No results found/i.test(document.body?.innerText ?? '')) break
             await new Promise((r) => setTimeout(r, 500))
           }
+          const head = `${document.title} ${(document.body?.innerText ?? '').slice(0, 1500)}`
+          // 403 / 人机验证特征（Google 中文/英文错误页与验证页）
+          const isBlocked = /您的客户端没有权限|没有权限.{0,10}获取 URL|系统检测到异常流量|unusual traffic|not a robot|recaptcha|sorry\/index|自动化查询/i.test(
+            head,
+          )
           const out: { url: string; title: string }[] = []
           const seen = new Set<string>()
           const push = (u: string, t: string): void => {
@@ -156,20 +177,21 @@ export class BuonduaService {
             const h3 = a.querySelector('h3')
             if (h3) push((a as HTMLAnchorElement).href, h3.textContent ?? '')
           })
-          // 模式 ②：h3.r > a
+          // 模式 ②：h3.r > a（基础 HTML 版遗留结构）
           if (out.length === 0) {
             document.querySelectorAll('h3.r > a').forEach((a) => {
               const anchor = a as HTMLAnchorElement
               push(anchor.href, a.textContent ?? '')
             })
           }
-          return out
+          // 仅在「命中特征且确实没提取到结果」时判定被拒，避免正常页面误判
+          return { items: out, blocked: isBlocked && out.length === 0 }
         },
       })
-      .then((res) => (res[0]?.result ?? []))
+      .then((res) => (res[0]?.result ?? { items: [], blocked: false }))
       .catch((err) => {
         logger.warn('buondua', 'Google 标签页注入失败', { tabId, error: String(err) })
-        return []
+        return { items: [], blocked: false }
       })
   }
 
@@ -264,39 +286,47 @@ export class BuonduaService {
     return { images, pages: all, title }
   }
 
-  /** 解析推荐/其他相册链接（按站点路由：buondua 用 buondua-parse，jrants 用 jrants-parse） */
+  /** 解析推荐/其他相册链接（按站点定义 scan 字段路由，解析器注册表见 sites/parsers.ts） */
   async scanLinks(url: string, kind: 'recommended' | 'popular'): Promise<BuonduaLinkItem[]> {
     const html = await this.fetchHtml(url)
     const base = url
     const site = matchGallerySite(url)
-    let items: BuonduaLinkItem[]
-    if (site?.id === 'jrants') {
-      // jrants：推荐 = wp-show-posts 相关文章卡片；其他 = 全页链接 − 推荐区
-      const rec = parseJrantsPostLinks(html, base, { onlyRecommended: true })
-      if (kind === 'recommended') {
-        items = rec
-      } else {
-        const recUrls = new Set(rec.map((i) => i.url))
-        items = parseJrantsPostLinks(html, base, { excludeUrls: recUrls })
-      }
-    } else if (site?.id === 'pixibb') {
-      // pixibb：推荐 = post-nav 前后文章；其他 = 全页链接 − 推荐区
-      const rec = parsePixibbPostLinks(html, base, { onlyRecommended: true })
-      if (kind === 'recommended') {
-        items = rec
-      } else {
-        const recUrls = new Set(rec.map((i) => i.url))
-        items = parsePixibbPostLinks(html, base, { excludeUrls: recUrls })
-      }
-    } else if (kind === 'recommended') {
-      items = parseRecommendedLinks(html, base)
-    } else {
-      // 其他链接：全页扫描帖子链接，排除推荐区已收录
-      const recUrls = new Set(parseRecommendedLinks(html, base).map((i) => i.url))
-      items = parseAllPostLinks(html, base, recUrls)
-    }
+    const items = scanSiteLinks(site, html, base, kind)
     logger.info('buondua', '链接扫描完成', { kind, count: items.length, site: site?.id ?? 'buondua' })
     return items
+  }
+
+  /** 站内列表页遍历（FP-023 列表浏览）：逐页 fetch + 解析相册链接，不依赖搜索引擎
+   *  fetchHtmlFn：可选，降级用（content 页面内 fetch 带 Cookie 穿透反爬） */
+  async fetchSiteList(
+    siteId: string,
+    listUrl: string,
+    pages: number,
+    fetchHtmlFn?: (u: string) => Promise<string>,
+  ): Promise<{ items: BuonduaLinkItem[]; pages: string[] }> {
+    const getHtml = fetchHtmlFn ?? ((u: string) => this.fetchHtml(u))
+    const site = siteById(siteId)
+    if (!site) throw new Error(`未知站点（${siteId}）`)
+    const urls: string[] = []
+    for (let p = 1; p <= Math.max(1, pages); p++) urls.push(listPageUrl(site, listUrl, p))
+    const byUrl = new Map<string, BuonduaLinkItem>()
+    for (const pageUrl of urls) {
+      const html = await getHtml(pageUrl)
+      if (isBlockedPage(html)) {
+        logger.warn('buondua', '列表页被反爬拦截', { site: siteId, url: pageUrl })
+        break
+      }
+      for (const item of parseListPageLinks(html, pageUrl, site)) {
+        if (!byUrl.has(item.url)) byUrl.set(item.url, item)
+      }
+    }
+    logger.info('buondua', '列表页抓取完成', {
+      site: siteId,
+      listUrl,
+      pages: urls.length,
+      unique: byUrl.size,
+    })
+    return { items: [...byUrl.values()], pages: urls }
   }
 
   /** 批量抓取：targets 逐个全子页抓取（并发受限），返回每个目标的图片（失败带 error，096） */
@@ -341,7 +371,7 @@ export class BuonduaService {
     const mergedMap = new Map<string, BuonduaLinkItem>()
     const siteStats: Record<string, { count: number; pages: number; error?: string }> = {}
     for (const siteId of sites) {
-      const site = GALLERY_SITES.find((s) => s.id === siteId)
+      const site = siteById(siteId)
       // FP-014：useGoogleAll 模式下不要求站内 searchUrl（无搜索接口的站也能走 Google sitesearch）
       if (!site || (!site.searchUrl && !useGoogleAll)) {
         await onSite(siteId, [], '该站不支持搜索')
@@ -360,9 +390,12 @@ export class BuonduaService {
           const tabRes = await this.searchGoogleViaTab(googleSite, query, pagesPerSite, startPage)
           pagesFetched = tabRes.pages
           for (const item of tabRes.items) items.push(item)
-          // FP-014 修复：Google 通道失败（0 结果，多为成人站触发 Google 安全拦截页）且该站有站内
-          // 搜索接口 → 自动降级站内 fetch（Google 全站模式下老站 buondua/rrwsh/jrants 等的救回路）
-          if (tabRes.items.length === 0 && site.searchUrl) {
+          if (tabRes.blocked) {
+            // Google 明确拒绝（403 / 人机验证，FP-022）：提示用户手动完成验证，搜索标签页已保留
+            error = 'Google 拒绝本次请求（403 / 人机验证）：已保留搜索标签页，请手动完成验证后重试'
+          } else if (tabRes.items.length === 0 && site.searchUrl) {
+            // FP-014 修复：Google 通道无结果且该站有站内搜索接口 → 自动降级站内 fetch
+            // （Google 全站模式下老站 buondua/rrwsh/jrants 等的救回路）
             logger.info('buondua', 'Google 通道无结果，降级站内搜索', { site: siteId, query })
             const fallback = await this.fetchSiteSearch(site, query, pagesPerSite, startPage)
             pagesFetched = Math.max(pagesFetched, fallback.pages)
@@ -383,8 +416,8 @@ export class BuonduaService {
           if (fallback.error) error = fallback.error
         }
       } catch (err) {
-        error = String(err)
-        logger.warn('buondua', '站点搜索失败', { site: siteId, error })
+        error = humanizeFetchError(String(err))
+        logger.warn('buondua', '站点搜索失败', { site: siteId, error: String(err), hint: error })
       }
       // 站点后处理：URL 改写（rrwsh 网关绕过）+ 张数提取（jrants 标题 / pixibb slug / rrwsh 标题）
       const unique = dedupeLinks(items.map((item) => enrichSearchItem(siteId, site, item)))
@@ -403,13 +436,15 @@ export class BuonduaService {
     return [...mergedMap.values()]
   }
 
-  /** 相册文件夹名：ID-buondua-{相册名}-{时间戳} */
+  /** 相册文件夹名：ID-{站点 folderTag}-{相册名}-{时间戳}
+   *  阶段 1：全部站点 folderTag='buondua'，命名与旧版逐字一致（语义化改名属行为变更，另行申请） */
   buildFolderName(title: string, url: string): string {
+    const tag = matchGallerySite(url)?.def.folderTag ?? 'buondua'
     const name = extractBuonduaAlbumName(title, url)
     const d = new Date()
     const pad = (n: number) => String(n).padStart(2, '0')
     const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-    return `ID-buondua-${name}-${ts}`
+    return `ID-${tag}-${name}-${ts}`
   }
 
   /** Google 连接测试（FP-012/093）：页面降级通道验证——后台开 Google 搜索标签（真实渲染），
@@ -433,7 +468,7 @@ export class BuonduaService {
   }> {
     const start = Date.now()
     try {
-      const tab = await chrome.tabs.create({ url: 'https://www.google.com/search?q=test&gbv=1', active: false })
+      const tab = await chrome.tabs.create({ url: 'https://www.google.com/search?q=test', active: false })
       try {
         await this.waitForTabComplete(tab.id!)
         const info = await chrome.scripting
@@ -460,9 +495,14 @@ export class BuonduaService {
           bodyPreview: info.body,
         }
         const ms = Date.now() - start
-        if (diag.hasH3) logger.info('buondua', 'Google 标签页测试：正常', { ...diag, ms })
+        // 403 / 人机验证识别（FP-022）
+        const blocked = /403|您的客户端没有权限|系统检测到异常流量|unusual traffic|not a robot|recaptcha/i.test(
+          `${info.title} ${info.body}`,
+        )
+        if (blocked) logger.warn('buondua', 'Google 测试：被拒绝（403 / 人机验证）', { ...diag, ms })
+        else if (diag.hasH3) logger.info('buondua', 'Google 标签页测试：正常', { ...diag, ms })
         else logger.warn('buondua', 'Google 标签页测试：无结果', { ...diag, ms })
-        return { ok: true, status: 200, blocked: false, ms, diag }
+        return { ok: true, status: 200, blocked, ms, diag }
       } finally {
         await chrome.tabs.remove(tab.id!).catch(() => {})
       }
@@ -473,87 +513,23 @@ export class BuonduaService {
   }
 }
 
-/** 按站点路由搜索页链接解析：jrants/pixibb 用专用解析器，buondua 搜索卡片与推荐区同构（items-row），其余用通用解析 */
-function parseLinksForSite(siteId: string, html: string, base: string): BuonduaLinkItem[] {
-  if (siteId === 'buondua') return parseRecommendedLinks(html, base)
-  if (siteId === 'jrants') return parseJrantsPostLinks(html, base, {})
-  if (siteId === 'pixibb') return parsePixibbPostLinks(html, base, {})
-  if (siteId === 'kaizty') return parseKaiztyPostLinks(html, base)
-  if (siteId === 'rrwsh') return parseRrwshSearchLinks(html, base)
-  const site = GALLERY_SITES.find((s) => s.id === siteId)
-  if (site && site.searchAlbumPath) return parseGoogleResults(html, site)
-  return parseSitePostLinks(html, base, site?.hosts ?? [siteId])
-}
-
-/** Google 搜索结果项清洗（解析/tab 通道共用，FP-012/093）：
- *  域名过滤 + searchAlbumPath 相册过滤 + &amp; 还原 + 去 query（?m=1/&page=N）+ cleanTitle */
-function cleanGoogleResult(site: GallerySiteConfig, rawUrl: string, rawTitle: string): BuonduaLinkItem | null {
-  try {
-    const url = rawUrl.replace(/&amp;/g, '&')
-    const u = new URL(url)
-    const host = u.hostname.replace(/^www\./, '')
-    const hostOk = site.hosts.some((h) => host === h || host.endsWith(`.${h}`))
-    if (!hostOk) return null
-    if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) return null
-    u.search = ''
-    u.hash = ''
-    const cleanUrl = u.href
-    const title = site.cleanTitle(rawTitle.replace(/<[^>]*>/g, '').trim()) || cleanUrl
-    return { url: cleanUrl, title, coverUrl: '', imageCount: undefined }
-  } catch {
-    return null
-  }
-}
-
-/** Google 网页搜索结果解析（FP-012，2026-08-14 两次校准）：
- *  双模式兼容：
- *  ① 现代 UI：结果块 <a class="zReHs" href="{真实直链}">…<h3>标题</h3></a>（用户保存的渲染后 DOM）
- *  ② 基础 HTML（gbv=1，无 JS 服务端渲染，插件 fetch 视角）：<h3 class="r"><a href="{真实直链}">标题</a></h3>
- *  过滤：仅保留目标域且命中 searchAlbumPath（如 /photos/、/gallerys/）的相册链接；分类/标签页剔除
- *  链接清理：&amp; 实体还原、去 query（?m=1 移动版参数、&page=N 相册分页参数） */
-function parseGoogleResults(html: string, site: GallerySiteConfig): BuonduaLinkItem[] {
-  const items: BuonduaLinkItem[] = []
-  const seen = new Set<string>()
-  const add = (rawUrl: string, rawTitle: string): void => {
-    const clean = cleanGoogleResult(site, rawUrl, rawTitle)
-    if (!clean || seen.has(clean.url)) return
-    seen.add(clean.url)
-    items.push(clean)
-  }
-  // 模式 ①：现代 zReHs
-  const re1 = /<a[^>]*class="[^"]*zReHs[^"]*"[^>]*href="([^"]+)"[^>]*>(?:(?!<\/a>)[\s\S])*?<h3[^>]*>([\s\S]*?)<\/h3>/g
-  let m: RegExpExecArray | null
-  while ((m = re1.exec(html)) !== null) add(m[1], m[2])
-  // 模式 ②：基础 HTML（gbv=1）h3.r > a
-  const re2 = /<h3[^>]*class="[^"]*\br\b[^"]*"[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g
-  while ((m = re2.exec(html)) !== null) add(m[1], m[2])
-  return items
-}
-
 /** 搜索项站点后处理：URL 改写（rrwsh 4khd→rrwsh 域）+ 张数提取（FP-012） */
 function enrichSearchItem(siteId: string, site: GallerySiteConfig, item: BuonduaLinkItem): BuonduaLinkItem {
   const url = site.rewriteUrl ? site.rewriteUrl(item.url) : item.url
   return { ...item, url, imageCount: item.imageCount ?? extractSearchImageCount(siteId, item, url) }
 }
 
-/** 搜索结果张数提取：jrants 标题 (NNNP)/[NNNP]；pixibb slug -NNN-photos（videos 段可选）；rrwsh 标题 [..NNNphotos]（括号形式兼容） */
-function extractSearchImageCount(siteId: string, item: BuonduaLinkItem, finalUrl: string): number | undefined {
-  if (siteId === 'jrants') {
-    const m = item.title.match(/[(\[]\s*(\d+)\s*P\s*[)\]]/i)
-    return m ? Number(m[1]) : undefined
-  }
-  if (siteId === 'pixibb') {
-    const m = finalUrl.match(/-(\d+)-photos/i)
-    return m ? Number(m[1]) : undefined
-  }
-  if (siteId === 'rrwsh') {
-    const m = item.title.match(/[\[(][^\]()]*?(\d+)\s*photos/i)
-    return m ? Number(m[1]) : undefined
-  }
-  return undefined
+/** 网络 / HTTP 错误 → 可读提示（用户实测反馈的「搜索失败」需要能判断该做什么） */
+export function humanizeFetchError(raw: string): string {
+  if (/Failed to fetch|NetworkError|ERR_/i.test(raw)) return '站点不可达（域名可能已变更或网络受限）'
+  if (/HTTP 403/.test(raw)) return '被站点拒绝（反爬拦截，可稍后重试）'
+  if (/HTTP 404/.test(raw)) return '页面不存在（链接可能已失效）'
+  if (/HTTP 5\d\d/.test(raw)) return '站点服务器错误'
+  if (/请求超时|AbortError/i.test(raw)) return '请求超时'
+  return raw
 }
 
-/** 请求间隔（jrants 反爬限流用） */
+/** 请求间隔（站点节流用） */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }

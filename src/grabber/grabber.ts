@@ -9,6 +9,7 @@ import { initAdaptersView, type AdaptersViewHandle } from './view-adapters'
 import { initBuonduaView, type BuonduaViewHandle } from './view-buondua'
 import { initImagesView, type ImagesViewHandle } from './view-images'
 import { initTemplateView } from './view-template'
+import { initWheelForward } from './wheel-forward'
 
 const logger = initLogger('grabber')
 
@@ -40,6 +41,9 @@ function switchTab(name: string): void {
 document.querySelectorAll<HTMLElement>('.grab-tab').forEach((tab) => {
   tab.addEventListener('click', () => switchTab(tab.dataset.panel || 'images'))
 })
+
+// ---------- 空白区域滚轮转发（FP-020）：两侧留白处滚轮驱动当前页签的滚动区 ----------
+initWheelForward()
 
 // ---------- 消息接收（只处理 background 的 _FWD 转发） ----------
 chrome.runtime.onMessage.addListener((msg) => {

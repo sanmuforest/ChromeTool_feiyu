@@ -19,7 +19,7 @@ import { sendToTab, type ImgResultKind, type Message, type MessageResponse, type
 import { storageGet, storageSet } from '../lib/storage'
 import type { GrabSession, ImgbbAlbum, ImgbbFollowingUser, ImgbbImage } from '../lib/types'
 import { ImgbbService } from './imgbb-service'
-import { BuonduaService } from './buondua-service'
+import { BuonduaService, humanizeFetchError } from './buondua-service'
 
 const logger = initLogger('background')
 
@@ -1098,6 +1098,44 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
           data: { index: -1, target: { url: '', folderName: '' }, images: [], pages: [] },
           done: true,
           error: String(err),
+        })
+      }
+      return { ok: true }
+    }
+
+    // ---- 站内列表浏览（FP-023）：分类/列表页遍历，不依赖搜索引擎 ----
+    case 'BD_FETCH_LIST': {
+      const contentFetch = async (u: string): Promise<string> => {
+        const res = await sendToTabAndGet<{ ok: true; data?: string } | { ok: false; error: string }>(
+          message.srcTabId,
+          { type: 'BD_FETCH_HTML', url: u },
+        )
+        if (!res || !res.ok || !res.data) throw new Error(res && !res.ok ? res.error : '页面内 fetch 无响应')
+        return res.data
+      }
+      try {
+        const direct = await buondua
+          .fetchSiteList(message.siteId, message.listUrl, message.pages)
+          .catch((err) => {
+            logger.warn('buondua', '后台列表抓取失败，尝试页面内 fetch 降级', String(err))
+            return null
+          })
+        let items = direct ? direct.items : []
+        if (items.length === 0) {
+          // 0 结果或后台失败：降级页面内 fetch（带 Cookie/Referer 穿透反爬）
+          const fallback = await buondua.fetchSiteList(message.siteId, message.listUrl, message.pages, contentFetch)
+          items = fallback.items
+        }
+        await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'list', data: items, done: true })
+        logger.info('buondua', '列表页抓取完成', { site: message.siteId, count: items.length })
+      } catch (err) {
+        logger.error('buondua', '列表页抓取失败（含降级）', String(err))
+        await sendToTab(sessionOf(message.srcTabId), {
+          type: 'BD_RESULT',
+          kind: 'list',
+          data: [],
+          done: true,
+          error: humanizeFetchError(String(err)),
         })
       }
       return { ok: true }

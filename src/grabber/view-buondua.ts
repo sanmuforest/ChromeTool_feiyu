@@ -8,9 +8,10 @@
 import { initLogger } from '../lib/logger'
 import { sendMessage, type BuonduaBatchItem, type BuonduaResultKind, type SearchSiteResult } from '../lib/messages'
 import { extractBuonduaAlbumName, extractBuonduaAlbumShortName } from '../lib/buondua-parse'
-import { GALLERY_SITES, matchGallerySite } from '../lib/gallery-sites'
+import { GALLERY_SITES, matchGallerySite, siteById } from '../sites/registry'
 import { extractJrantsFolderName } from '../lib/jrants-parse'
 import { extractPixibbFolderName } from '../lib/pixibb-parse'
+import { isTranslateEnabled, setTranslateEnabled, translateTitleToChinese } from '../lib/translate'
 import type { BuonduaImage, BuonduaLinkItem, DownloadJob, GrabbedImage } from '../lib/types'
 import { createGrabView, type GrabViewHandle } from './image-grab-view'
 
@@ -56,6 +57,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       <div class="adapter-head">
         <h3>多页图站</h3>
         <span class="adapter-hint">buondua / rrwsh / hitxhot / jrants / pixibb / kaizty：全子页抓取 / 推荐 / 其他链接批量抓取</span>
+        <label class="bd-google-all-check" title="用 Google 翻译把相册名译成中文（文件夹名与图片名前缀一起生效；关闭或翻译失败时自动用原文）"><input type="checkbox" id="bd-translate" checked> 相册名译成中文</label>
       </div>
       <div class="adapter-tabs">
         <button data-sub="bd-album" class="adapter-tab active">抓取</button>
@@ -95,6 +97,19 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         <div class="row">
           <input id="bd-pop-url" class="text-input" placeholder="相册 URL（扫描全页其他帖子链接）">
           <button id="bd-pop-scan" class="btn primary">扫描全部链接</button>
+        </div>
+        <div class="row">
+          <span class="ctrl-label">列表浏览</span>
+          <select id="bd-list-site" class="num-input" title="选择站点（直接遍历站点分类/列表页，不依赖搜索引擎）"></select>
+          <input id="bd-list-path" class="text-input" placeholder="列表路径，如 /gallerys/">
+          <select id="bd-list-pages" class="num-input" title="抓取页数">
+            <option value="1">1 页</option>
+            <option value="2" selected>2 页</option>
+            <option value="3">3 页</option>
+            <option value="5">5 页</option>
+          </select>
+          <button id="bd-list-fetch" class="btn">抓取列表页</button>
+          <span id="bd-list-status" class="status-text"></span>
         </div>
         <div class="row">
           <button class="btn bd-select-all">全选本批/取消</button>
@@ -156,6 +171,24 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
   const batchFolders = new Map<number, string>() // index → folderName
   const batchAlbumNames = new Map<number, string>() // index → 图片名前缀
   const linkLists: LinkListHandle[] = []
+
+  // ---------- 相册名中文化开关（FP-019）：文件夹名与图片名前缀同源生效 ----------
+  const translateCheck = root.querySelector('#bd-translate') as HTMLInputElement | null
+  if (translateCheck) {
+    void isTranslateEnabled().then((on) => {
+      translateCheck.checked = on
+    })
+    translateCheck.addEventListener('change', () => {
+      void setTranslateEnabled(translateCheck.checked)
+      logger.info('view', '相册名中文化开关已切换', { enabled: translateCheck.checked })
+    })
+  }
+
+  /** 标题中文化：开关关闭 / 已是中文 / 翻译失败时返回原文 */
+  async function localizeName(title: string): Promise<string> {
+    if (!translateCheck?.checked) return title
+    return await translateTitleToChinese(title)
+  }
 
   // ---------- 子标签切换 ----------
   root.querySelectorAll<HTMLElement>('.adapter-tab').forEach((tab) => {
@@ -263,9 +296,10 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       url,
     })
     if (res.ok) {
-      // 文件夹名 = 页面标题（后台解析 h1），失败兜底 URL；图片名前缀 = 纯相册名
-      lastAlbumFolder = buildBuonduaFolderName(res.name ?? url, url)
-      lastAlbumShort = extractBuonduaAlbumShortName(res.name ?? url)
+      // 文件夹名 = 页面标题（后台解析 h1，可按开关译成中文），失败兜底 URL；图片名前缀 = 纯相册名
+      const name = await localizeName(res.name ?? url)
+      lastAlbumFolder = buildBuonduaFolderName(name, url)
+      lastAlbumShort = extractBuonduaAlbumShortName(name)
     } else {
       albumGrabView.setBusyParsing(false)
       albumGrabView.setParseText(`请求失败：${res.error}`)
@@ -375,25 +409,33 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         renderList()
       }
     })
-    btnFetch.addEventListener('click', () => {
+    btnFetch.addEventListener('click', async () => {
       if (btnFetch.disabled) return
-      const targets = [...selected]
-        .sort((a, b) => a - b)
-        .map((idx) => ({
-          url: items[idx].url,
-          folderName: buildBuonduaFolderName(items[idx].title, items[idx].url),
-        }))
-      if (targets.length === 0) {
+      const picked = [...selected].sort((a, b) => a - b)
+      if (picked.length === 0) {
         setStatus(statusEl, '请先勾选要抓取的相册', true)
         return
+      }
+      setBusy(true)
+      // 相册名中文化（FP-019）：先逐个翻译（命中缓存不发请求），失败自动回退原文
+      const prepared: { url: string; folderName: string; albumName: string }[] = []
+      for (const [n, idx] of picked.entries()) {
+        const item = items[idx]
+        setStatus(statusEl, `翻译相册名 ${n + 1}/${picked.length}…`)
+        const name = await localizeName(item.title)
+        prepared.push({
+          url: item.url,
+          folderName: buildBuonduaFolderName(name, item.url),
+          albumName: extractBuonduaAlbumShortName(name),
+        })
       }
       // 为每个目标创建独立结果卡片 + grab view
       resultsHost.innerHTML = ''
       batchViews.clear()
       batchFolders.clear()
-      targets.forEach((target, idx) => {
+      prepared.forEach((target, idx) => {
         batchFolders.set(idx, target.folderName)
-        batchAlbumNames.set(idx, extractBuonduaAlbumShortName(target.folderName))
+        batchAlbumNames.set(idx, target.albumName)
         const card = document.createElement('div')
         card.className = 'bd-batch-card'
         const head = document.createElement('div')
@@ -404,7 +446,21 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         const status = document.createElement('span')
         status.className = 'bd-batch-status'
         status.textContent = '等待抓取…'
-        head.append(title, status)
+        // 关闭按钮（FP-020）：只移除本相册卡片，不影响其它卡片与后台任务
+        const closeBtn = document.createElement('button')
+        closeBtn.type = 'button'
+        closeBtn.className = 'bd-batch-close'
+        closeBtn.title = '移除此相册结果卡片'
+        closeBtn.textContent = '×'
+        closeBtn.addEventListener('click', () => {
+          batchViews.get(idx)?.clear()
+          batchViews.delete(idx)
+          batchFolders.delete(idx)
+          batchAlbumNames.delete(idx)
+          card.remove()
+          logger.info('view', '已移除批量结果卡片', { index: idx })
+        })
+        head.append(title, status, closeBtn)
         const host = document.createElement('div')
         host.className = 'grab-view-host'
         card.append(head, host)
@@ -420,9 +476,13 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         grabView.setParseText('抓取中…')
         batchViews.set(idx, grabView)
       })
-      setStatus(statusEl, `开始批量抓取 ${targets.length} 个相册（并发 3）…`)
+      setStatus(statusEl, `开始批量抓取 ${prepared.length} 个相册（并发 3）…`)
       setBusy(true)
-      void sendMessage({ type: 'BD_FETCH_ALBUMS', srcTabId, targets }).then((res) => {
+      void sendMessage({
+        type: 'BD_FETCH_ALBUMS',
+        srcTabId,
+        targets: prepared.map((t) => ({ url: t.url, folderName: t.folderName })),
+      }).then((res) => {
         if (!res.ok) {
           setStatus(statusEl, `请求失败：${res.error}`, true)
           setBusy(false)
@@ -463,6 +523,58 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
   const popList = setupBatchPanel('bd-popular', 'popular')
   linkLists.push(recList, popList)
 
+  // ---------- 站内列表浏览（FP-023）：不依赖搜索引擎，直接遍历站点分类/列表页 ----------
+  const listSiteSelect = root.querySelector('#bd-list-site') as HTMLSelectElement | null
+  const listPathInput = root.querySelector('#bd-list-path') as HTMLInputElement | null
+  const listPagesSelect = root.querySelector('#bd-list-pages') as HTMLSelectElement | null
+  const listFetchBtn = root.querySelector('#bd-list-fetch') as HTMLButtonElement | null
+  const listStatusEl = root.querySelector('#bd-list-status') as HTMLElement | null
+  if (listSiteSelect) {
+    for (const site of GALLERY_SITES) {
+      const option = document.createElement('option')
+      option.value = site.id
+      option.textContent = site.def.label
+      listSiteSelect.appendChild(option)
+    }
+    const applyListDefault = (): void => {
+      const site = siteById(listSiteSelect.value)
+      const cfg = site?.def.listPages?.[0]
+      if (listPathInput) listPathInput.value = cfg?.path ?? '/'
+      setStatus(listStatusEl, cfg ? `列表：${cfg.label}` : '未预置列表路径，可自行填写后抓取')
+    }
+    listSiteSelect.addEventListener('change', applyListDefault)
+    applyListDefault()
+  }
+  listFetchBtn?.addEventListener('click', async () => {
+    const siteId = listSiteSelect?.value ?? ''
+    const site = siteById(siteId)
+    if (!site) {
+      setStatus(listStatusEl, '请先选择站点', true)
+      return
+    }
+    if (!(await ensureHostPermission())) {
+      setStatus(listStatusEl, '需要授权访问 <all_urls> 后才能抓取列表页', true)
+      return
+    }
+    const path = (listPathInput?.value.trim() || '/').replace(/^\/?/, '/')
+    const host = site.hosts.find((h) => !/^(m|www|mobile)\./i.test(h)) ?? site.hosts[0]
+    if (!host) {
+      setStatus(listStatusEl, '站点主域未配置', true)
+      return
+    }
+    const pages = Number(listPagesSelect?.value) || 1
+    const listUrl = `https://${host}${path}`
+    setStatus(listStatusEl, `抓取列表页 ${pages} 页：${listUrl}`)
+    listFetchBtn.disabled = true
+    try {
+      const res = await sendMessage({ type: 'BD_FETCH_LIST', srcTabId, siteId, listUrl, pages })
+      if (!res.ok) setStatus(listStatusEl, `请求失败：${res.error}`, true)
+      // 成功时结果经 BD_RESULT(kind=list) 推送到本面板链接列表
+    } finally {
+      listFetchBtn.disabled = false
+    }
+  })
+
   // ---------- 聚合搜索面板（FP-010：多站点搜索 → 结果列表复用批量抓取） ----------
   interface SearchListHandle extends LinkListHandle {
     append(items: BuonduaLinkItem[], error?: string, siteId?: string): void
@@ -485,10 +597,10 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     const btnNext = panel.querySelector('.bd-next-batch') as HTMLButtonElement
 
     // 站点勾选：分类存放（FP-013 调整）——站内搜索类（直接站内接口）/ Google 通道类（Google 优先，失败降级站内）
-    // 默认勾选站内类 buondua/jrants/rrwsh/cangcuc；Google 通道默认不勾选（较慢）
-    // FP-014 修复 7：cangcuc 有站内搜索 → 移回站内组（与 rrwsh 同处理）；pixibb 站内无结果 → Google 组
-    const googleGroupIds = ['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs', 'pixibb']
-    const defaultChecked = new Set(['buondua', 'jrants', 'rrwsh', 'cangcuc'])
+    // 2026-10-07 调整：jrants 站内搜索被反爬（403）→ 移入 Google 组并取消默认勾选；
+    // rrwsh（域名已被他人站占用）、cangcuc（域名已失效）取消默认勾选，仍可在列表中手动勾选
+    const googleGroupIds = ['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs', 'pixibb', 'jrants']
+    const defaultChecked = new Set(['buondua'])
     const googleChannel = new Set(googleGroupIds)
     const googleAllCheck = panel.querySelector('#bd-google-all') as HTMLInputElement
     let googleAll = false // Google 全站搜索开关状态
@@ -513,8 +625,8 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           )
           .join('')
       }
-      // 站内搜索类：buondua/jrants/rrwsh/cangcuc + imgbb（无搜索灰显，保留原列表提示）
-      renderGroup(['buondua', 'jrants', 'rrwsh', 'cangcuc', 'imgbb'], 'bd-search-sites-site')
+      // 站内搜索类：buondua/rrwsh/cangcuc + imgbb（无搜索灰显，保留原列表提示）；jrants 已移入 Google 组
+      renderGroup(['buondua', 'rrwsh', 'cangcuc', 'imgbb'], 'bd-search-sites-site')
       // Google 通道类：仅 Google 可搜
       renderGroup(googleGroupIds, 'bd-search-sites-google')
       // 站点名点击 → 打开网站首页（FP-014 修复 6：点击名字跳首页，checkbox 勾选不受影响）
@@ -736,24 +848,32 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         }
       })
     })
-    btnFetch.addEventListener('click', () => {
+    btnFetch.addEventListener('click', async () => {
       if (btnFetch.disabled) return
-      const targets = [...selected]
-        .sort((a, b) => a - b)
-        .map((idx) => ({
-          url: items[idx].url,
-          folderName: buildBuonduaFolderName(items[idx].title, items[idx].url),
-        }))
-      if (targets.length === 0) {
+      const picked = [...selected].sort((a, b) => a - b)
+      if (picked.length === 0) {
         setStatus(statusEl, '请先勾选要抓取的相册', true)
         return
+      }
+      setBusy(true)
+      // 相册名中文化（FP-019）：先逐个翻译（命中缓存不发请求），失败自动回退原文
+      const prepared: { url: string; folderName: string; albumName: string }[] = []
+      for (const [n, idx] of picked.entries()) {
+        const item = items[idx]
+        setStatus(statusEl, `翻译相册名 ${n + 1}/${picked.length}…`)
+        const name = await localizeName(item.title)
+        prepared.push({
+          url: item.url,
+          folderName: buildBuonduaFolderName(name, item.url),
+          albumName: extractBuonduaAlbumShortName(name),
+        })
       }
       resultsHost.innerHTML = ''
       batchViews.clear()
       batchFolders.clear()
-      targets.forEach((target, idx) => {
+      prepared.forEach((target, idx) => {
         batchFolders.set(idx, target.folderName)
-        batchAlbumNames.set(idx, extractBuonduaAlbumShortName(target.folderName))
+        batchAlbumNames.set(idx, target.albumName)
         const card = document.createElement('div')
         card.className = 'bd-batch-card'
         const head = document.createElement('div')
@@ -764,7 +884,21 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         const status = document.createElement('span')
         status.className = 'bd-batch-status'
         status.textContent = '等待抓取…'
-        head.append(title, status)
+        // 关闭按钮（FP-020）：只移除本相册卡片，不影响其它卡片与后台任务
+        const closeBtn = document.createElement('button')
+        closeBtn.type = 'button'
+        closeBtn.className = 'bd-batch-close'
+        closeBtn.title = '移除此相册结果卡片'
+        closeBtn.textContent = '×'
+        closeBtn.addEventListener('click', () => {
+          batchViews.get(idx)?.clear()
+          batchViews.delete(idx)
+          batchFolders.delete(idx)
+          batchAlbumNames.delete(idx)
+          card.remove()
+          logger.info('view', '已移除批量结果卡片', { index: idx })
+        })
+        head.append(title, status, closeBtn)
         const host = document.createElement('div')
         host.className = 'grab-view-host'
         card.append(head, host)
@@ -780,9 +914,13 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
         grabView.setParseText('抓取中…')
         batchViews.set(idx, grabView)
       })
-      setStatus(statusEl, `开始批量抓取 ${targets.length} 个相册（并发 3）…`)
+      setStatus(statusEl, `开始批量抓取 ${prepared.length} 个相册（并发 3）…`)
       setBusy(true)
-      void sendMessage({ type: 'BD_FETCH_ALBUMS', srcTabId, targets }).then((res) => {
+      void sendMessage({
+        type: 'BD_FETCH_ALBUMS',
+        srcTabId,
+        targets: prepared.map((t) => ({ url: t.url, folderName: t.folderName })),
+      }).then((res) => {
         if (!res.ok) {
           setStatus(statusEl, `请求失败：${res.error}`, true)
           setBusy(false)
@@ -993,6 +1131,11 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           linkLists.forEach((l) => l.setBusy(false))
           logger.info('view', 'buondua 批量抓取完成', { index: item.index, count: item.images.length })
         }
+      } else if (kind === 'list') {
+        // 站内列表浏览结果（FP-023）：载入「批量抓取其他链接」面板的链接列表
+        const items = data as BuonduaLinkItem[]
+        popList.show(items)
+        logger.info('view', '列表页链接已载入', { count: items.length })
       } else if (kind === 'search-site') {
         // 聚合搜索：单站结果增量追加（带站点标识）
         const r = data as SearchSiteResult
