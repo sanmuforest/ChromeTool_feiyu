@@ -20,6 +20,9 @@ export const pixibb: SiteDef = {
   search: { kind: 'wp-query-path-page', param: 's', trailingSlash: true },
   searchBaseHost: 'sexy.pixibb.com',
   linkParser: 'pixibb-magezix',
+  // 2026-10-08 体检 P1-2：pixibb 相册 URL 无固定路径前缀（形如 /{slug}-{N}-photos/），
+  // 而 Google 结果会混入 /model/xxx/（模特聚合页）等非相册页 → 用正则只保留 -photos 链接
+  searchAlbumPattern: { source: '-photos', flags: 'i' },
   scan: { recommended: 'pixibb-recommended', others: 'pixibb-others' },
   imageCountRule: 'pixibb-slug',
   hint: '站内搜索无结果：走 Google 通道',

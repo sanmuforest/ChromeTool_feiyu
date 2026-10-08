@@ -5163,6 +5163,9 @@
     search: { kind: "wp-query-path-page", param: "s", trailingSlash: true },
     searchBaseHost: "sexy.pixibb.com",
     linkParser: "pixibb-magezix",
+    // 2026-10-08 体检 P1-2：pixibb 相册 URL 无固定路径前缀（形如 /{slug}-{N}-photos/），
+    // 而 Google 结果会混入 /model/xxx/（模特聚合页）等非相册页 → 用正则只保留 -photos 链接
+    searchAlbumPattern: { source: "-photos", flags: "i" },
     scan: { recommended: "pixibb-recommended", others: "pixibb-others" },
     imageCountRule: "pixibb-slug",
     hint: "\u7AD9\u5185\u641C\u7D22\u65E0\u7ED3\u679C\uFF1A\u8D70 Google \u901A\u9053"
@@ -5352,6 +5355,7 @@
       def
     };
     if (def.search) site.searchUrl = (q, page) => buildSearchUrl(def, q, page);
+    if (def.searchAlbumPattern) site.searchAlbumPattern = toRegExp(def.searchAlbumPattern);
     if (def.urlRewrite?.length) site.rewriteUrl = (url) => buildRewriteUrl(def, url);
     if (def.imageQueryFix?.length) site.imageUrlClean = (url) => buildImageUrlClean(def, url);
     return site;
@@ -6630,7 +6634,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261008221923" : "dev";
+  var BUILD_TIME = true ? "20261008230820" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

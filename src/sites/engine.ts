@@ -181,6 +181,7 @@ export function compileSite(def: SiteDef): GallerySiteConfig {
     def,
   }
   if (def.search) site.searchUrl = (q, page) => buildSearchUrl(def, q, page)
+  if (def.searchAlbumPattern) site.searchAlbumPattern = toRegExp(def.searchAlbumPattern)
   if (def.urlRewrite?.length) site.rewriteUrl = (url) => buildRewriteUrl(def, url)
   if (def.imageQueryFix?.length) site.imageUrlClean = (url) => buildImageUrlClean(def, url)
   return site

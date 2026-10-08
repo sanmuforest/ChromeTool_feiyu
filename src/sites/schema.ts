@@ -118,8 +118,11 @@ export interface SiteDef {
   search?: SiteSearch
   /** 搜索基址 host（默认主域；pixibb 用 sexy 子域） */
   searchBaseHost?: string
-  /** Google 结果相册路径过滤前缀（如 /photos/） */
+  /** Google/搜索结果的相册路径过滤前缀（如 /photos/） */
   searchAlbumPath?: string
+  /** 搜索结果的相册路径正则过滤（2026-10-08 体检 P1-2：相册 URL 无固定前缀时使用，
+   *  如 pixibb 的 `-photos`；与 searchAlbumPath 同时设置时为「且」关系） */
+  searchAlbumPattern?: RegexSpec
   /** 站内列表页（分类/列表页遍历，FP-023）；缺省时界面按根路径 + 站点分页方式 */
   listPages?: SiteListPage[]
   /** 搜索结果 URL 改写：来自 fromHost 的链接改写到本站主域（rrwsh 绕过反爬网关） */
@@ -156,6 +159,8 @@ export interface GallerySiteConfig {
   searchUrl?: (q: string, page: number) => string | null
   rewriteUrl?: (url: string) => string
   searchAlbumPath?: string
+  /** 编译后的搜索结果路径正则（见 SiteDef.searchAlbumPattern） */
+  searchAlbumPattern?: RegExp
   imageUrlClean?: (url: string) => string
   /** 编译来源定义（parsers / service 读取 linkParser、imageCountRule、throttle、folderTag） */
   def: SiteDef

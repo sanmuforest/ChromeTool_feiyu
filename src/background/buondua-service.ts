@@ -330,6 +330,17 @@ export class BuonduaService {
     for (const pageUrl of all) {
       const html = await getHtml(pageUrl)
       const imgs = parseGalleryImages(html, pageUrl, site)
+      // 诊断（2026-10-08）：首页解析 0 张时记录容器匹配情况，用于区分
+      // 「容器 class 已变」（hasContainer=false）与「页面本身没有图片内容」（imgCount 小）
+      if (imgs.length === 0 && imagesMap.size === 0 && pageUrl === all[0]) {
+        logger.warn('buondua', '首页解析 0 张，诊断信息', {
+          site: site.id,
+          url: pageUrl,
+          hasContainer: site.containerOpen.test(html),
+          htmlLen: html.length,
+          imgTags: (html.match(/<img\b/gi) ?? []).length,
+        })
+      }
       scanned += imgs.length
       emptyStreak = imgs.length === 0 ? emptyStreak + 1 : 0
       for (const img of imgs) {

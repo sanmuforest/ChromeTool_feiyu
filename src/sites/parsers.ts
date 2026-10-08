@@ -125,12 +125,16 @@ export function parseSitePostLinks(html: string, baseUrl: string, hosts: string[
 /** 列表页 → 相册链接（FP-023 列表浏览）：同域链接提取 + 相册路径过滤
  *  复用通用文章链接解析（已排除分类/标签/分页等路径），再按 albumPath 收窄 */
 export function parseListPageLinks(html: string, baseUrl: string, site: GallerySiteConfig): BuonduaLinkItem[] {
-  const albumPath = site.def.listPages?.[0]?.albumPath ?? site.searchAlbumPath
+  const cfg = site.def.listPages?.[0]
+  const albumPath = cfg?.albumPath ?? site.searchAlbumPath
+  const albumPattern = cfg?.albumPath ? undefined : site.searchAlbumPattern
   const items = parseSitePostLinks(html, baseUrl, site.hosts)
-  if (!albumPath) return items
   return items.filter((item) => {
     try {
-      return new URL(item.url).pathname.startsWith(albumPath)
+      const pathname = new URL(item.url).pathname
+      if (albumPath && !pathname.startsWith(albumPath)) return false
+      if (albumPattern && !albumPattern.test(pathname)) return false
+      return true
     } catch {
       return false
     }
@@ -151,6 +155,8 @@ export function cleanGoogleResult(
     const hostOk = site.hosts.some((h) => host === h || host.endsWith(`.${h}`))
     if (!hostOk) return null
     if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) return null
+    // 2026-10-08 体检 P1-2：无固定路径前缀的站点用正则过滤（如 pixibb 的 -photos）
+    if (site.searchAlbumPattern && !site.searchAlbumPattern.test(u.pathname)) return null
     u.search = ''
     u.hash = ''
     const cleanUrl = u.href

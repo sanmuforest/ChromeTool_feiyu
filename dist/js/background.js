@@ -2127,6 +2127,9 @@
     search: { kind: "wp-query-path-page", param: "s", trailingSlash: true },
     searchBaseHost: "sexy.pixibb.com",
     linkParser: "pixibb-magezix",
+    // 2026-10-08 体检 P1-2：pixibb 相册 URL 无固定路径前缀（形如 /{slug}-{N}-photos/），
+    // 而 Google 结果会混入 /model/xxx/（模特聚合页）等非相册页 → 用正则只保留 -photos 链接
+    searchAlbumPattern: { source: "-photos", flags: "i" },
     scan: { recommended: "pixibb-recommended", others: "pixibb-others" },
     imageCountRule: "pixibb-slug",
     hint: "\u7AD9\u5185\u641C\u7D22\u65E0\u7ED3\u679C\uFF1A\u8D70 Google \u901A\u9053"
@@ -2337,6 +2340,7 @@
       def
     };
     if (def.search) site.searchUrl = (q, page) => buildSearchUrl(def, q, page);
+    if (def.searchAlbumPattern) site.searchAlbumPattern = toRegExp(def.searchAlbumPattern);
     if (def.urlRewrite?.length) site.rewriteUrl = (url) => buildRewriteUrl(def, url);
     if (def.imageQueryFix?.length) site.imageUrlClean = (url) => buildImageUrlClean(def, url);
     return site;
@@ -2653,12 +2657,16 @@
     return [...byUrl.values()];
   }
   function parseListPageLinks(html, baseUrl, site) {
-    const albumPath = site.def.listPages?.[0]?.albumPath ?? site.searchAlbumPath;
+    const cfg = site.def.listPages?.[0];
+    const albumPath = cfg?.albumPath ?? site.searchAlbumPath;
+    const albumPattern = cfg?.albumPath ? void 0 : site.searchAlbumPattern;
     const items = parseSitePostLinks(html, baseUrl, site.hosts);
-    if (!albumPath) return items;
     return items.filter((item) => {
       try {
-        return new URL(item.url).pathname.startsWith(albumPath);
+        const pathname = new URL(item.url).pathname;
+        if (albumPath && !pathname.startsWith(albumPath)) return false;
+        if (albumPattern && !albumPattern.test(pathname)) return false;
+        return true;
       } catch {
         return false;
       }
@@ -2672,6 +2680,7 @@
       const hostOk = site.hosts.some((h) => host === h || host.endsWith(`.${h}`));
       if (!hostOk) return null;
       if (site.searchAlbumPath && !u.pathname.startsWith(site.searchAlbumPath)) return null;
+      if (site.searchAlbumPattern && !site.searchAlbumPattern.test(u.pathname)) return null;
       u.search = "";
       u.hash = "";
       const cleanUrl = u.href;
@@ -3001,6 +3010,15 @@
       for (const pageUrl of all) {
         const html = await getHtml(pageUrl);
         const imgs = parseGalleryImages(html, pageUrl, site);
+        if (imgs.length === 0 && imagesMap.size === 0 && pageUrl === all[0]) {
+          logger4.warn("buondua", "\u9996\u9875\u89E3\u6790 0 \u5F20\uFF0C\u8BCA\u65AD\u4FE1\u606F", {
+            site: site.id,
+            url: pageUrl,
+            hasContainer: site.containerOpen.test(html),
+            htmlLen: html.length,
+            imgTags: (html.match(/<img\b/gi) ?? []).length
+          });
+        }
         scanned += imgs.length;
         emptyStreak = imgs.length === 0 ? emptyStreak + 1 : 0;
         for (const img of imgs) {
