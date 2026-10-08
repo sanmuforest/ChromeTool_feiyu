@@ -111,7 +111,15 @@ export type Message =
   | { type: 'BD_SCAN_LINKS'; srcTabId: number; url: string; kind: 'recommended' | 'popular' }
   | { type: 'BD_FETCH_ALBUMS'; srcTabId: number; targets: BuonduaTarget[] }
   // ---- 站内列表浏览（FP-023）：不依赖搜索引擎，直接遍历站点分类/列表页 ----
-  | { type: 'BD_FETCH_LIST'; srcTabId: number; siteId: string; listUrl: string; pages: number }
+  // pageKind：界面手动指定列表页分页方式（2026-10-08 体检 P0-3）；缺省按定义/分页类型派生
+  | {
+      type: 'BD_FETCH_LIST'
+      srcTabId: number
+      siteId: string
+      listUrl: string
+      pages: number
+      pageKind?: 'query' | 'path' | 'path-slash'
+    }
   // ---- 多页图站聚合搜索（FP-010/096）：grabber → bg ----
   // startPage：每站起始页（默认 1）；「下一批」续搜时传上次结束页 +1，结果追加扩充
   // useGoogleAll：Google 全站搜索开关（FP-013 调整：开启后全部站点走 Google sitesearch 网页通道，仅标题+链接，速度快）

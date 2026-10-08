@@ -77,6 +77,9 @@ export type ScanParserName =
 /** 搜索结果张数提取规则名（注册表见 parsers.ts） */
 export type ImageCountRuleName = 'jrants-p' | 'pixibb-slug' | 'rrwsh-photos'
 
+/** 文件夹名规则名（视图侧按此路由；FP-018 纪律：业务代码禁止判断 site.id） */
+export type FolderNameRuleName = 'buondua' | 'jrants' | 'pixibb'
+
 /** 站内列表页声明（FP-023 列表浏览）：不依赖搜索引擎，直接遍历站点分类/列表页 */
 export interface SiteListPage {
   /** 界面显示名（如「相册列表」） */
@@ -136,6 +139,9 @@ export interface SiteDef {
   /** 文件夹名前缀 ID-{folderTag}-*
    *  约定（阶段 1）：全部保持 'buondua' 以维持现状命名；语义化改名属行为变更，另行申请 */
   folderTag?: string
+  /** 文件夹/相册名清洗规则（缺省 = buondua 通用规则；2026-10-08 体检 P0-2：
+   *  原先由视图侧判断 site.id 路由，改为读本字段） */
+  folderNameRule?: FolderNameRuleName
 }
 
 /** 运行期站点对象（编译产物；形状与旧 GallerySiteConfig 一致，额外携带来源定义 def） */

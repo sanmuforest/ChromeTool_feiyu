@@ -364,18 +364,20 @@ export class BuonduaService {
   }
 
   /** 站内列表页遍历（FP-023 列表浏览）：逐页 fetch + 解析相册链接，不依赖搜索引擎
+   *  pageKind：界面手动指定的分页方式（2026-10-08 体检 P0-3）
    *  fetchHtmlFn：可选，降级用（content 页面内 fetch 带 Cookie 穿透反爬） */
   async fetchSiteList(
     siteId: string,
     listUrl: string,
     pages: number,
+    pageKind?: 'query' | 'path' | 'path-slash',
     fetchHtmlFn?: (u: string) => Promise<string>,
   ): Promise<{ items: BuonduaLinkItem[]; pages: string[] }> {
     const getHtml = fetchHtmlFn ?? ((u: string) => this.fetchHtml(u))
     const site = siteById(siteId)
     if (!site) throw new Error(`未知站点（${siteId}）`)
     const urls: string[] = []
-    for (let p = 1; p <= Math.max(1, pages); p++) urls.push(listPageUrl(site, listUrl, p))
+    for (let p = 1; p <= Math.max(1, pages); p++) urls.push(listPageUrl(site, listUrl, p, pageKind))
     const byUrl = new Map<string, BuonduaLinkItem>()
     for (const pageUrl of urls) {
       const html = await getHtml(pageUrl)

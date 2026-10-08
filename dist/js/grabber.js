@@ -5128,6 +5128,8 @@
     channels: ["google"],
     defaultChecked: false,
     folderTag: "buondua",
+    // 2026-10-08 体检 P0-2：命名规则由定义声明（视图侧不再判断 site.id）
+    folderNameRule: "jrants",
     endpoints: [{ host: "jrants.com", role: "primary" }],
     container: { tag: "div", className: "entry-content" },
     pagination: { kind: "path-from-2" },
@@ -5150,6 +5152,8 @@
     channels: ["google"],
     defaultChecked: false,
     folderTag: "buondua",
+    // 2026-10-08 体检 P0-2：命名规则由定义声明（视图侧不再判断 site.id）
+    folderNameRule: "pixibb",
     endpoints: [{ host: "pixibb.com", role: "primary" }],
     container: { tag: "div", className: "entry-content" },
     pagination: { kind: "path-slash-from-2" },
@@ -5309,8 +5313,7 @@
         return `https://${host}/page/${page}${search.trailingSlash ? "/" : ""}?${search.param}=${query}`;
       }
       case "google-sitesearch": {
-        const siteHost = `www.${primaryHostOf(def)}`;
-        const siteQuery = encodeURIComponent(`${q} site:${siteHost}`);
+        const siteQuery = encodeURIComponent(`${q} site:${primaryHostOf(def)}`);
         return `https://www.google.com/search?q=${siteQuery}&hl=zh-CN${page > 1 ? `&start=${(page - 1) * 10}` : ""}`;
       }
       default:
@@ -5465,9 +5468,9 @@
     };
   }
   function buildBuonduaFolderName(title, url) {
-    const site = matchGallerySite(url);
-    if (site?.id === "jrants") return extractJrantsFolderName(title);
-    if (site?.id === "pixibb") return extractPixibbFolderName(title);
+    const rule = matchGallerySite(url)?.def.folderNameRule ?? "buondua";
+    if (rule === "jrants") return extractJrantsFolderName(title);
+    if (rule === "pixibb") return extractPixibbFolderName(title);
     return extractBuonduaAlbumName(title, url);
   }
   function initBuonduaView(root, srcTabId2, sourceUrl) {
@@ -5526,6 +5529,12 @@
             <option value="2" selected>2 \u9875</option>
             <option value="3">3 \u9875</option>
             <option value="5">5 \u9875</option>
+          </select>
+          <select id="bd-list-pagekind" class="num-input" title="\u5217\u8868\u9875\u5206\u9875\u65B9\u5F0F\uFF08\u82E5\u7B2C 2 \u9875\u6293\u4E0D\u5230\u65B0\u94FE\u63A5\uFF0C\u6362\u4E00\u79CD\u518D\u8BD5\uFF09">
+            <option value="" selected>\u5206\u9875\uFF1A\u81EA\u52A8</option>
+            <option value="query">\u5206\u9875\uFF1A?page=N</option>
+            <option value="path-slash">\u5206\u9875\uFF1A/page/N/</option>
+            <option value="path">\u5206\u9875\uFF1A/page/N</option>
           </select>
           <button id="bd-list-fetch" class="btn">\u6293\u53D6\u5217\u8868\u9875</button>
           <span id="bd-list-status" class="status-text"></span>
@@ -5911,6 +5920,7 @@ og:image: ${p.ogImage || "\u65E0"}
     const listSiteSelect = root.querySelector("#bd-list-site");
     const listPathInput = root.querySelector("#bd-list-path");
     const listPagesSelect = root.querySelector("#bd-list-pages");
+    const listPageKindSelect = root.querySelector("#bd-list-pagekind");
     const listFetchBtn = root.querySelector("#bd-list-fetch");
     const listStatusEl = root.querySelector("#bd-list-status");
     if (listSiteSelect) {
@@ -5947,11 +5957,13 @@ og:image: ${p.ogImage || "\u65E0"}
         return;
       }
       const pages = Number(listPagesSelect?.value) || 1;
+      const rawKind = listPageKindSelect?.value ?? "";
+      const pageKind = rawKind === "query" || rawKind === "path" || rawKind === "path-slash" ? rawKind : void 0;
       const listUrl = `https://${host}${path}`;
-      setStatus(listStatusEl, `\u6293\u53D6\u5217\u8868\u9875 ${pages} \u9875\uFF1A${listUrl}`);
+      setStatus(listStatusEl, `\u6293\u53D6\u5217\u8868\u9875 ${pages} \u9875\uFF08\u5206\u9875\uFF1A${pageKind ?? "\u81EA\u52A8"}\uFF09\uFF1A${listUrl}`);
       listFetchBtn.disabled = true;
       try {
-        const res = await sendMessage({ type: "BD_FETCH_LIST", srcTabId: srcTabId2, siteId, listUrl, pages });
+        const res = await sendMessage({ type: "BD_FETCH_LIST", srcTabId: srcTabId2, siteId, listUrl, pages, pageKind });
         if (!res.ok) setStatus(listStatusEl, `\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`, true);
       } finally {
         listFetchBtn.disabled = false;
@@ -6618,7 +6630,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261008215109" : "dev";
+  var BUILD_TIME = true ? "20261008221923" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

@@ -2092,6 +2092,8 @@
     channels: ["google"],
     defaultChecked: false,
     folderTag: "buondua",
+    // 2026-10-08 体检 P0-2：命名规则由定义声明（视图侧不再判断 site.id）
+    folderNameRule: "jrants",
     endpoints: [{ host: "jrants.com", role: "primary" }],
     container: { tag: "div", className: "entry-content" },
     pagination: { kind: "path-from-2" },
@@ -2114,6 +2116,8 @@
     channels: ["google"],
     defaultChecked: false,
     folderTag: "buondua",
+    // 2026-10-08 体检 P0-2：命名规则由定义声明（视图侧不再判断 site.id）
+    folderNameRule: "pixibb",
     endpoints: [{ host: "pixibb.com", role: "primary" }],
     container: { tag: "div", className: "entry-content" },
     pagination: { kind: "path-slash-from-2" },
@@ -2273,8 +2277,7 @@
         return `https://${host}/page/${page}${search.trailingSlash ? "/" : ""}?${search.param}=${query}`;
       }
       case "google-sitesearch": {
-        const siteHost = `www.${primaryHostOf(def)}`;
-        const siteQuery = encodeURIComponent(`${q} site:${siteHost}`);
+        const siteQuery = encodeURIComponent(`${q} site:${primaryHostOf(def)}`);
         return `https://www.google.com/search?q=${siteQuery}&hl=zh-CN${page > 1 ? `&start=${(page - 1) * 10}` : ""}`;
       }
       default:
@@ -2308,10 +2311,10 @@
         return "path";
     }
   }
-  function listPageUrl(site, base, page) {
+  function listPageUrl(site, base, page, pageKindOverride) {
     if (page <= 1) return base;
     const cfg = site.def.listPages?.[0];
-    const kind = cfg?.pageKind ?? deriveListPageKind(site.def);
+    const kind = pageKindOverride ?? cfg?.pageKind ?? deriveListPageKind(site.def);
     if (kind === "query") {
       const param = cfg?.param ?? "page";
       return `${base}${base.includes("?") ? "&" : "?"}${param}=${page}`;
@@ -3028,13 +3031,14 @@
       return items;
     }
     /** 站内列表页遍历（FP-023 列表浏览）：逐页 fetch + 解析相册链接，不依赖搜索引擎
+     *  pageKind：界面手动指定的分页方式（2026-10-08 体检 P0-3）
      *  fetchHtmlFn：可选，降级用（content 页面内 fetch 带 Cookie 穿透反爬） */
-    async fetchSiteList(siteId, listUrl, pages, fetchHtmlFn) {
+    async fetchSiteList(siteId, listUrl, pages, pageKind, fetchHtmlFn) {
       const getHtml = fetchHtmlFn ?? ((u) => this.fetchHtml(u));
       const site = siteById(siteId);
       if (!site) throw new Error(`\u672A\u77E5\u7AD9\u70B9\uFF08${siteId}\uFF09`);
       const urls = [];
-      for (let p = 1; p <= Math.max(1, pages); p++) urls.push(listPageUrl(site, listUrl, p));
+      for (let p = 1; p <= Math.max(1, pages); p++) urls.push(listPageUrl(site, listUrl, p, pageKind));
       const byUrl = /* @__PURE__ */ new Map();
       for (const pageUrl of urls) {
         const html = await getHtml(pageUrl);
@@ -4158,13 +4162,19 @@
           return res.data;
         };
         try {
-          const direct = await buondua2.fetchSiteList(message.siteId, message.listUrl, message.pages).catch((err) => {
+          const direct = await buondua2.fetchSiteList(message.siteId, message.listUrl, message.pages, message.pageKind).catch((err) => {
             logger5.warn("buondua", "\u540E\u53F0\u5217\u8868\u6293\u53D6\u5931\u8D25\uFF0C\u5C1D\u8BD5\u9875\u9762\u5185 fetch \u964D\u7EA7", String(err));
             return null;
           });
           let items = direct ? direct.items : [];
           if (items.length === 0) {
-            const fallback = await buondua2.fetchSiteList(message.siteId, message.listUrl, message.pages, contentFetch);
+            const fallback = await buondua2.fetchSiteList(
+              message.siteId,
+              message.listUrl,
+              message.pages,
+              message.pageKind,
+              contentFetch
+            );
             items = fallback.items;
           }
           await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "list", data: items, done: true });

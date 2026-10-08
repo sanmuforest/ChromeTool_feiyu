@@ -1115,7 +1115,7 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       }
       try {
         const direct = await buondua
-          .fetchSiteList(message.siteId, message.listUrl, message.pages)
+          .fetchSiteList(message.siteId, message.listUrl, message.pages, message.pageKind)
           .catch((err) => {
             logger.warn('buondua', '后台列表抓取失败，尝试页面内 fetch 降级', String(err))
             return null
@@ -1123,7 +1123,13 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
         let items = direct ? direct.items : []
         if (items.length === 0) {
           // 0 结果或后台失败：降级页面内 fetch（带 Cookie/Referer 穿透反爬）
-          const fallback = await buondua.fetchSiteList(message.siteId, message.listUrl, message.pages, contentFetch)
+          const fallback = await buondua.fetchSiteList(
+            message.siteId,
+            message.listUrl,
+            message.pages,
+            message.pageKind,
+            contentFetch,
+          )
           items = fallback.items
         }
         await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'list', data: items, done: true })

@@ -10,6 +10,8 @@ export const jrants: SiteDef = {
   channels: ['google'],
   defaultChecked: false,
   folderTag: 'buondua',
+  // 2026-10-08 体检 P0-2：命名规则由定义声明（视图侧不再判断 site.id）
+  folderNameRule: 'jrants',
   endpoints: [{ host: 'jrants.com', role: 'primary' }],
   container: { tag: 'div', className: 'entry-content' },
   pagination: { kind: 'path-from-2' },

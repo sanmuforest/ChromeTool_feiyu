@@ -37,11 +37,12 @@ function toGrabbed(img: BuonduaImage): GrabbedImage {
   }
 }
 
-/** 文件夹名 = 页面名（按站点路由：jrants/pixibb 用标题直接清洗，其余用 buondua 规则） */
+/** 文件夹名 = 页面名（按站点定义的 folderNameRule 路由；2026-10-08 体检 P0-2：
+ *  原先用 `site.id === 'jrants'` 判断，违反模块边界禁止事项第 6 条，改为读定义字段） */
 export function buildBuonduaFolderName(title: string, url: string): string {
-  const site = matchGallerySite(url)
-  if (site?.id === 'jrants') return extractJrantsFolderName(title)
-  if (site?.id === 'pixibb') return extractPixibbFolderName(title)
+  const rule = matchGallerySite(url)?.def.folderNameRule ?? 'buondua'
+  if (rule === 'jrants') return extractJrantsFolderName(title)
+  if (rule === 'pixibb') return extractPixibbFolderName(title)
   return extractBuonduaAlbumName(title, url)
 }
 
@@ -107,6 +108,12 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
             <option value="2" selected>2 页</option>
             <option value="3">3 页</option>
             <option value="5">5 页</option>
+          </select>
+          <select id="bd-list-pagekind" class="num-input" title="列表页分页方式（若第 2 页抓不到新链接，换一种再试）">
+            <option value="" selected>分页：自动</option>
+            <option value="query">分页：?page=N</option>
+            <option value="path-slash">分页：/page/N/</option>
+            <option value="path">分页：/page/N</option>
           </select>
           <button id="bd-list-fetch" class="btn">抓取列表页</button>
           <span id="bd-list-status" class="status-text"></span>
@@ -527,6 +534,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
   const listSiteSelect = root.querySelector('#bd-list-site') as HTMLSelectElement | null
   const listPathInput = root.querySelector('#bd-list-path') as HTMLInputElement | null
   const listPagesSelect = root.querySelector('#bd-list-pages') as HTMLSelectElement | null
+  const listPageKindSelect = root.querySelector('#bd-list-pagekind') as HTMLSelectElement | null
   const listFetchBtn = root.querySelector('#bd-list-fetch') as HTMLButtonElement | null
   const listStatusEl = root.querySelector('#bd-list-status') as HTMLElement | null
   if (listSiteSelect) {
@@ -563,11 +571,13 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       return
     }
     const pages = Number(listPagesSelect?.value) || 1
+    const rawKind = listPageKindSelect?.value ?? ''
+    const pageKind = rawKind === 'query' || rawKind === 'path' || rawKind === 'path-slash' ? rawKind : undefined
     const listUrl = `https://${host}${path}`
-    setStatus(listStatusEl, `抓取列表页 ${pages} 页：${listUrl}`)
+    setStatus(listStatusEl, `抓取列表页 ${pages} 页（分页：${pageKind ?? '自动'}）：${listUrl}`)
     listFetchBtn.disabled = true
     try {
-      const res = await sendMessage({ type: 'BD_FETCH_LIST', srcTabId, siteId, listUrl, pages })
+      const res = await sendMessage({ type: 'BD_FETCH_LIST', srcTabId, siteId, listUrl, pages, pageKind })
       if (!res.ok) setStatus(listStatusEl, `请求失败：${res.error}`, true)
       // 成功时结果经 BD_RESULT(kind=list) 推送到本面板链接列表
     } finally {

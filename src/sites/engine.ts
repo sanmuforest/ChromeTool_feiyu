@@ -101,9 +101,11 @@ function buildSearchUrl(def: SiteDef, q: string, page: number): string | null {
       return `https://${host}/page/${page}${search.trailingSlash ? '/' : ''}?${search.param}=${query}`
     }
     case 'google-sitesearch': {
-      // Google 已拒绝 gbv=1 / sitesearch= 老参数（2026-10-07 实测直接返回 403），改用现行 site: 语法
-      const siteHost = `www.${primaryHostOf(def)}`
-      const siteQuery = encodeURIComponent(`${q} site:${siteHost}`)
+      // Google 已拒绝 gbv=1 / sitesearch= 老参数（2026-10-07 实测直接返回 403），改用现行 site: 语法。
+      // 2026-10-08 体检修复（P0-1）：site: 必须用**主域**而非 www 子域 —— 旧 sitesearch= 参数语义宽于
+      // site: 操作符，保留 www 前缀会把查询限死在子域（漏掉裸域/其它子域的相册页，表现为「搜不到但不报错」）；
+      // 同时与 googleSearchConfig（Google 全站模式/Google 组）保持同一目标域名。
+      const siteQuery = encodeURIComponent(`${q} site:${primaryHostOf(def)}`)
       return `https://www.google.com/search?q=${siteQuery}&hl=zh-CN${page > 1 ? `&start=${(page - 1) * 10}` : ''}`
     }
     default:
@@ -144,11 +146,17 @@ function deriveListPageKind(def: SiteDef): 'query' | 'path' | 'path-slash' {
   }
 }
 
-/** 列表页分页 URL 构造（FP-023 列表浏览）：?page=N 或 /page/N[/] */
-export function listPageUrl(site: GallerySiteConfig, base: string, page: number): string {
+/** 列表页分页 URL 构造（FP-023 列表浏览）：?page=N 或 /page/N[/]
+ *  pageKindOverride：界面手动指定的分页方式（2026-10-08 体检 P0-3），优先于定义与派生值 */
+export function listPageUrl(
+  site: GallerySiteConfig,
+  base: string,
+  page: number,
+  pageKindOverride?: 'query' | 'path' | 'path-slash',
+): string {
   if (page <= 1) return base
   const cfg = site.def.listPages?.[0]
-  const kind = cfg?.pageKind ?? deriveListPageKind(site.def)
+  const kind = pageKindOverride ?? cfg?.pageKind ?? deriveListPageKind(site.def)
   if (kind === 'query') {
     const param = cfg?.param ?? 'page'
     return `${base}${base.includes('?') ? '&' : '?'}${param}=${page}`
