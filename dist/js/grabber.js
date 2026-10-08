@@ -5559,14 +5559,14 @@
               <div id="bd-search-sites-site" class="bd-site-boxes"></div>
             </div>
             <div class="bd-site-group">
-              <div class="bd-site-group-title">Google \u901A\u9053\uFF08\u4EC5 Google \u53EF\u641C\uFF09</div>
+              <div class="bd-site-group-title">Google \u901A\u9053\uFF08\u4EC5 Google \u53EF\u641C\uFF5C\u5DF2\u9650\u9891\uFF1A\u6BCF\u8F6E\u6700\u591A 8 \u6B21\u8BF7\u6C42\u3001\u95F4\u9694 4 \u79D2\uFF0C\u88AB\u62D2\u540E\u6682\u505C 15 \u5206\u949F\uFF09</div>
               <div id="bd-search-sites-google" class="bd-site-boxes"></div>
             </div>
           </div>
           <span id="bd-search-site-status" class="status-text"></span>
         </div>
         <div class="row">
-          <label class="bd-google-all-check" title="\u5F00\u542F\u540E\u5FFD\u7565\u4E0A\u65B9\u52FE\u9009\uFF0C\u5168\u90E8\u7AD9\u70B9\u8D70 Google sitesearch \u7F51\u9875\u901A\u9053\uFF08\u4EC5\u6807\u9898+\u94FE\u63A5\uFF0C\u540C\u7AD9\u53BB\u91CD\uFF0C\u901F\u5EA6\u5FEB\uFF09"><input type="checkbox" id="bd-google-all"> Google \u5168\u7AD9\u641C\u7D22</label>
+          <label class="bd-google-all-check" title="\u5F00\u542F\u540E\u5FFD\u7565\u4E0A\u65B9\u52FE\u9009\uFF0C\u5168\u90E8\u7AD9\u70B9\u8D70 Google \u7F51\u9875\u901A\u9053\uFF08\u4EC5\u6807\u9898+\u94FE\u63A5\uFF09\u3002\u6CE8\u610F\uFF1A\u4F1A\u663E\u8457\u589E\u52A0 Google \u8BF7\u6C42\u91CF\uFF0C\u5DF2\u53D7\u9650\u9891\u4FDD\u62A4\uFF08\u6BCF\u8F6E\u6700\u591A 8 \u6B21\u3001\u95F4\u9694 4 \u79D2\uFF09\uFF0C\u8BF7\u52FF\u77ED\u65F6\u95F4\u5185\u53CD\u590D\u641C\u7D22"><input type="checkbox" id="bd-google-all"> Google \u5168\u7AD9\u641C\u7D22</label>
           <button id="bd-google-test" class="btn">\u6D4B\u8BD5 Google \u8FDE\u63A5</button>
           <span id="bd-google-status" class="status-text"></span>
         </div>
@@ -6618,7 +6618,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261007233645" : "dev";
+  var BUILD_TIME = true ? "20261008215109" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

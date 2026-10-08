@@ -140,14 +140,14 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
               <div id="bd-search-sites-site" class="bd-site-boxes"></div>
             </div>
             <div class="bd-site-group">
-              <div class="bd-site-group-title">Google 通道（仅 Google 可搜）</div>
+              <div class="bd-site-group-title">Google 通道（仅 Google 可搜｜已限频：每轮最多 8 次请求、间隔 4 秒，被拒后暂停 15 分钟）</div>
               <div id="bd-search-sites-google" class="bd-site-boxes"></div>
             </div>
           </div>
           <span id="bd-search-site-status" class="status-text"></span>
         </div>
         <div class="row">
-          <label class="bd-google-all-check" title="开启后忽略上方勾选，全部站点走 Google sitesearch 网页通道（仅标题+链接，同站去重，速度快）"><input type="checkbox" id="bd-google-all"> Google 全站搜索</label>
+          <label class="bd-google-all-check" title="开启后忽略上方勾选，全部站点走 Google 网页通道（仅标题+链接）。注意：会显著增加 Google 请求量，已受限频保护（每轮最多 8 次、间隔 4 秒），请勿短时间内反复搜索"><input type="checkbox" id="bd-google-all"> Google 全站搜索</label>
           <button id="bd-google-test" class="btn">测试 Google 连接</button>
           <span id="bd-google-status" class="status-text"></span>
         </div>

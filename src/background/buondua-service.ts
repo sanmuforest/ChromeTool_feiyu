@@ -3,6 +3,7 @@
 // 通道：全部为公开页面，实测无需登录、图片直连可下载
 
 import { initLogger } from '../lib/logger'
+import { storageGet, storageSet } from '../lib/storage'
 import { extractBuonduaAlbumName } from '../lib/buondua-parse'
 import {
   listPageUrl,
@@ -27,6 +28,15 @@ const logger = initLogger('background')
 const FETCH_TIMEOUT_MS = 40000 // 部分站点对无 Cookie 请求响应慢（hitxhot 实测 >20s）
 const FETCH_ATTEMPTS = 2
 const CONCURRENCY = 3 // 批量抓取并发（用户确认）
+
+// ---- Google 通道限频（FP-024）：密集/高频请求会触发 Google 反爬，必须极力避免 ----
+const KEY_GOOGLE_COOLDOWN = 'google_cooldown_until'
+/** 相邻两次 Google 页面请求的最小间隔（含跨站；标签页本身还要渲染，实际间隔更长） */
+const GOOGLE_TAB_INTERVAL_MS = 4000
+/** 单轮聚合搜索允许的 Google 页面请求上限（跨站共享） */
+const GOOGLE_MAX_REQUESTS_PER_RUN = 8
+/** 被 Google 拒绝后的冷却时长：冷却期内不再发起任何 Google 请求 */
+const GOOGLE_COOLDOWN_MS = 15 * 60 * 1000
 
 export class BuonduaService {
   /** Google 全站模式：为无 sitesearch 配置的站点构造 Google 搜索配置（FP-013 调整）
@@ -78,39 +88,96 @@ export class BuonduaService {
     return { items, pages, error }
   }
 
+  /** Google 通道冷却剩余毫秒（FP-024；0 表示可用） */
+  private async googleCooldownRemainMs(): Promise<number> {
+    const until = (await storageGet<number>(KEY_GOOGLE_COOLDOWN)) ?? 0
+    return Math.max(0, until - Date.now())
+  }
+
   /** Google 通道：页面降级搜索（FP-012/093）——后台静默打开 Google 搜索标签（真实浏览器 JS 渲染），
    *  提取渲染后结果（a.zReHs + h3 / h3.r > a），逐页进行，完成后关闭标签。
-   *  后台 fetch 拿不到新版 Google 结果（JS 渲染壳，gbv=1 已废弃），此通道与用户手动搜索等效。 */
+   *  后台 fetch 拿不到新版 Google 结果（JS 渲染壳），此通道与用户手动搜索等效。
+   *
+   *  FP-024 限频（用户实测结论：密集高频请求会触发 Google 反爬，必须极力避免）：
+   *  ① 冷却检查：被拒后 GOOGLE_COOLDOWN_MS 内不再发起任何 Google 请求
+   *  ② 请求间隔：相邻请求（含跨站）至少 GOOGLE_TAB_INTERVAL_MS
+   *  ③ 单轮预算：整轮聚合搜索共享 GOOGLE_MAX_REQUESTS_PER_RUN 次上限
+   *  ④ 标签页复用：同站多页在同一标签页内导航，避免反复新建标签页的自动化特征 */
   async searchGoogleViaTab(
     site: GallerySiteConfig,
     query: string,
     pagesPerSite: number,
     startPage = 1,
-  ): Promise<{ items: BuonduaLinkItem[]; pages: number; blocked?: boolean }> {
+    budget: { used: number } = { used: 0 },
+  ): Promise<{
+    items: BuonduaLinkItem[]
+    pages: number
+    blocked?: boolean
+    cooldownRemainMs?: number
+    budgetExhausted?: boolean
+  }> {
+    const cooldown = await this.googleCooldownRemainMs()
+    if (cooldown > 0) {
+      logger.warn('buondua', 'Google 通道冷却中，跳过', {
+        site: site.id,
+        remainMin: Math.ceil(cooldown / 60000),
+      })
+      return { items: [], pages: 0, blocked: true, cooldownRemainMs: cooldown }
+    }
     const items: BuonduaLinkItem[] = []
     const seen = new Set<string>()
     let pagesFetched = 0
     let blocked = false
-    for (let page = startPage; page < startPage + pagesPerSite; page++) {
-      const url = site.searchUrl?.(query, page)
-      if (!url) break
-      const tab = await chrome.tabs.create({ url, active: false })
-      try {
-        const ok = await this.waitForTabComplete(tab.id!, 12000)
+    let cooldownRemainMs: number | undefined
+    let budgetExhausted = false
+    let tabId: number | undefined
+    try {
+      for (let page = startPage; page < startPage + pagesPerSite; page++) {
+        const url = site.searchUrl?.(query, page)
+        if (!url) break
+        if (budget.used >= GOOGLE_MAX_REQUESTS_PER_RUN) {
+          budgetExhausted = true
+          logger.warn('buondua', '本轮 Google 请求已达上限，停止', {
+            site: site.id,
+            used: budget.used,
+            limit: GOOGLE_MAX_REQUESTS_PER_RUN,
+          })
+          break
+        }
+        // ② 请求间隔（首个请求不等）
+        if (budget.used > 0) await sleep(GOOGLE_TAB_INTERVAL_MS)
+        budget.used++
+        // ④ 标签页复用：首个请求新建，其后在同一标签页内导航
+        if (tabId === undefined) {
+          const tab = await chrome.tabs.create({ url, active: false })
+          tabId = tab.id
+        } else {
+          await chrome.tabs.update(tabId, { url })
+          await sleep(600) // 等导航状态切换，避免把上一次的 complete 误判为本次完成
+        }
+        if (tabId === undefined) break
+        const ok = await this.waitForTabComplete(tabId, 12000)
         if (!ok) {
           logger.warn('buondua', 'Google 标签页加载超时', { site: site.id, page })
           break
         }
-        const extracted = await this.extractGoogleTabResults(tab.id!)
+        const extracted = await this.extractGoogleTabResults(tabId)
         logger.info('buondua', 'Google 标签页提取', {
           site: site.id,
           page,
           count: extracted.items.length,
           blocked: extracted.blocked,
+          requestsUsed: budget.used,
         })
-        // Google 明确拒绝（403 / 人机验证）：停止翻页，标签页保留给用户手动完成验证（FP-022）
+        // Google 明确拒绝（403 / 人机验证）：进入冷却并停止，标签页保留给用户手动完成验证
         if (extracted.blocked) {
           blocked = true
+          cooldownRemainMs = GOOGLE_COOLDOWN_MS
+          await storageSet(KEY_GOOGLE_COOLDOWN, Date.now() + GOOGLE_COOLDOWN_MS)
+          logger.warn('buondua', 'Google 拒绝请求，进入冷却期', {
+            site: site.id,
+            cooldownMin: GOOGLE_COOLDOWN_MS / 60000,
+          })
           break
         }
         if (extracted.items.length === 0) break // 无结果（无匹配）
@@ -122,12 +189,12 @@ export class BuonduaService {
             items.push(clean)
           }
         }
-      } finally {
-        // 被拒时保留标签页（用户需在其中手动完成验证），其余情况关闭
-        if (!blocked) await chrome.tabs.remove(tab.id!).catch(() => {})
       }
+    } finally {
+      // 被拒时保留标签页（用户需在其中手动完成验证），其余情况关闭
+      if (tabId !== undefined && !blocked) await chrome.tabs.remove(tabId).catch(() => {})
     }
-    return { items, pages: pagesFetched, blocked }
+    return { items, pages: pagesFetched, blocked, cooldownRemainMs, budgetExhausted }
   }
 
   /** 等待标签页加载完成（tabs.create 后页面加载是异步的，未加载完 executeScript 会失败） */
@@ -370,10 +437,15 @@ export class BuonduaService {
   ): Promise<BuonduaLinkItem[]> {
     const mergedMap = new Map<string, BuonduaLinkItem>()
     const siteStats: Record<string, { count: number; pages: number; error?: string }> = {}
+    // Google 通道限频预算（FP-024）：整轮聚合搜索跨站共享，避免密集请求触发反爬
+    const googleBudget = { used: 0 }
     for (const siteId of sites) {
       const site = siteById(siteId)
-      // FP-014：useGoogleAll 模式下不要求站内 searchUrl（无搜索接口的站也能走 Google sitesearch）
-      if (!site || (!site.searchUrl && !useGoogleAll)) {
+      // Google 通道站点不要求站内 searchUrl：useGoogleAll（全站模式）或 googleSites（Google 组）
+      // 都会用 googleSearchConfig 动态构造 Google 搜索 URL（FP-025 修复：此前漏判 googleSites，
+      // 导致 ilovexs / phimvuspot 这类「无 search 字段、只靠 Google 通道」的站点被误判为「该站不支持搜索」）
+      const useGoogleChannel = useGoogleAll || googleSites.includes(siteId)
+      if (!site || (!site.searchUrl && !useGoogleChannel)) {
         await onSite(siteId, [], '该站不支持搜索')
         continue
       }
@@ -387,12 +459,18 @@ export class BuonduaService {
         const isGoogleOnly = !site.searchUrl && !site.searchAlbumPath
         if (site.searchAlbumPath || useGoogleAll || isGoogleOnly || googleSites.includes(siteId)) {
           const googleSite = useGoogleAll || isGoogleOnly || googleSites.includes(siteId) ? this.googleSearchConfig(site) : site
-          const tabRes = await this.searchGoogleViaTab(googleSite, query, pagesPerSite, startPage)
+          const tabRes = await this.searchGoogleViaTab(googleSite, query, pagesPerSite, startPage, googleBudget)
           pagesFetched = tabRes.pages
           for (const item of tabRes.items) items.push(item)
           if (tabRes.blocked) {
-            // Google 明确拒绝（403 / 人机验证，FP-022）：提示用户手动完成验证，搜索标签页已保留
-            error = 'Google 拒绝本次请求（403 / 人机验证）：已保留搜索标签页，请手动完成验证后重试'
+            // Google 拒绝（403 / 人机验证，FP-022）或处于冷却期（FP-024）：明确提示并停止，避免反复触发
+            const remainMin = tabRes.cooldownRemainMs ? Math.ceil(tabRes.cooldownRemainMs / 60000) : 0
+            error =
+              remainMin > 0
+                ? `Google 拒绝本次请求（403 / 人机验证）：Google 通道已暂停 ${remainMin} 分钟，请稍后重试或改用站内通道`
+                : 'Google 拒绝本次请求（403 / 人机验证）：已保留搜索标签页，请手动完成验证后重试'
+          } else if (tabRes.budgetExhausted) {
+            error = `本轮 Google 请求已达上限（${GOOGLE_MAX_REQUESTS_PER_RUN} 次），已停止以避免触发反爬，请稍后再搜或改用站内通道`
           } else if (tabRes.items.length === 0 && site.searchUrl) {
             // FP-014 修复：Google 通道无结果且该站有站内搜索接口 → 自动降级站内 fetch
             // （Google 全站模式下老站 buondua/rrwsh/jrants 等的救回路）

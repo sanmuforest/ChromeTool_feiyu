@@ -2750,6 +2750,10 @@
   var FETCH_TIMEOUT_MS4 = 4e4;
   var FETCH_ATTEMPTS = 2;
   var CONCURRENCY2 = 3;
+  var KEY_GOOGLE_COOLDOWN = "google_cooldown_until";
+  var GOOGLE_TAB_INTERVAL_MS = 4e3;
+  var GOOGLE_MAX_REQUESTS_PER_RUN = 8;
+  var GOOGLE_COOLDOWN_MS = 15 * 60 * 1e3;
   var BuonduaService = class {
     /** Google 全站模式：为无 sitesearch 配置的站点构造 Google 搜索配置（FP-013 调整）
      *  2026-10-07（FP-022）：Google 已拒绝 gbv=1 / sitesearch= 老参数（实测 403），改用现行 site: 语法；
@@ -2788,33 +2792,80 @@
       }
       return { items, pages, error };
     }
+    /** Google 通道冷却剩余毫秒（FP-024；0 表示可用） */
+    async googleCooldownRemainMs() {
+      const until = await storageGet(KEY_GOOGLE_COOLDOWN) ?? 0;
+      return Math.max(0, until - Date.now());
+    }
     /** Google 通道：页面降级搜索（FP-012/093）——后台静默打开 Google 搜索标签（真实浏览器 JS 渲染），
      *  提取渲染后结果（a.zReHs + h3 / h3.r > a），逐页进行，完成后关闭标签。
-     *  后台 fetch 拿不到新版 Google 结果（JS 渲染壳，gbv=1 已废弃），此通道与用户手动搜索等效。 */
-    async searchGoogleViaTab(site, query, pagesPerSite, startPage = 1) {
+     *  后台 fetch 拿不到新版 Google 结果（JS 渲染壳），此通道与用户手动搜索等效。
+     *
+     *  FP-024 限频（用户实测结论：密集高频请求会触发 Google 反爬，必须极力避免）：
+     *  ① 冷却检查：被拒后 GOOGLE_COOLDOWN_MS 内不再发起任何 Google 请求
+     *  ② 请求间隔：相邻请求（含跨站）至少 GOOGLE_TAB_INTERVAL_MS
+     *  ③ 单轮预算：整轮聚合搜索共享 GOOGLE_MAX_REQUESTS_PER_RUN 次上限
+     *  ④ 标签页复用：同站多页在同一标签页内导航，避免反复新建标签页的自动化特征 */
+    async searchGoogleViaTab(site, query, pagesPerSite, startPage = 1, budget = { used: 0 }) {
+      const cooldown = await this.googleCooldownRemainMs();
+      if (cooldown > 0) {
+        logger4.warn("buondua", "Google \u901A\u9053\u51B7\u5374\u4E2D\uFF0C\u8DF3\u8FC7", {
+          site: site.id,
+          remainMin: Math.ceil(cooldown / 6e4)
+        });
+        return { items: [], pages: 0, blocked: true, cooldownRemainMs: cooldown };
+      }
       const items = [];
       const seen = /* @__PURE__ */ new Set();
       let pagesFetched = 0;
       let blocked = false;
-      for (let page = startPage; page < startPage + pagesPerSite; page++) {
-        const url = site.searchUrl?.(query, page);
-        if (!url) break;
-        const tab = await chrome.tabs.create({ url, active: false });
-        try {
-          const ok = await this.waitForTabComplete(tab.id, 12e3);
+      let cooldownRemainMs;
+      let budgetExhausted = false;
+      let tabId;
+      try {
+        for (let page = startPage; page < startPage + pagesPerSite; page++) {
+          const url = site.searchUrl?.(query, page);
+          if (!url) break;
+          if (budget.used >= GOOGLE_MAX_REQUESTS_PER_RUN) {
+            budgetExhausted = true;
+            logger4.warn("buondua", "\u672C\u8F6E Google \u8BF7\u6C42\u5DF2\u8FBE\u4E0A\u9650\uFF0C\u505C\u6B62", {
+              site: site.id,
+              used: budget.used,
+              limit: GOOGLE_MAX_REQUESTS_PER_RUN
+            });
+            break;
+          }
+          if (budget.used > 0) await sleep(GOOGLE_TAB_INTERVAL_MS);
+          budget.used++;
+          if (tabId === void 0) {
+            const tab = await chrome.tabs.create({ url, active: false });
+            tabId = tab.id;
+          } else {
+            await chrome.tabs.update(tabId, { url });
+            await sleep(600);
+          }
+          if (tabId === void 0) break;
+          const ok = await this.waitForTabComplete(tabId, 12e3);
           if (!ok) {
             logger4.warn("buondua", "Google \u6807\u7B7E\u9875\u52A0\u8F7D\u8D85\u65F6", { site: site.id, page });
             break;
           }
-          const extracted = await this.extractGoogleTabResults(tab.id);
+          const extracted = await this.extractGoogleTabResults(tabId);
           logger4.info("buondua", "Google \u6807\u7B7E\u9875\u63D0\u53D6", {
             site: site.id,
             page,
             count: extracted.items.length,
-            blocked: extracted.blocked
+            blocked: extracted.blocked,
+            requestsUsed: budget.used
           });
           if (extracted.blocked) {
             blocked = true;
+            cooldownRemainMs = GOOGLE_COOLDOWN_MS;
+            await storageSet(KEY_GOOGLE_COOLDOWN, Date.now() + GOOGLE_COOLDOWN_MS);
+            logger4.warn("buondua", "Google \u62D2\u7EDD\u8BF7\u6C42\uFF0C\u8FDB\u5165\u51B7\u5374\u671F", {
+              site: site.id,
+              cooldownMin: GOOGLE_COOLDOWN_MS / 6e4
+            });
             break;
           }
           if (extracted.items.length === 0) break;
@@ -2826,12 +2877,12 @@
               items.push(clean);
             }
           }
-        } finally {
-          if (!blocked) await chrome.tabs.remove(tab.id).catch(() => {
-          });
         }
+      } finally {
+        if (tabId !== void 0 && !blocked) await chrome.tabs.remove(tabId).catch(() => {
+        });
       }
-      return { items, pages: pagesFetched, blocked };
+      return { items, pages: pagesFetched, blocked, cooldownRemainMs, budgetExhausted };
     }
     /** 等待标签页加载完成（tabs.create 后页面加载是异步的，未加载完 executeScript 会失败） */
     async waitForTabComplete(tabId, timeoutMs = 2e4) {
@@ -3032,9 +3083,11 @@
     async searchSites(query, sites, pagesPerSite, onSite, startPage = 1, useGoogleAll = false, googleSites = []) {
       const mergedMap = /* @__PURE__ */ new Map();
       const siteStats = {};
+      const googleBudget = { used: 0 };
       for (const siteId of sites) {
         const site = siteById(siteId);
-        if (!site || !site.searchUrl && !useGoogleAll) {
+        const useGoogleChannel = useGoogleAll || googleSites.includes(siteId);
+        if (!site || !site.searchUrl && !useGoogleChannel) {
           await onSite(siteId, [], "\u8BE5\u7AD9\u4E0D\u652F\u6301\u641C\u7D22");
           continue;
         }
@@ -3045,11 +3098,14 @@
           const isGoogleOnly = !site.searchUrl && !site.searchAlbumPath;
           if (site.searchAlbumPath || useGoogleAll || isGoogleOnly || googleSites.includes(siteId)) {
             const googleSite = useGoogleAll || isGoogleOnly || googleSites.includes(siteId) ? this.googleSearchConfig(site) : site;
-            const tabRes = await this.searchGoogleViaTab(googleSite, query, pagesPerSite, startPage);
+            const tabRes = await this.searchGoogleViaTab(googleSite, query, pagesPerSite, startPage, googleBudget);
             pagesFetched = tabRes.pages;
             for (const item of tabRes.items) items.push(item);
             if (tabRes.blocked) {
-              error = "Google \u62D2\u7EDD\u672C\u6B21\u8BF7\u6C42\uFF08403 / \u4EBA\u673A\u9A8C\u8BC1\uFF09\uFF1A\u5DF2\u4FDD\u7559\u641C\u7D22\u6807\u7B7E\u9875\uFF0C\u8BF7\u624B\u52A8\u5B8C\u6210\u9A8C\u8BC1\u540E\u91CD\u8BD5";
+              const remainMin = tabRes.cooldownRemainMs ? Math.ceil(tabRes.cooldownRemainMs / 6e4) : 0;
+              error = remainMin > 0 ? `Google \u62D2\u7EDD\u672C\u6B21\u8BF7\u6C42\uFF08403 / \u4EBA\u673A\u9A8C\u8BC1\uFF09\uFF1AGoogle \u901A\u9053\u5DF2\u6682\u505C ${remainMin} \u5206\u949F\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u6216\u6539\u7528\u7AD9\u5185\u901A\u9053` : "Google \u62D2\u7EDD\u672C\u6B21\u8BF7\u6C42\uFF08403 / \u4EBA\u673A\u9A8C\u8BC1\uFF09\uFF1A\u5DF2\u4FDD\u7559\u641C\u7D22\u6807\u7B7E\u9875\uFF0C\u8BF7\u624B\u52A8\u5B8C\u6210\u9A8C\u8BC1\u540E\u91CD\u8BD5";
+            } else if (tabRes.budgetExhausted) {
+              error = `\u672C\u8F6E Google \u8BF7\u6C42\u5DF2\u8FBE\u4E0A\u9650\uFF08${GOOGLE_MAX_REQUESTS_PER_RUN} \u6B21\uFF09\uFF0C\u5DF2\u505C\u6B62\u4EE5\u907F\u514D\u89E6\u53D1\u53CD\u722C\uFF0C\u8BF7\u7A0D\u540E\u518D\u641C\u6216\u6539\u7528\u7AD9\u5185\u901A\u9053`;
             } else if (tabRes.items.length === 0 && site.searchUrl) {
               logger4.info("buondua", "Google \u901A\u9053\u65E0\u7ED3\u679C\uFF0C\u964D\u7EA7\u7AD9\u5185\u641C\u7D22", { site: siteId, query });
               const fallback = await this.fetchSiteSearch(site, query, pagesPerSite, startPage);
