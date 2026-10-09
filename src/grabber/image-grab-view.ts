@@ -348,20 +348,27 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
 
       const sizeTag = document.createElement('div')
       const restoreSizeTag = (): void => {
+        sizeTag.style.cursor = ''
         sizeTag.className = 'size-tag' + (img.sizeStatus === 'ok' ? '' : ' unknown')
         sizeTag.textContent =
           img.sizeStatus === 'ok' ? `${img.width}×${img.height}` : img.sizeStatus === 'loading' ? '尺寸获取中…' : '尺寸未知'
       }
       restoreSizeTag()
 
-      // 四级容错（2026-10-10）：错开加载 → 失败延迟重试 → blob 兜底 → 标记失败
+      // 五级容错（2026-10-10）：错开加载 → 失败延迟重试 → blob 兜底 → 标记失败 → 手动重试入口
       // 依据：实测该图床（i0.wp.com Photon）的失败是**暂时性**的（新标签可打开、网页端稍后自行恢复）
       //       → 多为突发并发限流，故先降并发、再重试，最后才用 background 取字节兜底
       let attempt = 0
       const MAX_RETRY = 2
+      /** 生成加载 URL；force=true 时附加时间戳强制重新请求（绕过浏览器对失败结果的缓存） */
+      const loadSrc = (force: boolean): string => {
+        const base = displayUrlOf(img)
+        return force ? `${base}${base.includes('?') ? '&' : '?'}t=${Date.now()}` : base
+      }
       const markFailed = (): void => {
         sizeTag.className = 'size-tag unknown'
-        sizeTag.textContent = '加载失败'
+        sizeTag.textContent = '加载失败（点击重试）'
+        sizeTag.style.cursor = 'pointer'
         thumbFailCount++
         if (thumbFailCount <= MAX_THUMB_FAIL_LOGS) {
           logger.warn('view', '图片加载失败（重试与兜底均失败）', { url: img.url, failedTotal: thumbFailCount })
@@ -369,15 +376,24 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
           logger.warn('view', '图片加载失败过多，后续不再逐条记录', { failedTotal: thumbFailCount })
         }
       }
+      // ⑤ 手动重试入口：只有处于「加载失败」状态时角标才可点（避免误触），且不触发卡片的选中切换
+      sizeTag.addEventListener('click', (ev) => {
+        if (!sizeTag.textContent?.startsWith('加载失败')) return
+        ev.stopPropagation()
+        attempt = 0
+        sizeTag.style.cursor = ''
+        sizeTag.textContent = '重试中…'
+        logger.info('view', '手动重试加载图片', { url: img.url })
+        thumb.src = loadSrc(true)
+      })
       thumb.addEventListener('error', () => {
-        // ① 延迟重试：限流多为暂时性，错峰后重试常可成功（附时间戳强制重新请求，绕过失败缓存）
+        // ① 延迟重试：限流多为暂时性，错峰后重试常可成功
         if (attempt < MAX_RETRY) {
           attempt++
           sizeTag.textContent = `重试中 ${attempt}/${MAX_RETRY}…`
           window.setTimeout(
             () => {
-              const base = displayUrlOf(img)
-              thumb.src = `${base}${base.includes('?') ? '&' : '?'}retry=${attempt}&t=${Date.now()}`
+              thumb.src = loadSrc(true)
             },
             1200 * attempt,
           )
@@ -394,10 +410,10 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       // ③ 错开加载：避免一次性数十张并发请求触发图床限流（每张间隔 80ms，最多错开 2s）
       const staggerDelay = Math.min(staggerIndex++ * 80, 2000)
       if (staggerDelay === 0) {
-        thumb.src = displayUrlOf(img)
+        thumb.src = loadSrc(false)
       } else {
         window.setTimeout(() => {
-          thumb.src = displayUrlOf(img)
+          thumb.src = loadSrc(false)
         }, staggerDelay)
       }
 

@@ -3315,15 +3315,21 @@
         thumb.referrerPolicy = "no-referrer";
         const sizeTag = document.createElement("div");
         const restoreSizeTag = () => {
+          sizeTag.style.cursor = "";
           sizeTag.className = "size-tag" + (img.sizeStatus === "ok" ? "" : " unknown");
           sizeTag.textContent = img.sizeStatus === "ok" ? `${img.width}\xD7${img.height}` : img.sizeStatus === "loading" ? "\u5C3A\u5BF8\u83B7\u53D6\u4E2D\u2026" : "\u5C3A\u5BF8\u672A\u77E5";
         };
         restoreSizeTag();
         let attempt = 0;
         const MAX_RETRY = 2;
+        const loadSrc = (force) => {
+          const base = displayUrlOf(img);
+          return force ? `${base}${base.includes("?") ? "&" : "?"}t=${Date.now()}` : base;
+        };
         const markFailed = () => {
           sizeTag.className = "size-tag unknown";
-          sizeTag.textContent = "\u52A0\u8F7D\u5931\u8D25";
+          sizeTag.textContent = "\u52A0\u8F7D\u5931\u8D25\uFF08\u70B9\u51FB\u91CD\u8BD5\uFF09";
+          sizeTag.style.cursor = "pointer";
           thumbFailCount++;
           if (thumbFailCount <= MAX_THUMB_FAIL_LOGS) {
             logger3.warn("view", "\u56FE\u7247\u52A0\u8F7D\u5931\u8D25\uFF08\u91CD\u8BD5\u4E0E\u515C\u5E95\u5747\u5931\u8D25\uFF09", { url: img.url, failedTotal: thumbFailCount });
@@ -3331,14 +3337,22 @@
             logger3.warn("view", "\u56FE\u7247\u52A0\u8F7D\u5931\u8D25\u8FC7\u591A\uFF0C\u540E\u7EED\u4E0D\u518D\u9010\u6761\u8BB0\u5F55", { failedTotal: thumbFailCount });
           }
         };
+        sizeTag.addEventListener("click", (ev) => {
+          if (!sizeTag.textContent?.startsWith("\u52A0\u8F7D\u5931\u8D25")) return;
+          ev.stopPropagation();
+          attempt = 0;
+          sizeTag.style.cursor = "";
+          sizeTag.textContent = "\u91CD\u8BD5\u4E2D\u2026";
+          logger3.info("view", "\u624B\u52A8\u91CD\u8BD5\u52A0\u8F7D\u56FE\u7247", { url: img.url });
+          thumb.src = loadSrc(true);
+        });
         thumb.addEventListener("error", () => {
           if (attempt < MAX_RETRY) {
             attempt++;
             sizeTag.textContent = `\u91CD\u8BD5\u4E2D ${attempt}/${MAX_RETRY}\u2026`;
             window.setTimeout(
               () => {
-                const base = displayUrlOf(img);
-                thumb.src = `${base}${base.includes("?") ? "&" : "?"}retry=${attempt}&t=${Date.now()}`;
+                thumb.src = loadSrc(true);
               },
               1200 * attempt
             );
@@ -3352,10 +3366,10 @@
         });
         const staggerDelay = Math.min(staggerIndex++ * 80, 2e3);
         if (staggerDelay === 0) {
-          thumb.src = displayUrlOf(img);
+          thumb.src = loadSrc(false);
         } else {
           window.setTimeout(() => {
-            thumb.src = displayUrlOf(img);
+            thumb.src = loadSrc(false);
           }, staggerDelay);
         }
         const check = document.createElement("div");
@@ -6700,7 +6714,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261010002037" : "dev";
+  var BUILD_TIME = true ? "20261010002432" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
