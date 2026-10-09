@@ -386,6 +386,19 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
         logger.info('view', '手动重试加载图片', { url: img.url })
         thumb.src = loadSrc(true)
       })
+      // 加载成功（含错峰、自动重试、手动重试成功）：补齐尺寸并恢复角标
+      // 1) 回归修复（2026-10-10）：此前缺少 load 处理，重试成功的图角标滞留在「重试中 N/2…」，看不到尺寸
+      // 2) 尺寸补齐：多页图站的图片由后台解析（只给 URL，无宽高），原本恒显示「尺寸未知」；
+      //    图片加载后可直接读取真实像素尺寸，零额外请求即可显示尺寸并修正统计
+      thumb.addEventListener('load', () => {
+        if ((!img.width || !img.height) && thumb.naturalWidth > 0 && thumb.naturalHeight > 0) {
+          img.width = thumb.naturalWidth
+          img.height = thumb.naturalHeight
+          img.sizeStatus = 'ok'
+          updateStats()
+        }
+        restoreSizeTag()
+      })
       thumb.addEventListener('error', () => {
         // ① 延迟重试：限流多为暂时性，错峰后重试常可成功
         if (attempt < MAX_RETRY) {

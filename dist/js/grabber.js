@@ -3346,6 +3346,15 @@
           logger3.info("view", "\u624B\u52A8\u91CD\u8BD5\u52A0\u8F7D\u56FE\u7247", { url: img.url });
           thumb.src = loadSrc(true);
         });
+        thumb.addEventListener("load", () => {
+          if ((!img.width || !img.height) && thumb.naturalWidth > 0 && thumb.naturalHeight > 0) {
+            img.width = thumb.naturalWidth;
+            img.height = thumb.naturalHeight;
+            img.sizeStatus = "ok";
+            updateStats();
+          }
+          restoreSizeTag();
+        });
         thumb.addEventListener("error", () => {
           if (attempt < MAX_RETRY) {
             attempt++;
@@ -6714,7 +6723,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261010002432" : "dev";
+  var BUILD_TIME = true ? "20261010002857" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
