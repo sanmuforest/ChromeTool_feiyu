@@ -57,6 +57,32 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
   let images: GrabbedImage[] = []
   /** 缩略图加载失败计数（仅用于日志限流） */
   let thumbFailCount = 0
+
+  /** 图片直接加载失败的兜底（2026-10-08）：经 background 取字节转 blob 显示
+   *  背景：kaizty 等站的图片 URL 可正常取得字节（外部验证 200），但扩展页 <img> 加载/解码失败
+   *  → 用本地 blob 绕过加载限制；同时记录体积与文件头，用于判断是否为格式或截断问题 */
+  async function recoverThumb(el: HTMLImageElement, url: string): Promise<number | null> {
+    try {
+      const res = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
+        type: 'GRAB_FETCH_IMAGE',
+        srcTabId: options.srcTabId,
+        url,
+      })
+      if (!res.ok || !res.data) return null
+      const bin = atob(res.data)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+      const head = Array.from(bytes.slice(0, 4))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(' ')
+      logger.info('view', '图片兜底取字节成功（改用 blob 显示）', { url, bytes: bytes.length, head })
+      el.src = URL.createObjectURL(new Blob([bytes]))
+      return bytes.length
+    } catch (err) {
+      logger.warn('view', '图片兜底取字节失败', { url, error: String(err) })
+      return null
+    }
+  }
   let selected = new Set<string>()
   let filterSize: { w: number; h: number } | null = null
   let job: DownloadJob | null = null
@@ -324,19 +350,36 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       sizeTag.textContent =
         img.sizeStatus === 'ok' ? `${img.width}×${img.height}` : img.sizeStatus === 'loading' ? '尺寸获取中…' : '尺寸未知'
 
-      // 加载失败：角标明确提示 + 限流记录日志（含 URL，便于定位防盗链或链接失效）
+      // 加载失败：先尝试 background 取字节兜底显示；确实拿不到字节才标为「加载失败」
       thumb.addEventListener('error', () => {
+        if (thumb.dataset.recovered !== '1') {
+          thumb.dataset.recovered = '1'
+          sizeTag.textContent = '兜底加载中…'
+          void recoverThumb(thumb, img.url).then((size) => {
+            if (size === null) {
+              sizeTag.className = 'size-tag unknown'
+              sizeTag.textContent = '加载失败'
+              thumbFailCount++
+              if (thumbFailCount <= MAX_THUMB_FAIL_LOGS) {
+                logger.warn('view', '图片加载失败（含兜底，可能防盗链或链接失效）', {
+                  url: img.url,
+                  failedTotal: thumbFailCount,
+                })
+              } else if (thumbFailCount === MAX_THUMB_FAIL_LOGS + 1) {
+                logger.warn('view', '图片加载失败过多，后续不再逐条记录', { failedTotal: thumbFailCount })
+              }
+              return
+            }
+            // 兜底成功：恢复尺寸角标
+            sizeTag.className = 'size-tag' + (img.sizeStatus === 'ok' ? '' : ' unknown')
+            sizeTag.textContent =
+              img.sizeStatus === 'ok' ? `${img.width}×${img.height}` : '尺寸未知'
+          })
+          return
+        }
+        // 兜底后仍失败
         sizeTag.className = 'size-tag unknown'
         sizeTag.textContent = '加载失败'
-        thumbFailCount++
-        if (thumbFailCount <= MAX_THUMB_FAIL_LOGS) {
-          logger.warn('view', '图片加载失败（可能防盗链或链接失效）', {
-            url: thumb.src,
-            failedTotal: thumbFailCount,
-          })
-        } else if (thumbFailCount === MAX_THUMB_FAIL_LOGS + 1) {
-          logger.warn('view', '图片加载失败过多，后续不再逐条记录', { failedTotal: thumbFailCount })
-        }
       })
       thumb.src = displayUrlOf(img)
 
