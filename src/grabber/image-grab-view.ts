@@ -332,6 +332,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       updateStats()
       return
     }
+    let staggerIndex = 0
     for (const img of filtered) {
       const card = document.createElement('div')
       card.className = 'img-card' + (selected.has(img.url) ? ' selected' : '')
@@ -342,46 +343,63 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       thumb.loading = 'lazy'
       thumb.decoding = 'async'
       thumb.draggable = false
-      // 2026-10-08 修复：扩展页 Referer 为 chrome-extension://，部分站点据此判为盗链导致成片破图 → 不发送 Referer
+      // 2026-10-08：扩展页 Referer 为 chrome-extension://，部分站点据此判为盗链 → 不发送 Referer
       thumb.referrerPolicy = 'no-referrer'
 
       const sizeTag = document.createElement('div')
-      sizeTag.className = 'size-tag' + (img.sizeStatus === 'ok' ? '' : ' unknown')
-      sizeTag.textContent =
-        img.sizeStatus === 'ok' ? `${img.width}×${img.height}` : img.sizeStatus === 'loading' ? '尺寸获取中…' : '尺寸未知'
+      const restoreSizeTag = (): void => {
+        sizeTag.className = 'size-tag' + (img.sizeStatus === 'ok' ? '' : ' unknown')
+        sizeTag.textContent =
+          img.sizeStatus === 'ok' ? `${img.width}×${img.height}` : img.sizeStatus === 'loading' ? '尺寸获取中…' : '尺寸未知'
+      }
+      restoreSizeTag()
 
-      // 加载失败：先尝试 background 取字节兜底显示；确实拿不到字节才标为「加载失败」
-      thumb.addEventListener('error', () => {
-        if (thumb.dataset.recovered !== '1') {
-          thumb.dataset.recovered = '1'
-          sizeTag.textContent = '兜底加载中…'
-          void recoverThumb(thumb, img.url).then((size) => {
-            if (size === null) {
-              sizeTag.className = 'size-tag unknown'
-              sizeTag.textContent = '加载失败'
-              thumbFailCount++
-              if (thumbFailCount <= MAX_THUMB_FAIL_LOGS) {
-                logger.warn('view', '图片加载失败（含兜底，可能防盗链或链接失效）', {
-                  url: img.url,
-                  failedTotal: thumbFailCount,
-                })
-              } else if (thumbFailCount === MAX_THUMB_FAIL_LOGS + 1) {
-                logger.warn('view', '图片加载失败过多，后续不再逐条记录', { failedTotal: thumbFailCount })
-              }
-              return
-            }
-            // 兜底成功：恢复尺寸角标
-            sizeTag.className = 'size-tag' + (img.sizeStatus === 'ok' ? '' : ' unknown')
-            sizeTag.textContent =
-              img.sizeStatus === 'ok' ? `${img.width}×${img.height}` : '尺寸未知'
-          })
-          return
-        }
-        // 兜底后仍失败
+      // 四级容错（2026-10-10）：错开加载 → 失败延迟重试 → blob 兜底 → 标记失败
+      // 依据：实测该图床（i0.wp.com Photon）的失败是**暂时性**的（新标签可打开、网页端稍后自行恢复）
+      //       → 多为突发并发限流，故先降并发、再重试，最后才用 background 取字节兜底
+      let attempt = 0
+      const MAX_RETRY = 2
+      const markFailed = (): void => {
         sizeTag.className = 'size-tag unknown'
         sizeTag.textContent = '加载失败'
+        thumbFailCount++
+        if (thumbFailCount <= MAX_THUMB_FAIL_LOGS) {
+          logger.warn('view', '图片加载失败（重试与兜底均失败）', { url: img.url, failedTotal: thumbFailCount })
+        } else if (thumbFailCount === MAX_THUMB_FAIL_LOGS + 1) {
+          logger.warn('view', '图片加载失败过多，后续不再逐条记录', { failedTotal: thumbFailCount })
+        }
+      }
+      thumb.addEventListener('error', () => {
+        // ① 延迟重试：限流多为暂时性，错峰后重试常可成功（附时间戳强制重新请求，绕过失败缓存）
+        if (attempt < MAX_RETRY) {
+          attempt++
+          sizeTag.textContent = `重试中 ${attempt}/${MAX_RETRY}…`
+          window.setTimeout(
+            () => {
+              const base = displayUrlOf(img)
+              thumb.src = `${base}${base.includes('?') ? '&' : '?'}retry=${attempt}&t=${Date.now()}`
+            },
+            1200 * attempt,
+          )
+          return
+        }
+        // ② 兜底：经 background 取字节转 blob 显示（同时记录体积与文件头用于诊断）
+        sizeTag.textContent = '兜底加载中…'
+        void recoverThumb(thumb, img.url).then((size) => {
+          if (size === null) markFailed()
+          else restoreSizeTag()
+        })
       })
-      thumb.src = displayUrlOf(img)
+
+      // ③ 错开加载：避免一次性数十张并发请求触发图床限流（每张间隔 80ms，最多错开 2s）
+      const staggerDelay = Math.min(staggerIndex++ * 80, 2000)
+      if (staggerDelay === 0) {
+        thumb.src = displayUrlOf(img)
+      } else {
+        window.setTimeout(() => {
+          thumb.src = displayUrlOf(img)
+        }, staggerDelay)
+      }
 
       const check = document.createElement('div')
       check.className = 'check-mark'

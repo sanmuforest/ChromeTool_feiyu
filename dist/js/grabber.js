@@ -3302,6 +3302,7 @@
         updateStats();
         return;
       }
+      let staggerIndex = 0;
       for (const img of filtered) {
         const card = document.createElement("div");
         card.className = "img-card" + (selected.has(img.url) ? " selected" : "");
@@ -3313,36 +3314,50 @@
         thumb.draggable = false;
         thumb.referrerPolicy = "no-referrer";
         const sizeTag = document.createElement("div");
-        sizeTag.className = "size-tag" + (img.sizeStatus === "ok" ? "" : " unknown");
-        sizeTag.textContent = img.sizeStatus === "ok" ? `${img.width}\xD7${img.height}` : img.sizeStatus === "loading" ? "\u5C3A\u5BF8\u83B7\u53D6\u4E2D\u2026" : "\u5C3A\u5BF8\u672A\u77E5";
-        thumb.addEventListener("error", () => {
-          if (thumb.dataset.recovered !== "1") {
-            thumb.dataset.recovered = "1";
-            sizeTag.textContent = "\u515C\u5E95\u52A0\u8F7D\u4E2D\u2026";
-            void recoverThumb(thumb, img.url).then((size) => {
-              if (size === null) {
-                sizeTag.className = "size-tag unknown";
-                sizeTag.textContent = "\u52A0\u8F7D\u5931\u8D25";
-                thumbFailCount++;
-                if (thumbFailCount <= MAX_THUMB_FAIL_LOGS) {
-                  logger3.warn("view", "\u56FE\u7247\u52A0\u8F7D\u5931\u8D25\uFF08\u542B\u515C\u5E95\uFF0C\u53EF\u80FD\u9632\u76D7\u94FE\u6216\u94FE\u63A5\u5931\u6548\uFF09", {
-                    url: img.url,
-                    failedTotal: thumbFailCount
-                  });
-                } else if (thumbFailCount === MAX_THUMB_FAIL_LOGS + 1) {
-                  logger3.warn("view", "\u56FE\u7247\u52A0\u8F7D\u5931\u8D25\u8FC7\u591A\uFF0C\u540E\u7EED\u4E0D\u518D\u9010\u6761\u8BB0\u5F55", { failedTotal: thumbFailCount });
-                }
-                return;
-              }
-              sizeTag.className = "size-tag" + (img.sizeStatus === "ok" ? "" : " unknown");
-              sizeTag.textContent = img.sizeStatus === "ok" ? `${img.width}\xD7${img.height}` : "\u5C3A\u5BF8\u672A\u77E5";
-            });
-            return;
-          }
+        const restoreSizeTag = () => {
+          sizeTag.className = "size-tag" + (img.sizeStatus === "ok" ? "" : " unknown");
+          sizeTag.textContent = img.sizeStatus === "ok" ? `${img.width}\xD7${img.height}` : img.sizeStatus === "loading" ? "\u5C3A\u5BF8\u83B7\u53D6\u4E2D\u2026" : "\u5C3A\u5BF8\u672A\u77E5";
+        };
+        restoreSizeTag();
+        let attempt = 0;
+        const MAX_RETRY = 2;
+        const markFailed = () => {
           sizeTag.className = "size-tag unknown";
           sizeTag.textContent = "\u52A0\u8F7D\u5931\u8D25";
+          thumbFailCount++;
+          if (thumbFailCount <= MAX_THUMB_FAIL_LOGS) {
+            logger3.warn("view", "\u56FE\u7247\u52A0\u8F7D\u5931\u8D25\uFF08\u91CD\u8BD5\u4E0E\u515C\u5E95\u5747\u5931\u8D25\uFF09", { url: img.url, failedTotal: thumbFailCount });
+          } else if (thumbFailCount === MAX_THUMB_FAIL_LOGS + 1) {
+            logger3.warn("view", "\u56FE\u7247\u52A0\u8F7D\u5931\u8D25\u8FC7\u591A\uFF0C\u540E\u7EED\u4E0D\u518D\u9010\u6761\u8BB0\u5F55", { failedTotal: thumbFailCount });
+          }
+        };
+        thumb.addEventListener("error", () => {
+          if (attempt < MAX_RETRY) {
+            attempt++;
+            sizeTag.textContent = `\u91CD\u8BD5\u4E2D ${attempt}/${MAX_RETRY}\u2026`;
+            window.setTimeout(
+              () => {
+                const base = displayUrlOf(img);
+                thumb.src = `${base}${base.includes("?") ? "&" : "?"}retry=${attempt}&t=${Date.now()}`;
+              },
+              1200 * attempt
+            );
+            return;
+          }
+          sizeTag.textContent = "\u515C\u5E95\u52A0\u8F7D\u4E2D\u2026";
+          void recoverThumb(thumb, img.url).then((size) => {
+            if (size === null) markFailed();
+            else restoreSizeTag();
+          });
         });
-        thumb.src = displayUrlOf(img);
+        const staggerDelay = Math.min(staggerIndex++ * 80, 2e3);
+        if (staggerDelay === 0) {
+          thumb.src = displayUrlOf(img);
+        } else {
+          window.setTimeout(() => {
+            thumb.src = displayUrlOf(img);
+          }, staggerDelay);
+        }
         const check = document.createElement("div");
         check.className = "check-mark";
         check.textContent = "\u2713";
@@ -6685,7 +6700,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261010001736" : "dev";
+  var BUILD_TIME = true ? "20261010002037" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
