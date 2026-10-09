@@ -12,6 +12,9 @@ import type { DownloadItem, DownloadJob, GrabbedImage } from '../lib/types'
 
 const logger = initLogger('grabber')
 
+/** 缩略图加载失败日志上限（避免整册失败时刷屏；角标仍会逐张标注） */
+const MAX_THUMB_FAIL_LOGS = 5
+
 export interface GrabViewOptions {
   srcTabId: number
   /** 下载文件夹名（每次下载时调用） */
@@ -52,6 +55,8 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
 
   // ---------- 状态 ----------
   let images: GrabbedImage[] = []
+  /** 缩略图加载失败计数（仅用于日志限流） */
+  let thumbFailCount = 0
   let selected = new Set<string>()
   let filterSize: { w: number; h: number } | null = null
   let job: DownloadJob | null = null
@@ -311,12 +316,29 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       thumb.loading = 'lazy'
       thumb.decoding = 'async'
       thumb.draggable = false
-      thumb.src = displayUrlOf(img)
+      // 2026-10-08 修复：扩展页 Referer 为 chrome-extension://，部分站点据此判为盗链导致成片破图 → 不发送 Referer
+      thumb.referrerPolicy = 'no-referrer'
 
       const sizeTag = document.createElement('div')
       sizeTag.className = 'size-tag' + (img.sizeStatus === 'ok' ? '' : ' unknown')
       sizeTag.textContent =
         img.sizeStatus === 'ok' ? `${img.width}×${img.height}` : img.sizeStatus === 'loading' ? '尺寸获取中…' : '尺寸未知'
+
+      // 加载失败：角标明确提示 + 限流记录日志（含 URL，便于定位防盗链或链接失效）
+      thumb.addEventListener('error', () => {
+        sizeTag.className = 'size-tag unknown'
+        sizeTag.textContent = '加载失败'
+        thumbFailCount++
+        if (thumbFailCount <= MAX_THUMB_FAIL_LOGS) {
+          logger.warn('view', '图片加载失败（可能防盗链或链接失效）', {
+            url: thumb.src,
+            failedTotal: thumbFailCount,
+          })
+        } else if (thumbFailCount === MAX_THUMB_FAIL_LOGS + 1) {
+          logger.warn('view', '图片加载失败过多，后续不再逐条记录', { failedTotal: thumbFailCount })
+        }
+      })
+      thumb.src = displayUrlOf(img)
 
       const check = document.createElement('div')
       check.className = 'check-mark'
@@ -349,6 +371,8 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     if (!layer || !previewImg || !previewSize) return
     previewScale = 1
     previewImg.style.transform = ''
+    // 同网格：预览也不发送扩展页 Referer（避免防盗链站点拒绝）
+    previewImg.referrerPolicy = 'no-referrer'
     previewImg.src = downloadUrlOf(img)
     previewSize.textContent =
       (img.sizeStatus === 'ok' ? `${img.width}×${img.height}` : '尺寸未知') + ' · 滚轮缩放 · 点击关闭'

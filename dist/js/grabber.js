@@ -3059,10 +3059,12 @@
 
   // src/grabber/image-grab-view.ts
   var logger3 = initLogger("grabber");
+  var MAX_THUMB_FAIL_LOGS = 5;
   function createGrabView(root, options) {
     const showReparse = options.showReparse ?? true;
     const showLoadMore = options.showLoadMore ?? true;
     let images = [];
+    let thumbFailCount = 0;
     let selected = /* @__PURE__ */ new Set();
     let filterSize = null;
     let job = null;
@@ -3289,10 +3291,24 @@
         thumb.loading = "lazy";
         thumb.decoding = "async";
         thumb.draggable = false;
-        thumb.src = displayUrlOf(img);
+        thumb.referrerPolicy = "no-referrer";
         const sizeTag = document.createElement("div");
         sizeTag.className = "size-tag" + (img.sizeStatus === "ok" ? "" : " unknown");
         sizeTag.textContent = img.sizeStatus === "ok" ? `${img.width}\xD7${img.height}` : img.sizeStatus === "loading" ? "\u5C3A\u5BF8\u83B7\u53D6\u4E2D\u2026" : "\u5C3A\u5BF8\u672A\u77E5";
+        thumb.addEventListener("error", () => {
+          sizeTag.className = "size-tag unknown";
+          sizeTag.textContent = "\u52A0\u8F7D\u5931\u8D25";
+          thumbFailCount++;
+          if (thumbFailCount <= MAX_THUMB_FAIL_LOGS) {
+            logger3.warn("view", "\u56FE\u7247\u52A0\u8F7D\u5931\u8D25\uFF08\u53EF\u80FD\u9632\u76D7\u94FE\u6216\u94FE\u63A5\u5931\u6548\uFF09", {
+              url: thumb.src,
+              failedTotal: thumbFailCount
+            });
+          } else if (thumbFailCount === MAX_THUMB_FAIL_LOGS + 1) {
+            logger3.warn("view", "\u56FE\u7247\u52A0\u8F7D\u5931\u8D25\u8FC7\u591A\uFF0C\u540E\u7EED\u4E0D\u518D\u9010\u6761\u8BB0\u5F55", { failedTotal: thumbFailCount });
+          }
+        });
+        thumb.src = displayUrlOf(img);
         const check = document.createElement("div");
         check.className = "check-mark";
         check.textContent = "\u2713";
@@ -3319,6 +3335,7 @@
       if (!layer || !previewImg || !previewSize) return;
       previewScale = 1;
       previewImg.style.transform = "";
+      previewImg.referrerPolicy = "no-referrer";
       previewImg.src = downloadUrlOf(img);
       previewSize.textContent = (img.sizeStatus === "ok" ? `${img.width}\xD7${img.height}` : "\u5C3A\u5BF8\u672A\u77E5") + " \xB7 \u6EDA\u8F6E\u7F29\u653E \xB7 \u70B9\u51FB\u5173\u95ED";
       layer.classList.remove("hidden");
@@ -6634,7 +6651,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261008230820" : "dev";
+  var BUILD_TIME = true ? "20261010001314" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
