@@ -2193,6 +2193,25 @@
     linkParser: "generic-post-links"
   };
 
+  // src/sites/defs/knitbid.ts
+  var knitbid = {
+    id: "knitbid",
+    label: "Knit.bid",
+    uiOrder: 100,
+    // 未探测到可用的站内搜索接口 → 归入 Google 通道组
+    channels: ["google"],
+    defaultChecked: false,
+    folderTag: "buondua",
+    endpoints: [{ host: "knit.bid", role: "primary" }],
+    container: { tag: "div", className: "image-container" },
+    pagination: { kind: "page-path-slash" },
+    baseUrl: { stripPagePath: "page-segment" },
+    // maxPagePattern 缺省：页面无 Page X/Y 标记（由 followPagesUntilEmpty 兜底）
+    titleStrip: [{ source: "\\s*-\\s*\u59B9\u3092\u611B\u3059\u308B\\s*$" }],
+    followPagesUntilEmpty: true,
+    linkParser: "generic-post-links"
+  };
+
   // src/sites/defs/index.ts
   var SITE_DEFS = [
     buondua,
@@ -2203,7 +2222,8 @@
     pixibb,
     cangcuc,
     phimvuspot,
-    ilovexs
+    ilovexs,
+    knitbid
   ];
 
   // src/sites/engine.ts
@@ -2234,6 +2254,8 @@
         return page <= 1 ? base : `${base}/${page}`;
       case "path-slash-from-2":
         return page <= 1 ? base : `${base.replace(/\/?$/, "/")}${page}/`;
+      case "page-path-slash":
+        return page <= 1 ? base : `${base.replace(/\/?$/, "/")}page/${page}/`;
       case "single":
         return base;
       default:
@@ -2247,7 +2269,14 @@
       u.hash = "";
       const strip = def.baseUrl?.stripPagePath ?? "none";
       if (strip === "none") return u.href;
-      const path = strip === "suffix" ? u.pathname.replace(/\/\d+$/, "") : u.pathname.replace(/\/\d+\/$/, "").replace(/\/\d+$/, "");
+      let path;
+      if (strip === "suffix") {
+        path = u.pathname.replace(/\/\d+$/, "");
+      } else if (strip === "page-segment") {
+        path = u.pathname.replace(/\/page\/\d+\/?$/, "/");
+      } else {
+        path = u.pathname.replace(/\/\d+\/$/, "").replace(/\/\d+$/, "");
+      }
       return `${u.origin}${path}`;
     } catch {
       return url;
@@ -2365,13 +2394,25 @@
     return html.slice(i);
   }
   var IMG_EXT = /\.(jpe?g|png|webp|gif|bmp)(\?|$)/i;
-  function parseGalleryImages(html, _baseUrl, site) {
+  function parseGalleryImages(html, baseUrl, site) {
     const block = extractContainerBlock(html, site.containerOpen);
     if (!block) return [];
     const seen = /* @__PURE__ */ new Set();
     const urls = [];
-    const collect = (u) => {
-      if (!u || !/^https?:\/\//i.test(u)) return;
+    const toAbsolute = (raw) => {
+      if (!raw) return null;
+      if (/^https?:\/\//i.test(raw)) return raw;
+      if (/^\/\//.test(raw)) return `https:${raw}`;
+      if (/^(data|blob|javascript):/i.test(raw)) return null;
+      try {
+        return new URL(raw, baseUrl).href;
+      } catch {
+        return null;
+      }
+    };
+    const collect = (raw) => {
+      const u = toAbsolute(raw);
+      if (!u) return;
       if (/\.(js|css|svg|ico)(\?|$)/i.test(u)) return;
       let host = "";
       try {
@@ -2390,10 +2431,10 @@
       seen.add(u);
       urls.push(u);
     };
-    const re = /href="(https?:\/\/[^"]+)"|src="(https?:\/\/[^"]+)"/g;
+    const re = /(?:href|src)="([^"]+)"/g;
     let m;
     while ((m = re.exec(block)) !== null) {
-      collect(m[1] || m[2]);
+      collect(m[1]);
     }
     const clean = site.imageUrlClean;
     return urls.map((url) => {
@@ -2427,6 +2468,11 @@
     const re3 = /<a[^>]*href="([^"]*)"[^>]*class="[^"]*page-numbers[^"]*"[^>]*>/g;
     while ((mm = re3.exec(html)) !== null) {
       const n = Number(mm[1].match(/(\d+)\/?$/)?.[1] || 0);
+      if (n > 0) max = Math.max(max, n);
+    }
+    const re4 = /\/page\/(\d+)\/?/g;
+    while ((mm = re4.exec(html)) !== null) {
+      const n = Number(mm[1]) || 0;
       if (n > 0) max = Math.max(max, n);
     }
     return max;
@@ -2762,6 +2808,7 @@
   var FETCH_TIMEOUT_MS4 = 4e4;
   var FETCH_ATTEMPTS = 2;
   var CONCURRENCY2 = 3;
+  var FOLLOW_PAGES_CAP = 40;
   var KEY_GOOGLE_COOLDOWN = "google_cooldown_until";
   var GOOGLE_TAB_INTERVAL_MS = 4e3;
   var GOOGLE_MAX_REQUESTS_PER_RUN = 8;
@@ -2999,7 +3046,15 @@
       const base = site.baseUrlOf(url);
       const firstHtml = await getHtml(base);
       const title = parseGalleryPageTitle(firstHtml, site);
-      const maxPage = parseGalleryMaxPage(firstHtml, site);
+      const detectedMax = parseGalleryMaxPage(firstHtml, site);
+      const maxPage = site.def.followPagesUntilEmpty ? Math.max(detectedMax, FOLLOW_PAGES_CAP) : detectedMax;
+      if (site.def.followPagesUntilEmpty) {
+        logger4.info("buondua", "\u542F\u7528\u987A\u5E8F\u7FFB\u9875\uFF08\u5206\u9875\u603B\u6570\u4E0D\u53EF\u6D4B\uFF09", {
+          site: site.id,
+          detected: detectedMax,
+          cap: FOLLOW_PAGES_CAP
+        });
+      }
       const all = [];
       for (let p = 1; p <= maxPage; p++) {
         all.push(site.pageUrl(base, p));

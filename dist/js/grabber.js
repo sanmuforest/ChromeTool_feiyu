@@ -5345,6 +5345,25 @@
     linkParser: "generic-post-links"
   };
 
+  // src/sites/defs/knitbid.ts
+  var knitbid = {
+    id: "knitbid",
+    label: "Knit.bid",
+    uiOrder: 100,
+    // 未探测到可用的站内搜索接口 → 归入 Google 通道组
+    channels: ["google"],
+    defaultChecked: false,
+    folderTag: "buondua",
+    endpoints: [{ host: "knit.bid", role: "primary" }],
+    container: { tag: "div", className: "image-container" },
+    pagination: { kind: "page-path-slash" },
+    baseUrl: { stripPagePath: "page-segment" },
+    // maxPagePattern 缺省：页面无 Page X/Y 标记（由 followPagesUntilEmpty 兜底）
+    titleStrip: [{ source: "\\s*-\\s*\u59B9\u3092\u611B\u3059\u308B\\s*$" }],
+    followPagesUntilEmpty: true,
+    linkParser: "generic-post-links"
+  };
+
   // src/sites/defs/index.ts
   var SITE_DEFS = [
     buondua,
@@ -5355,7 +5374,8 @@
     pixibb,
     cangcuc,
     phimvuspot,
-    ilovexs
+    ilovexs,
+    knitbid
   ];
 
   // src/sites/engine.ts
@@ -5386,6 +5406,8 @@
         return page <= 1 ? base : `${base}/${page}`;
       case "path-slash-from-2":
         return page <= 1 ? base : `${base.replace(/\/?$/, "/")}${page}/`;
+      case "page-path-slash":
+        return page <= 1 ? base : `${base.replace(/\/?$/, "/")}page/${page}/`;
       case "single":
         return base;
       default:
@@ -5399,7 +5421,14 @@
       u.hash = "";
       const strip = def.baseUrl?.stripPagePath ?? "none";
       if (strip === "none") return u.href;
-      const path = strip === "suffix" ? u.pathname.replace(/\/\d+$/, "") : u.pathname.replace(/\/\d+\/$/, "").replace(/\/\d+$/, "");
+      let path;
+      if (strip === "suffix") {
+        path = u.pathname.replace(/\/\d+$/, "");
+      } else if (strip === "page-segment") {
+        path = u.pathname.replace(/\/page\/\d+\/?$/, "/");
+      } else {
+        path = u.pathname.replace(/\/\d+\/$/, "").replace(/\/\d+$/, "");
+      }
       return `${u.origin}${path}`;
     } catch {
       return url;
@@ -6112,7 +6141,7 @@ og:image: ${p.ogImage || "\u65E0"}
       const googleTestBtn = panel.querySelector("#bd-google-test");
       const googleStatus = panel.querySelector("#bd-google-status");
       const btnNext = panel.querySelector(".bd-next-batch");
-      const googleGroupIds = ["hitxhot", "kaizty", "phimvuspot", "ilovexs", "pixibb", "jrants"];
+      const googleGroupIds = ["hitxhot", "kaizty", "phimvuspot", "ilovexs", "pixibb", "jrants", "knitbid"];
       const defaultChecked = /* @__PURE__ */ new Set(["buondua"]);
       const googleChannel = new Set(googleGroupIds);
       const googleAllCheck = panel.querySelector("#bd-google-all");
@@ -6766,7 +6795,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261010231343" : "dev";
+  var BUILD_TIME = true ? "20261010232017" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

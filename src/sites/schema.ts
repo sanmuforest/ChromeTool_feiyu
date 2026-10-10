@@ -30,6 +30,8 @@ export type PaginationKind =
   | 'path-from-2'
   /** 第 1 页用基址，其后 /N/（pixibb） */
   | 'path-slash-from-2'
+  /** 第 1 页用基址，其后 /page/N/（WP 标准分页；knit.bid） */
+  | 'page-path-slash'
   /** 不分页（cangcuc / ilovexs） */
   | 'single'
 
@@ -41,7 +43,9 @@ export interface SitePagination {
 
 /** 相册基址提取规则（统一去 query/hash；stripPagePath 处理路径式分页） */
 export interface SiteBaseUrl {
-  stripPagePath?: 'none' | 'suffix' | 'trailing-slash'
+  /** none：仅去 query/hash；suffix：去尾部 /N；trailing-slash：去尾部 /N 或 /N/；
+   *  page-segment（2026-10-10）：去尾部 /page/N 或 /page/N/（WP 标准分页） */
+  stripPagePath?: 'none' | 'suffix' | 'trailing-slash' | 'page-segment'
 }
 
 /** 搜索通道声明 */
@@ -106,6 +110,9 @@ export interface SiteDef {
   container: { tag: string; className: string }
   pagination: SitePagination
   baseUrl?: SiteBaseUrl
+  /** 顺序翻页直到连续空页（2026-10-10）：页面无 Page X/Y 标记、且分页导航推不出总页数时使用
+   *  （如 knit.bid 的分页链接不在 <a> 中）→ 抓取流程按上限顺序翻页，靠「连续 3 页无图」停止 */
+  followPagesUntilEmpty?: boolean
   /** 标题分页标记：捕获组 2 = 总页数；缺省 = 无标题标记（仅分页链接兜底） */
   maxPagePattern?: RegexSpec
   /** 标题清理：按序 replace（正则源），最后统一 trim */

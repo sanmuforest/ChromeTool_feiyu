@@ -45,6 +45,9 @@ function buildPageUrl(def: SiteDef, base: string, page: number): string {
       return page <= 1 ? base : `${base}/${page}`
     case 'path-slash-from-2':
       return page <= 1 ? base : `${base.replace(/\/?$/, '/')}${page}/`
+    case 'page-path-slash':
+      // WP 标准分页：/page/N/（第 1 页不带 page 段）
+      return page <= 1 ? base : `${base.replace(/\/?$/, '/')}page/${page}/`
     case 'single':
       return base
     default:
@@ -60,10 +63,15 @@ function buildBaseUrl(def: SiteDef, url: string): string {
     u.hash = ''
     const strip = def.baseUrl?.stripPagePath ?? 'none'
     if (strip === 'none') return u.href
-    const path =
-      strip === 'suffix'
-        ? u.pathname.replace(/\/\d+$/, '')
-        : u.pathname.replace(/\/\d+\/$/, '').replace(/\/\d+$/, '')
+    let path: string
+    if (strip === 'suffix') {
+      path = u.pathname.replace(/\/\d+$/, '')
+    } else if (strip === 'page-segment') {
+      // WP 标准分页：/page/N/ 或 /page/N → 去掉该段并保留结尾斜杠
+      path = u.pathname.replace(/\/page\/\d+\/?$/, '/')
+    } else {
+      path = u.pathname.replace(/\/\d+\/$/, '').replace(/\/\d+$/, '')
+    }
     return `${u.origin}${path}`
   } catch {
     return url
@@ -215,13 +223,26 @@ function extractContainerBlock(html: string, openTag: RegExp): string {
 const IMG_EXT = /\.(jpe?g|png|webp|gif|bmp)(\?|$)/i
 
 /** 从正文容器解析图片：收集块内所有图片 URL（a href / img src），去重 */
-export function parseGalleryImages(html: string, _baseUrl: string, site: GallerySiteConfig): BuonduaImage[] {
+export function parseGalleryImages(html: string, baseUrl: string, site: GallerySiteConfig): BuonduaImage[] {
   const block = extractContainerBlock(html, site.containerOpen)
   if (!block) return []
   const seen = new Set<string>()
   const urls: string[] = []
-  const collect = (u: string): void => {
-    if (!u || !/^https?:\/\//i.test(u)) return
+  /** 相对路径 → 绝对 URL（2026-10-10：knit.bid 等站正文图片为 root-relative，如 /static/images/…） */
+  const toAbsolute = (raw: string): string | null => {
+    if (!raw) return null
+    if (/^https?:\/\//i.test(raw)) return raw
+    if (/^\/\//.test(raw)) return `https:${raw}` // 协议相对
+    if (/^(data|blob|javascript):/i.test(raw)) return null
+    try {
+      return new URL(raw, baseUrl).href
+    } catch {
+      return null
+    }
+  }
+  const collect = (raw: string): void => {
+    const u = toAbsolute(raw)
+    if (!u) return
     if (/\.(js|css|svg|ico)(\?|$)/i.test(u)) return
     // 图片判定：扩展名优先；非图片扩展名时按 hostname 白名单（各站 imageHosts 并集），
     // 避免 addtoany 分享链接内嵌目标 URL 被字符串误匹配
@@ -244,10 +265,11 @@ export function parseGalleryImages(html: string, _baseUrl: string, site: Gallery
     seen.add(u)
     urls.push(u)
   }
-  const re = /href="(https?:\/\/[^"]+)"|src="(https?:\/\/[^"]+)"/g
+  // 同时匹配绝对与相对 URL（相对路径在 collect 内用页面基址解析为绝对 URL）
+  const re = /(?:href|src)="([^"]+)"/g
   let m: RegExpExecArray | null
   while ((m = re.exec(block)) !== null) {
-    collect(m[1] || m[2])
+    collect(m[1])
   }
   // 站点图片 URL 清洗（CDN 缩放参数放大等）
   const clean = site.imageUrlClean
@@ -288,6 +310,12 @@ export function parseGalleryMaxPage(html: string, site: GallerySiteConfig): numb
   const re3 = /<a[^>]*href="([^"]*)"[^>]*class="[^"]*page-numbers[^"]*"[^>]*>/g
   while ((mm = re3.exec(html)) !== null) {
     const n = Number(mm[1].match(/(\d+)\/?$/)?.[1] || 0)
+    if (n > 0) max = Math.max(max, n)
+  }
+  // 兜底4（2026-10-10）：任意位置的 /page/N/ 引用（分页链接可能不在 <a> 标签内，如 knit.bid）
+  const re4 = /\/page\/(\d+)\/?/g
+  while ((mm = re4.exec(html)) !== null) {
+    const n = Number(mm[1]) || 0
     if (n > 0) max = Math.max(max, n)
   }
   return max

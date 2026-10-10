@@ -28,6 +28,8 @@ const logger = initLogger('background')
 const FETCH_TIMEOUT_MS = 40000 // 部分站点对无 Cookie 请求响应慢（hitxhot 实测 >20s）
 const FETCH_ATTEMPTS = 2
 const CONCURRENCY = 3 // 批量抓取并发（用户确认）
+/** 顺序翻页上限（站点定义 followPagesUntilEmpty 时生效；靠流程内「连续 3 页无图」提前停止） */
+const FOLLOW_PAGES_CAP = 40
 
 // ---- Google 通道限频（FP-024）：密集/高频请求会触发 Google 反爬，必须极力避免 ----
 const KEY_GOOGLE_COOLDOWN = 'google_cooldown_until'
@@ -319,7 +321,17 @@ export class BuonduaService {
     const firstHtml = await getHtml(base)
     const title = parseGalleryPageTitle(firstHtml, site)
     // 大相册分页导航只显示部分页码：按标题 Page 标记的最大页数完整遍历
-    const maxPage = parseGalleryMaxPage(firstHtml, site)
+    const detectedMax = parseGalleryMaxPage(firstHtml, site)
+    // 2026-10-10：分页总数不可测的站点（分页链接不在 <a> 中，如 knit.bid）→ 顺序翻页，
+    // 由下方「连续 3 页无图」提前停止；上限 FOLLOW_PAGES_CAP 防止无意义翻页
+    const maxPage = site.def.followPagesUntilEmpty ? Math.max(detectedMax, FOLLOW_PAGES_CAP) : detectedMax
+    if (site.def.followPagesUntilEmpty) {
+      logger.info('buondua', '启用顺序翻页（分页总数不可测）', {
+        site: site.id,
+        detected: detectedMax,
+        cap: FOLLOW_PAGES_CAP,
+      })
+    }
     const all: string[] = []
     for (let p = 1; p <= maxPage; p++) {
       all.push(site.pageUrl(base, p))

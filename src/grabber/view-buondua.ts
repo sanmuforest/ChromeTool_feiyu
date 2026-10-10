@@ -620,7 +620,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     // 站点勾选：分类存放（FP-013 调整）——站内搜索类（直接站内接口）/ Google 通道类（Google 优先，失败降级站内）
     // 2026-10-07 调整：jrants 站内搜索被反爬（403）→ 移入 Google 组并取消默认勾选；
     // rrwsh（域名已被他人站占用）、cangcuc（域名已失效）取消默认勾选，仍可在列表中手动勾选
-    const googleGroupIds = ['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs', 'pixibb', 'jrants']
+    const googleGroupIds = ['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs', 'pixibb', 'jrants', 'knitbid']
     const defaultChecked = new Set(['buondua'])
     const googleChannel = new Set(googleGroupIds)
     const googleAllCheck = panel.querySelector('#bd-google-all') as HTMLInputElement
