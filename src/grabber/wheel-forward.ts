@@ -28,7 +28,23 @@ function scrollableAncestor(target: EventTarget | null): HTMLElement | null {
 
 let cachedScroller: HTMLElement | null = null
 let cachedAt = 0
-const CACHE_MS = 300
+/** 缓存时长（2026-10-10 性能修复：原先 300ms 会让滚动期间反复全量重查 → 滚轮卡顿） */
+const CACHE_MS = 1500
+
+/** 滚动容器候选（2026-10-10 性能修复）：
+ *  原先用 querySelectorAll('*') 遍历面板内全部元素并逐元素 getComputedStyle，
+ *  图片网格有上千元素时每次重查都触发大量样式计算 → 滚轮严重卡顿。
+ *  改为只查已知布局容器（网格 / 列表 / 面板），候选数从上千降到个位数。 */
+const SCROLLER_CANDIDATES = [
+  '.grid',
+  '.img-grid',
+  '.bd-link-list',
+  '.bd-batch-results',
+  '.bd-batch-card',
+  '.log-list',
+  '.adapter-panel',
+  '.preview-card',
+].join(', ')
 
 /** 当前激活页签内可滚动余量最大的可见容器（300ms 缓存，避免高频遍历 DOM） */
 function primaryScroller(): HTMLElement | null {
@@ -44,10 +60,9 @@ function primaryScroller(): HTMLElement | null {
   }
   let best: HTMLElement | null = null
   let bestRange = 0
-  panel.querySelectorAll<HTMLElement>('*').forEach((el) => {
+  // 只遍历候选布局容器（见 SCROLLER_CANDIDATES 注释），避免全树 getComputedStyle
+  panel.querySelectorAll<HTMLElement>(SCROLLER_CANDIDATES).forEach((el) => {
     if (!isScrollable(el)) return
-    const rect = el.getBoundingClientRect()
-    if (rect.width < 60 || rect.height < 60) return // 忽略不可见 / 极小容器
     const range = el.scrollHeight - el.clientHeight
     if (range > bestRange) {
       bestRange = range

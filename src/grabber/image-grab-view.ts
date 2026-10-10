@@ -307,6 +307,44 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
   }
 
   // ---------- 渲染 ----------
+  /** 缩略图按需加载（2026-10-10 性能修复）：
+   *  此前按渲染顺序无条件 setTimeout 设 src，数百张图会一起进入加载队列（loading="lazy" 形同失效），
+   *  造成内存/解码压力与整页卡顿。改为 IntersectionObserver：接近视口才加载，同批小步错峰。 */
+  let thumbObserver: IntersectionObserver | null = null
+  function ensureThumbObserver(): IntersectionObserver {
+    if (thumbObserver) return thumbObserver
+    thumbObserver = new IntersectionObserver(
+      (entries) => {
+        let batchIndex = 0
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue
+          const el = entry.target as HTMLImageElement
+          thumbObserver?.unobserve(el)
+          const delay = Math.min(batchIndex++ * 80, 1600)
+          window.setTimeout(() => {
+            const pending = el.dataset.pendingSrc
+            if (pending) el.src = pending
+          }, delay)
+        }
+      },
+      { rootMargin: '300px' },
+    )
+    return thumbObserver
+  }
+
+  /** 尺寸补齐后的批量刷新（去抖 400ms）：
+   *  此前每张图加载完都调用 updateStats()，而 buildSizeGroups 含 O(n²) 计算，数百张图会明显卡顿；
+   *  同时补尺寸后需要重建尺寸筛选按钮（否则多页站的筛选按钮一直不出现）。 */
+  let backfillTimer: number | null = null
+  function scheduleBackfillRefresh(): void {
+    if (backfillTimer !== null) return
+    backfillTimer = window.setTimeout(() => {
+      backfillTimer = null
+      renderSizeFilter()
+      updateStats()
+    }, 400)
+  }
+
   function updateStats(): void {
     const { kept, removed } = applyDedupe(images)
     const filtered = applyFilter(kept)
@@ -319,6 +357,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
 
   function renderGrid(): void {
     const filtered = visibleImages()
+    thumbObserver?.disconnect() // 重建前解除旧观察（避免观察器持有已被移除的节点）
     grid.innerHTML = ''
     if (filtered.length === 0) {
       const { kept } = applyDedupe(images)
@@ -332,7 +371,6 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       updateStats()
       return
     }
-    let staggerIndex = 0
     for (const img of filtered) {
       const card = document.createElement('div')
       card.className = 'img-card' + (selected.has(img.url) ? ' selected' : '')
@@ -391,13 +429,16 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       // 2) 尺寸补齐：多页图站的图片由后台解析（只给 URL，无宽高），原本恒显示「尺寸未知」；
       //    图片加载后可直接读取真实像素尺寸，零额外请求即可显示尺寸并修正统计
       thumb.addEventListener('load', () => {
+        let backfilled = false
         if ((!img.width || !img.height) && thumb.naturalWidth > 0 && thumb.naturalHeight > 0) {
           img.width = thumb.naturalWidth
           img.height = thumb.naturalHeight
           img.sizeStatus = 'ok'
-          updateStats()
+          backfilled = true
         }
         restoreSizeTag()
+        // 去抖批量刷新：重建尺寸筛选按钮 + 更新统计（避免每张图触发一次全量计算）
+        if (backfilled) scheduleBackfillRefresh()
       })
       thumb.addEventListener('error', () => {
         // ① 延迟重试：限流多为暂时性，错峰后重试常可成功
@@ -420,15 +461,9 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
         })
       })
 
-      // ③ 错开加载：避免一次性数十张并发请求触发图床限流（每张间隔 80ms，最多错开 2s）
-      const staggerDelay = Math.min(staggerIndex++ * 80, 2000)
-      if (staggerDelay === 0) {
-        thumb.src = loadSrc(false)
-      } else {
-        window.setTimeout(() => {
-          thumb.src = loadSrc(false)
-        }, staggerDelay)
-      }
+      // ③ 按需加载：交给 IntersectionObserver —— 接近视口才加载，同批小步错峰（避免触发图床并发限流）
+      thumb.dataset.pendingSrc = loadSrc(false)
+      ensureThumbObserver().observe(thumb)
 
       const check = document.createElement('div')
       check.className = 'check-mark'

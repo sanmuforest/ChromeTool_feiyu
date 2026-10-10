@@ -3278,6 +3278,36 @@
         sizeBtns.appendChild(btn);
       }
     }
+    let thumbObserver = null;
+    function ensureThumbObserver() {
+      if (thumbObserver) return thumbObserver;
+      thumbObserver = new IntersectionObserver(
+        (entries) => {
+          let batchIndex = 0;
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            const el = entry.target;
+            thumbObserver?.unobserve(el);
+            const delay = Math.min(batchIndex++ * 80, 1600);
+            window.setTimeout(() => {
+              const pending = el.dataset.pendingSrc;
+              if (pending) el.src = pending;
+            }, delay);
+          }
+        },
+        { rootMargin: "300px" }
+      );
+      return thumbObserver;
+    }
+    let backfillTimer = null;
+    function scheduleBackfillRefresh() {
+      if (backfillTimer !== null) return;
+      backfillTimer = window.setTimeout(() => {
+        backfillTimer = null;
+        renderSizeFilter();
+        updateStats();
+      }, 400);
+    }
     function updateStats() {
       const { kept, removed } = applyDedupe(images);
       const filtered = applyFilter(kept);
@@ -3289,6 +3319,7 @@
     }
     function renderGrid() {
       const filtered = visibleImages();
+      thumbObserver?.disconnect();
       grid.innerHTML = "";
       if (filtered.length === 0) {
         const { kept } = applyDedupe(images);
@@ -3302,7 +3333,6 @@
         updateStats();
         return;
       }
-      let staggerIndex = 0;
       for (const img of filtered) {
         const card = document.createElement("div");
         card.className = "img-card" + (selected.has(img.url) ? " selected" : "");
@@ -3347,13 +3377,15 @@
           thumb.src = loadSrc(true);
         });
         thumb.addEventListener("load", () => {
+          let backfilled = false;
           if ((!img.width || !img.height) && thumb.naturalWidth > 0 && thumb.naturalHeight > 0) {
             img.width = thumb.naturalWidth;
             img.height = thumb.naturalHeight;
             img.sizeStatus = "ok";
-            updateStats();
+            backfilled = true;
           }
           restoreSizeTag();
+          if (backfilled) scheduleBackfillRefresh();
         });
         thumb.addEventListener("error", () => {
           if (attempt < MAX_RETRY) {
@@ -3373,14 +3405,8 @@
             else restoreSizeTag();
           });
         });
-        const staggerDelay = Math.min(staggerIndex++ * 80, 2e3);
-        if (staggerDelay === 0) {
-          thumb.src = loadSrc(false);
-        } else {
-          window.setTimeout(() => {
-            thumb.src = loadSrc(false);
-          }, staggerDelay);
-        }
+        thumb.dataset.pendingSrc = loadSrc(false);
+        ensureThumbObserver().observe(thumb);
         const check = document.createElement("div");
         check.className = "check-mark";
         check.textContent = "\u2713";
@@ -6674,7 +6700,17 @@ og:image: ${p.ogImage || "\u65E0"}
   }
   var cachedScroller = null;
   var cachedAt = 0;
-  var CACHE_MS = 300;
+  var CACHE_MS = 1500;
+  var SCROLLER_CANDIDATES = [
+    ".grid",
+    ".img-grid",
+    ".bd-link-list",
+    ".bd-batch-results",
+    ".bd-batch-card",
+    ".log-list",
+    ".adapter-panel",
+    ".preview-card"
+  ].join(", ");
   function primaryScroller() {
     const now = Date.now();
     if (cachedScroller && now - cachedAt < CACHE_MS && cachedScroller.isConnected && isScrollable(cachedScroller)) {
@@ -6688,10 +6724,8 @@ og:image: ${p.ogImage || "\u65E0"}
     }
     let best = null;
     let bestRange = 0;
-    panel.querySelectorAll("*").forEach((el) => {
+    panel.querySelectorAll(SCROLLER_CANDIDATES).forEach((el) => {
       if (!isScrollable(el)) return;
-      const rect = el.getBoundingClientRect();
-      if (rect.width < 60 || rect.height < 60) return;
       const range = el.scrollHeight - el.clientHeight;
       if (range > bestRange) {
         bestRange = range;
@@ -6723,7 +6757,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261010002857" : "dev";
+  var BUILD_TIME = true ? "20261010230924" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;
