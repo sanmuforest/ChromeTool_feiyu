@@ -5363,6 +5363,8 @@
     // maxPagePattern 缺省：页面无 Page X/Y 标记（由 followPagesUntilEmpty 兜底）
     titleStrip: [{ source: "\\s*-\\s*\u59B9\u3092\u611B\u3059\u308B\\s*$" }],
     followPagesUntilEmpty: true,
+    // 顺序翻页请求较多（实测一次抓取即触发站点 429 限流）→ 第 2 页起页间等待 1.2s
+    throttle: { fromPage: 2, delayMs: 1200 },
     // 站内搜索：/ja/search/?s={q}，分页 /ja/search/page/N/?s={q}（实测均 HTTP 200）
     search: { kind: "wp-query-path-page", param: "s", path: "/ja/search/", trailingSlash: true },
     // 结果只保留相册页（/ja/article/{id}/），排除 /ja/type/N/ 等分类页
@@ -6802,7 +6804,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261010232946" : "dev";
+  var BUILD_TIME = true ? "20261010234034" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

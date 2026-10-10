@@ -2211,6 +2211,8 @@
     // maxPagePattern 缺省：页面无 Page X/Y 标记（由 followPagesUntilEmpty 兜底）
     titleStrip: [{ source: "\\s*-\\s*\u59B9\u3092\u611B\u3059\u308B\\s*$" }],
     followPagesUntilEmpty: true,
+    // 顺序翻页请求较多（实测一次抓取即触发站点 429 限流）→ 第 2 页起页间等待 1.2s
+    throttle: { fromPage: 2, delayMs: 1200 },
     // 站内搜索：/ja/search/?s={q}，分页 /ja/search/page/N/?s={q}（实测均 HTTP 200）
     search: { kind: "wp-query-path-page", param: "s", path: "/ja/search/", trailingSlash: true },
     // 结果只保留相册页（/ja/article/{id}/），排除 /ja/type/N/ 等分类页
@@ -3049,6 +3051,10 @@
           signal: controller.signal
         });
         if (!resp.ok) {
+          if (resp.status === 429 || resp.status === 503) {
+            logger4.warn("buondua", `HTTP ${resp.status} \u88AB\u9650\u6D41\uFF0C\u7B49\u5F85 2500ms \u540E\u91CD\u8BD5`, { url });
+            await sleep(2500);
+          }
           throw new Error(`HTTP ${resp.status}\uFF08${url}\uFF09`);
         }
         return await resp.text();
@@ -3088,8 +3094,16 @@
       const imagesMap = /* @__PURE__ */ new Map();
       let scanned = 0;
       let emptyStreak = 0;
-      for (const pageUrl of all) {
-        const html = await getHtml(pageUrl);
+      const pageThrottle = site.def.throttle;
+      for (let pageIndex = 0; pageIndex < all.length; pageIndex++) {
+        const pageUrl = all[pageIndex];
+        let html;
+        if (pageIndex === 0) {
+          html = firstHtml;
+        } else {
+          if (pageThrottle && pageIndex + 1 >= pageThrottle.fromPage) await sleep(pageThrottle.delayMs);
+          html = await getHtml(pageUrl);
+        }
         const imgs = parseGalleryImages(html, pageUrl, site);
         if (imgs.length === 0 && imagesMap.size === 0 && pageUrl === all[0]) {
           logger4.warn("buondua", "\u9996\u9875\u89E3\u6790 0 \u5F20\uFF0C\u8BCA\u65AD\u4FE1\u606F", {
@@ -3312,6 +3326,7 @@
   function humanizeFetchError(raw) {
     if (/Failed to fetch|NetworkError|ERR_/i.test(raw)) return "\u7AD9\u70B9\u4E0D\u53EF\u8FBE\uFF08\u57DF\u540D\u53EF\u80FD\u5DF2\u53D8\u66F4\u6216\u7F51\u7EDC\u53D7\u9650\uFF09";
     if (/HTTP 403/.test(raw)) return "\u88AB\u7AD9\u70B9\u62D2\u7EDD\uFF08\u53CD\u722C\u62E6\u622A\uFF0C\u53EF\u7A0D\u540E\u91CD\u8BD5\uFF09";
+    if (/HTTP 429/.test(raw)) return "\u88AB\u7AD9\u70B9\u9650\u6D41\uFF08429\uFF0C\u8BF7\u6C42\u8FC7\u4E8E\u9891\u7E41\uFF09\uFF1A\u8BF7\u7B49\u5F85\u51E0\u5206\u949F\u540E\u518D\u8BD5";
     if (/HTTP 404/.test(raw)) return "\u9875\u9762\u4E0D\u5B58\u5728\uFF08\u94FE\u63A5\u53EF\u80FD\u5DF2\u5931\u6548\uFF09";
     if (/HTTP 5\d\d/.test(raw)) return "\u7AD9\u70B9\u670D\u52A1\u5668\u9519\u8BEF";
     if (/请求超时|AbortError/i.test(raw)) return "\u8BF7\u6C42\u8D85\u65F6";
@@ -4166,9 +4181,10 @@
             logger5.info("buondua", "\u5168\u5B50\u9875\u6293\u53D6\u5B8C\u6210\uFF08\u9875\u9762\u5185 fetch \u964D\u7EA7\uFF09", { url: message.url, pages: pages.length, count: images.length, title });
             return { ok: true, name: title || void 0 };
           } catch (err2) {
-            logger5.error("buondua", "\u5168\u5B50\u9875\u6293\u53D6\u5931\u8D25\uFF08\u542B\u964D\u7EA7\uFF09", String(err2));
-            await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "album", data: [], done: true, error: String(err2) });
-            return { ok: false, error: String(err2) };
+            const hint = humanizeFetchError(String(err2));
+            logger5.error("buondua", "\u5168\u5B50\u9875\u6293\u53D6\u5931\u8D25\uFF08\u542B\u964D\u7EA7\uFF09", { error: String(err2), hint });
+            await sendToTab(sessionOf(message.srcTabId), { type: "BD_RESULT", kind: "album", data: [], done: true, error: hint });
+            return { ok: false, error: hint };
           }
         }
       }

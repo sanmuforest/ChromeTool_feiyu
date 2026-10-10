@@ -1011,9 +1011,11 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
           logger.info('buondua', '全子页抓取完成（页面内 fetch 降级）', { url: message.url, pages: pages.length, count: images.length, title })
           return { ok: true, name: title || undefined }
         } catch (err2) {
-          logger.error('buondua', '全子页抓取失败（含降级）', String(err2))
-          await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'album', data: [], done: true, error: String(err2) })
-          return { ok: false, error: String(err2) }
+          // 2026-10-10：界面显示可读原因（429 限流 / 403 反爬 / 超时等），日志仍保留原始错误
+          const hint = humanizeFetchError(String(err2))
+          logger.error('buondua', '全子页抓取失败（含降级）', { error: String(err2), hint })
+          await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'album', data: [], done: true, error: hint })
+          return { ok: false, error: hint }
         }
       }
     }

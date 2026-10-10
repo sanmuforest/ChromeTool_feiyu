@@ -293,6 +293,11 @@ export class BuonduaService {
         signal: controller.signal,
       })
       if (!resp.ok) {
+        // 429/503：短时过载或限流 → 退避后再抛，交由上层重试（FETCH_ATTEMPTS）避开限流窗口
+        if (resp.status === 429 || resp.status === 503) {
+          logger.warn('buondua', `HTTP ${resp.status} 被限流，等待 2500ms 后重试`, { url })
+          await sleep(2500)
+        }
         throw new Error(`HTTP ${resp.status}（${url}）`)
       }
       return await resp.text()
@@ -339,8 +344,18 @@ export class BuonduaService {
     const imagesMap = new Map<string, BuonduaImage>()
     let scanned = 0
     let emptyStreak = 0
-    for (const pageUrl of all) {
-      const html = await getHtml(pageUrl)
+    // 页间节流（站点定义 throttle，与站内搜索共用）：顺序翻页的站点请求较多，避免触发站点限流（429）
+    const pageThrottle = site.def.throttle
+    for (let pageIndex = 0; pageIndex < all.length; pageIndex++) {
+      const pageUrl = all[pageIndex]
+      let html: string
+      if (pageIndex === 0) {
+        // 第 1 页内容已在上方抓取（firstHtml）→ 复用，避免重复请求
+        html = firstHtml
+      } else {
+        if (pageThrottle && pageIndex + 1 >= pageThrottle.fromPage) await sleep(pageThrottle.delayMs)
+        html = await getHtml(pageUrl)
+      }
       const imgs = parseGalleryImages(html, pageUrl, site)
       // 诊断（2026-10-08）：首页解析 0 张时记录容器匹配情况，用于区分
       // 「容器 class 已变」（hasContainer=false）与「页面本身没有图片内容」（imgCount 小）
@@ -626,6 +641,7 @@ function enrichSearchItem(siteId: string, site: GallerySiteConfig, item: Buondua
 export function humanizeFetchError(raw: string): string {
   if (/Failed to fetch|NetworkError|ERR_/i.test(raw)) return '站点不可达（域名可能已变更或网络受限）'
   if (/HTTP 403/.test(raw)) return '被站点拒绝（反爬拦截，可稍后重试）'
+  if (/HTTP 429/.test(raw)) return '被站点限流（429，请求过于频繁）：请等待几分钟后再试'
   if (/HTTP 404/.test(raw)) return '页面不存在（链接可能已失效）'
   if (/HTTP 5\d\d/.test(raw)) return '站点服务器错误'
   if (/请求超时|AbortError/i.test(raw)) return '请求超时'
