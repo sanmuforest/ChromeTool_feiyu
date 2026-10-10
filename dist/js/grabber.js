@@ -3063,6 +3063,7 @@
   function createGrabView(root, options) {
     const showReparse = options.showReparse ?? true;
     const showLoadMore = options.showLoadMore ?? true;
+    const reparseLabel = options.reparseLabel ?? "\u91CD\u65B0\u89E3\u6790";
     let images = [];
     let thumbFailCount = 0;
     async function recoverThumb(el, url) {
@@ -3095,7 +3096,7 @@
     <div class="images-view">
       <div class="toolbar">
         <div class="group">
-          ${showReparse ? '<button id="gv-reparse" class="btn">\u91CD\u65B0\u89E3\u6790</button>' : ""}
+          ${showReparse ? `<button id="gv-reparse" class="btn">${reparseLabel}</button>` : ""}
           ${showLoadMore ? '<button id="gv-load-more" class="btn" disabled>\u52A0\u8F7D\u4E0B\u4E00\u6279</button>' : ""}
           <button id="gv-dedupe" class="btn">\u53BB\u91CD</button>
           <button id="gv-small-filter" class="btn">\u5C0F\u56FE\u8FC7\u6EE4</button>
@@ -5801,15 +5802,8 @@ og:image: ${p.ogImage || "\u65E0"}
         probeBtn.textContent = "\u63A2\u6D4B\u7ED3\u6784";
       }
     });
-    const albumGrabView = createGrabView(root.querySelector("#bd-album-grab-view"), {
-      srcTabId: srcTabId2,
-      getFolderName: () => lastAlbumFolder,
-      getAlbumName: () => lastAlbumShort,
-      showReparse: false,
-      showLoadMore: false
-    });
     const albumUrlInput = root.querySelector("#bd-album-url");
-    root.querySelector("#bd-album-fetch")?.addEventListener("click", async () => {
+    async function runAlbumFetch() {
       const url = albumUrlInput.value.trim();
       if (!url) {
         albumGrabView.setParseText("\u8BF7\u586B\u5199\u76F8\u518C URL");
@@ -5835,6 +5829,21 @@ og:image: ${p.ogImage || "\u65E0"}
         albumGrabView.setBusyParsing(false);
         albumGrabView.setParseText(`\u8BF7\u6C42\u5931\u8D25\uFF1A${res.error}`);
       }
+    }
+    const albumGrabView = createGrabView(root.querySelector("#bd-album-grab-view"), {
+      srcTabId: srcTabId2,
+      getFolderName: () => lastAlbumFolder,
+      getAlbumName: () => lastAlbumShort,
+      // 2026-10-10：视图工具栏显示「重新抓取」（与面板上方按钮共用 runAlbumFetch）
+      showReparse: true,
+      reparseLabel: "\u91CD\u65B0\u6293\u53D6",
+      onReparse: () => {
+        void runAlbumFetch();
+      },
+      showLoadMore: false
+    });
+    root.querySelector("#bd-album-fetch")?.addEventListener("click", () => {
+      void runAlbumFetch();
     });
     function setupBatchPanel(panelId, kind) {
       const panel = root.querySelector(`#sub-${panelId}`);
@@ -6757,7 +6766,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261010230924" : "dev";
+  var BUILD_TIME = true ? "20261010231343" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

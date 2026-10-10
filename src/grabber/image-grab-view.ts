@@ -27,6 +27,8 @@ export interface GrabViewOptions {
   /** 控制工具栏是否显示「重新解析」「下一批」（imgbb 场景由专用控制行代替） */
   showReparse?: boolean
   showLoadMore?: boolean
+  /** 「重新解析」按钮文案（多页图站用「重新抓取」更贴切） */
+  reparseLabel?: string
 }
 
 export interface GrabViewHandle {
@@ -52,6 +54,7 @@ interface SizeGroup {
 export function createGrabView(root: HTMLElement, options: GrabViewOptions): GrabViewHandle {
   const showReparse = options.showReparse ?? true
   const showLoadMore = options.showLoadMore ?? true
+  const reparseLabel = options.reparseLabel ?? '重新解析'
 
   // ---------- 状态 ----------
   let images: GrabbedImage[] = []
@@ -95,7 +98,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     <div class="images-view">
       <div class="toolbar">
         <div class="group">
-          ${showReparse ? '<button id="gv-reparse" class="btn">重新解析</button>' : ''}
+          ${showReparse ? `<button id="gv-reparse" class="btn">${reparseLabel}</button>` : ''}
           ${showLoadMore ? '<button id="gv-load-more" class="btn" disabled>加载下一批</button>' : ''}
           <button id="gv-dedupe" class="btn">去重</button>
           <button id="gv-small-filter" class="btn">小图过滤</button>

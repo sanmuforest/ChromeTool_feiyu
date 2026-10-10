@@ -275,16 +275,10 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
   })
 
   // ---------- 抓取（全子页） ----------
-  const albumGrabView = createGrabView(root.querySelector('#bd-album-grab-view') as HTMLElement, {
-    srcTabId,
-    getFolderName: () => lastAlbumFolder,
-    getAlbumName: () => lastAlbumShort,
-    showReparse: false,
-    showLoadMore: false,
-  })
-
   const albumUrlInput = root.querySelector('#bd-album-url') as HTMLInputElement
-  root.querySelector('#bd-album-fetch')?.addEventListener('click', async () => {
+
+  /** 抓取当前输入框的相册（2026-10-10）：面板「抓取全部子页」与视图工具栏「重新抓取」共用同一逻辑 */
+  async function runAlbumFetch(): Promise<void> {
     const url = albumUrlInput.value.trim()
     if (!url) {
       albumGrabView.setParseText('请填写相册 URL')
@@ -311,6 +305,23 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
       albumGrabView.setBusyParsing(false)
       albumGrabView.setParseText(`请求失败：${res.error}`)
     }
+  }
+
+  const albumGrabView = createGrabView(root.querySelector('#bd-album-grab-view') as HTMLElement, {
+    srcTabId,
+    getFolderName: () => lastAlbumFolder,
+    getAlbumName: () => lastAlbumShort,
+    // 2026-10-10：视图工具栏显示「重新抓取」（与面板上方按钮共用 runAlbumFetch）
+    showReparse: true,
+    reparseLabel: '重新抓取',
+    onReparse: () => {
+      void runAlbumFetch()
+    },
+    showLoadMore: false,
+  })
+
+  root.querySelector('#bd-album-fetch')?.addEventListener('click', () => {
+    void runAlbumFetch()
   })
 
   // ---------- 批量抓取面板（推荐 / 其他） ----------
