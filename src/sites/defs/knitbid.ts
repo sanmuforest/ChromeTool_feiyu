@@ -12,16 +12,22 @@ export const knitbid: SiteDef = {
   id: 'knitbid',
   label: 'Knit.bid',
   uiOrder: 100,
-  // 未探测到可用的站内搜索接口 → 归入 Google 通道组
-  channels: ['google'],
+  // 站内搜索（2026-10-10 探测：表单 action=/ja/search/ + input name=s → /ja/search/?s=…；分页 /ja/search/page/N/）
+  channels: ['site'],
   defaultChecked: false,
   folderTag: 'buondua',
-  endpoints: [{ host: 'knit.bid', role: 'primary' }],
+  // 站点实际部署在 xx. 子域（用户给出与实测的 URL 均为 xx.knit.bid）→ primary 用子域，
+  // 裸域作为 mirror 仅在用户直接访问裸域时匹配（搜索 URL 由 primary 生成，必须指向可用的子域）
+  endpoints: [{ host: 'xx.knit.bid', role: 'primary' }, { host: 'knit.bid', role: 'mirror' }],
   container: { tag: 'div', className: 'image-container' },
   pagination: { kind: 'page-path-slash' },
   baseUrl: { stripPagePath: 'page-segment' },
   // maxPagePattern 缺省：页面无 Page X/Y 标记（由 followPagesUntilEmpty 兜底）
   titleStrip: [{ source: '\\s*-\\s*妹を愛する\\s*$' }],
   followPagesUntilEmpty: true,
+  // 站内搜索：/ja/search/?s={q}，分页 /ja/search/page/N/?s={q}（实测均 HTTP 200）
+  search: { kind: 'wp-query-path-page', param: 's', path: '/ja/search/', trailingSlash: true },
+  // 结果只保留相册页（/ja/article/{id}/），排除 /ja/type/N/ 等分类页
+  searchAlbumPattern: { source: '^/ja/article/\\d+/?$' },
   linkParser: 'generic-post-links',
 }

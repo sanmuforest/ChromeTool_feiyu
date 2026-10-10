@@ -5350,17 +5350,23 @@
     id: "knitbid",
     label: "Knit.bid",
     uiOrder: 100,
-    // 未探测到可用的站内搜索接口 → 归入 Google 通道组
-    channels: ["google"],
+    // 站内搜索（2026-10-10 探测：表单 action=/ja/search/ + input name=s → /ja/search/?s=…；分页 /ja/search/page/N/）
+    channels: ["site"],
     defaultChecked: false,
     folderTag: "buondua",
-    endpoints: [{ host: "knit.bid", role: "primary" }],
+    // 站点实际部署在 xx. 子域（用户给出与实测的 URL 均为 xx.knit.bid）→ primary 用子域，
+    // 裸域作为 mirror 仅在用户直接访问裸域时匹配（搜索 URL 由 primary 生成，必须指向可用的子域）
+    endpoints: [{ host: "xx.knit.bid", role: "primary" }, { host: "knit.bid", role: "mirror" }],
     container: { tag: "div", className: "image-container" },
     pagination: { kind: "page-path-slash" },
     baseUrl: { stripPagePath: "page-segment" },
     // maxPagePattern 缺省：页面无 Page X/Y 标记（由 followPagesUntilEmpty 兜底）
     titleStrip: [{ source: "\\s*-\\s*\u59B9\u3092\u611B\u3059\u308B\\s*$" }],
     followPagesUntilEmpty: true,
+    // 站内搜索：/ja/search/?s={q}，分页 /ja/search/page/N/?s={q}（实测均 HTTP 200）
+    search: { kind: "wp-query-path-page", param: "s", path: "/ja/search/", trailingSlash: true },
+    // 结果只保留相册页（/ja/article/{id}/），排除 /ja/type/N/ 等分类页
+    searchAlbumPattern: { source: "^/ja/article/\\d+/?$" },
     linkParser: "generic-post-links"
   };
 
@@ -5457,8 +5463,9 @@
         return `https://${host}${search.template.replace("{q}", query)}`;
       }
       case "wp-query-path-page": {
-        if (page <= 1) return `https://${host}/?${search.param}=${query}`;
-        return `https://${host}/page/${page}${search.trailingSlash ? "/" : ""}?${search.param}=${query}`;
+        const basePath = (search.path ?? "/").replace(/\/?$/, "/");
+        if (page <= 1) return `https://${host}${basePath}?${search.param}=${query}`;
+        return `https://${host}${basePath}page/${page}${search.trailingSlash ? "/" : ""}?${search.param}=${query}`;
       }
       case "google-sitesearch": {
         const siteQuery = encodeURIComponent(`${q} site:${primaryHostOf(def)}`);
@@ -6141,7 +6148,7 @@ og:image: ${p.ogImage || "\u65E0"}
       const googleTestBtn = panel.querySelector("#bd-google-test");
       const googleStatus = panel.querySelector("#bd-google-status");
       const btnNext = panel.querySelector(".bd-next-batch");
-      const googleGroupIds = ["hitxhot", "kaizty", "phimvuspot", "ilovexs", "pixibb", "jrants", "knitbid"];
+      const googleGroupIds = ["hitxhot", "kaizty", "phimvuspot", "ilovexs", "pixibb", "jrants"];
       const defaultChecked = /* @__PURE__ */ new Set(["buondua"]);
       const googleChannel = new Set(googleGroupIds);
       const googleAllCheck = panel.querySelector("#bd-google-all");
@@ -6163,7 +6170,7 @@ og:image: ${p.ogImage || "\u65E0"}
             (id) => `<label class="bd-site-check ${disabledNotes[id] ? "disabled" : ""}" title="${disabledNotes[id] ?? ""}"><input type="checkbox" value="${id}" ${defaultChecked.has(id) ? "checked" : ""} ${disabledNotes[id] ? "disabled" : ""}> <a class="bd-site-name" href="#" data-site="${id}" title="\u6253\u5F00\u7F51\u7AD9\u9996\u9875">${id}</a>${googleChannel.has(id) ? '<span class="bd-site-note">\uFF08Google\uFF09</span>' : ""}${disabledNotes[id] ? `<span class="bd-site-note">\uFF08${disabledNotes[id]}\uFF09</span>` : ""}</label>`
           ).join("");
         };
-        renderGroup(["buondua", "rrwsh", "cangcuc", "imgbb"], "bd-search-sites-site");
+        renderGroup(["buondua", "rrwsh", "cangcuc", "knitbid", "imgbb"], "bd-search-sites-site");
         renderGroup(googleGroupIds, "bd-search-sites-google");
         panel.querySelectorAll(".bd-site-boxes").forEach((box) => {
           box.addEventListener("click", (ev) => {
@@ -6795,7 +6802,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261010232017" : "dev";
+  var BUILD_TIME = true ? "20261010232946" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

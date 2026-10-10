@@ -2198,17 +2198,23 @@
     id: "knitbid",
     label: "Knit.bid",
     uiOrder: 100,
-    // 未探测到可用的站内搜索接口 → 归入 Google 通道组
-    channels: ["google"],
+    // 站内搜索（2026-10-10 探测：表单 action=/ja/search/ + input name=s → /ja/search/?s=…；分页 /ja/search/page/N/）
+    channels: ["site"],
     defaultChecked: false,
     folderTag: "buondua",
-    endpoints: [{ host: "knit.bid", role: "primary" }],
+    // 站点实际部署在 xx. 子域（用户给出与实测的 URL 均为 xx.knit.bid）→ primary 用子域，
+    // 裸域作为 mirror 仅在用户直接访问裸域时匹配（搜索 URL 由 primary 生成，必须指向可用的子域）
+    endpoints: [{ host: "xx.knit.bid", role: "primary" }, { host: "knit.bid", role: "mirror" }],
     container: { tag: "div", className: "image-container" },
     pagination: { kind: "page-path-slash" },
     baseUrl: { stripPagePath: "page-segment" },
     // maxPagePattern 缺省：页面无 Page X/Y 标记（由 followPagesUntilEmpty 兜底）
     titleStrip: [{ source: "\\s*-\\s*\u59B9\u3092\u611B\u3059\u308B\\s*$" }],
     followPagesUntilEmpty: true,
+    // 站内搜索：/ja/search/?s={q}，分页 /ja/search/page/N/?s={q}（实测均 HTTP 200）
+    search: { kind: "wp-query-path-page", param: "s", path: "/ja/search/", trailingSlash: true },
+    // 结果只保留相册页（/ja/article/{id}/），排除 /ja/type/N/ 等分类页
+    searchAlbumPattern: { source: "^/ja/article/\\d+/?$" },
     linkParser: "generic-post-links"
   };
 
@@ -2305,8 +2311,9 @@
         return `https://${host}${search.template.replace("{q}", query)}`;
       }
       case "wp-query-path-page": {
-        if (page <= 1) return `https://${host}/?${search.param}=${query}`;
-        return `https://${host}/page/${page}${search.trailingSlash ? "/" : ""}?${search.param}=${query}`;
+        const basePath = (search.path ?? "/").replace(/\/?$/, "/");
+        if (page <= 1) return `https://${host}${basePath}?${search.param}=${query}`;
+        return `https://${host}${basePath}page/${page}${search.trailingSlash ? "/" : ""}?${search.param}=${query}`;
       }
       case "google-sitesearch": {
         const siteQuery = encodeURIComponent(`${q} site:${primaryHostOf(def)}`);
@@ -2663,7 +2670,7 @@
     }
     return items;
   }
-  function parseSitePostLinks(html, baseUrl, hosts) {
+  function parseSitePostLinks(html, baseUrl, hosts, opts) {
     const byUrl = /* @__PURE__ */ new Map();
     const re = /<a[^>]*href="([^"]*)"[^>]*>/g;
     let m;
@@ -2676,7 +2683,7 @@
         const path = u.pathname;
         if (path === "/" || path === "/index.php") continue;
         if (/^\/?(tag|category|search|author|page|pages|wp-|feed|comments|premium|videos|albums|home\d?|signup|login|recovery)\//i.test(path)) continue;
-        if (/\/\d+\/?$/.test(path)) continue;
+        if (!opts?.skipNumericFilter && /\/\d+\/?$/.test(path)) continue;
         const url = u.origin + path;
         let title = (m[0].match(/title="([^"]*)"/)?.[1] || "").trim();
         if (!title) {
@@ -2706,7 +2713,9 @@
     const cfg = site.def.listPages?.[0];
     const albumPath = cfg?.albumPath ?? site.searchAlbumPath;
     const albumPattern = cfg?.albumPath ? void 0 : site.searchAlbumPattern;
-    const items = parseSitePostLinks(html, baseUrl, site.hosts);
+    const items = parseSitePostLinks(html, baseUrl, site.hosts, {
+      skipNumericFilter: !!(albumPath || albumPattern)
+    });
     return items.filter((item) => {
       try {
         const pathname = new URL(item.url).pathname;
@@ -2759,7 +2768,9 @@
     "jrants-wp": (html, base) => parseJrantsPostLinks(html, base, {}),
     "pixibb-magezix": (html, base) => parsePixibbPostLinks(html, base, {}),
     "google-serp": (html, _base, site) => parseGoogleResults(html, site),
-    "generic-post-links": (html, base, site) => parseSitePostLinks(html, base, site.hosts)
+    "generic-post-links": (html, base, site) => parseSitePostLinks(html, base, site.hosts, {
+      skipNumericFilter: !!(site.searchAlbumPath || site.searchAlbumPattern)
+    })
   };
   var SCAN_PARSERS = {
     "buondua-recommended": (html, base) => parseRecommendedLinks(html, base),
@@ -2783,10 +2794,25 @@
       return m ? Number(m[1]) : void 0;
     }
   };
+  function filterAlbumLinks(site, items) {
+    const albumPath = site.searchAlbumPath;
+    const albumPattern = site.searchAlbumPattern;
+    if (!albumPath && !albumPattern) return items;
+    return items.filter((item) => {
+      try {
+        const pathname = new URL(item.url).pathname;
+        if (albumPath && !pathname.startsWith(albumPath)) return false;
+        if (albumPattern && !albumPattern.test(pathname)) return false;
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }
   function parseLinksForSite(siteId, html, base) {
     const site = COMPILED_SITES.find((s) => s.id === siteId);
     const parser = site ? LINK_PARSERS[site.def.linkParser] : void 0;
-    if (site && parser) return parser(html, base, site);
+    if (site && parser) return filterAlbumLinks(site, parser(html, base, site));
     if (site && site.searchAlbumPath) return parseGoogleResults(html, site);
     return parseSitePostLinks(html, base, site ? site.hosts : [siteId]);
   }

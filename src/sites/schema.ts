@@ -54,8 +54,8 @@ export type SiteSearch =
   | { kind: 'query'; path?: string; param: string; pageParam?: string; pageStep?: number }
   /** 路径模板搜索，仅第 1 页（rrwsh：/search/{q}） */
   | { kind: 'path-template'; template: string }
-  /** WP 站内搜索（?s=q 与 /page/N?s=q；trailingSlash 控制分页路径末尾斜杠） */
-  | { kind: 'wp-query-path-page'; param: string; trailingSlash?: boolean }
+  /** WP 站内搜索（?s=q 与 /page/N?s=q；trailingSlash 控制分页路径末尾斜杠，path 指定搜索页路径） */
+  | { kind: 'wp-query-path-page'; param: string; trailingSlash?: boolean; path?: string }
   /** Google 站内搜索（www.{primaryHost}；分页 &start=） */
   | { kind: 'google-sitesearch' }
 

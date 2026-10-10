@@ -105,8 +105,10 @@ function buildSearchUrl(def: SiteDef, q: string, page: number): string | null {
       return `https://${host}${search.template.replace('{q}', query)}`
     }
     case 'wp-query-path-page': {
-      if (page <= 1) return `https://${host}/?${search.param}=${query}`
-      return `https://${host}/page/${page}${search.trailingSlash ? '/' : ''}?${search.param}=${query}`
+      // path（2026-10-10）：搜索页可能不在根路径（如 knit.bid 的 /ja/search/）
+      const basePath = (search.path ?? '/').replace(/\/?$/, '/')
+      if (page <= 1) return `https://${host}${basePath}?${search.param}=${query}`
+      return `https://${host}${basePath}page/${page}${search.trailingSlash ? '/' : ''}?${search.param}=${query}`
     }
     case 'google-sitesearch': {
       // Google 已拒绝 gbv=1 / sitesearch= 老参数（2026-10-07 实测直接返回 403），改用现行 site: 语法。

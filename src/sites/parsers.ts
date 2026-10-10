@@ -76,10 +76,19 @@ export function parseRrwshSearchLinks(html: string, _baseUrl: string): BuonduaLi
   return items
 }
 
-/** 通用站点文章链接解析（聚合搜索用，无专用解析器时兜底）：
+/** 通用站点文章链接解析（聚合搜索 / 列表浏览用，无专用解析器时兜底）：
  *  提取指定 hosts（含子域）下的文章链接，排除首页/分类/标签/搜索/作者/分页等路径
- *  标题：a title 属性 → a 文本 → 附近文本；封面不提取（专用解析器负责） */
-export function parseSitePostLinks(html: string, baseUrl: string, hosts: string[]): BuonduaLinkItem[] {
+ *  标题：a title 属性 → a 文本 → 附近文本；封面不提取（专用解析器负责）
+ *
+ *  opts.skipNumericFilter（2026-10-10）：跳过「尾部数字路径视为分页」的排除。
+ *  该规则用于排除 /slug/2 形式的分页，但会把「ID 结尾的相册 URL」误杀（如 knit.bid 的 /ja/article/27027/）。
+ *  当站点已配置 searchAlbumPath / searchAlbumPattern 这类精确过滤规则时，应跳过此启发式排除。 */
+export function parseSitePostLinks(
+  html: string,
+  baseUrl: string,
+  hosts: string[],
+  opts?: { skipNumericFilter?: boolean },
+): BuonduaLinkItem[] {
   const byUrl = new Map<string, BuonduaLinkItem>()
   const re = /<a[^>]*href="([^"]*)"[^>]*>/g
   let m: RegExpExecArray | null
@@ -92,7 +101,7 @@ export function parseSitePostLinks(html: string, baseUrl: string, hosts: string[
       const path = u.pathname
       if (path === '/' || path === '/index.php') continue
       if (/^\/?(tag|category|search|author|page|pages|wp-|feed|comments|premium|videos|albums|home\d?|signup|login|recovery)\//i.test(path)) continue
-      if (/\/\d+\/?$/.test(path)) continue // 分页尾部数字
+      if (!opts?.skipNumericFilter && /\/\d+\/?$/.test(path)) continue // 分页尾部数字（可被 opts 跳过，见函数注释）
       const url = u.origin + path
       let title = (m[0].match(/title="([^"]*)"/)?.[1] || '').trim()
       if (!title) {
@@ -128,7 +137,9 @@ export function parseListPageLinks(html: string, baseUrl: string, site: GalleryS
   const cfg = site.def.listPages?.[0]
   const albumPath = cfg?.albumPath ?? site.searchAlbumPath
   const albumPattern = cfg?.albumPath ? undefined : site.searchAlbumPattern
-  const items = parseSitePostLinks(html, baseUrl, site.hosts)
+  const items = parseSitePostLinks(html, baseUrl, site.hosts, {
+    skipNumericFilter: !!(albumPath || albumPattern),
+  })
   return items.filter((item) => {
     try {
       const pathname = new URL(item.url).pathname
@@ -200,7 +211,10 @@ const LINK_PARSERS: Record<string, LinkParser | undefined> = {
   'jrants-wp': (html, base) => parseJrantsPostLinks(html, base, {}),
   'pixibb-magezix': (html, base) => parsePixibbPostLinks(html, base, {}),
   'google-serp': (html, _base, site) => parseGoogleResults(html, site),
-  'generic-post-links': (html, base, site) => parseSitePostLinks(html, base, site.hosts),
+  'generic-post-links': (html, base, site) =>
+    parseSitePostLinks(html, base, site.hosts, {
+      skipNumericFilter: !!(site.searchAlbumPath || site.searchAlbumPattern),
+    }),
 }
 
 /** 推荐/其他链接扫描解析器注册表（定义 scan 字段 → 实现） */
@@ -230,11 +244,30 @@ const IMAGE_COUNT_RULES: Record<ImageCountRuleName, (item: BuonduaLinkItem, fina
   },
 }
 
+/** 按站点相册路径规则过滤结果（2026-10-10）：searchAlbumPath 前缀 + searchAlbumPattern 正则（同时配置为「且」）
+ *  通用解析器 generic-post-links 提取的是同域全部文章链接，必须再收窄为相册链接 ——
+ *  否则带语言前缀路径的站点（如 knit.bid 的 /ja/type/1/）会把分类页混进搜索结果 */
+function filterAlbumLinks(site: GallerySiteConfig, items: BuonduaLinkItem[]): BuonduaLinkItem[] {
+  const albumPath = site.searchAlbumPath
+  const albumPattern = site.searchAlbumPattern
+  if (!albumPath && !albumPattern) return items
+  return items.filter((item) => {
+    try {
+      const pathname = new URL(item.url).pathname
+      if (albumPath && !pathname.startsWith(albumPath)) return false
+      if (albumPattern && !albumPattern.test(pathname)) return false
+      return true
+    } catch {
+      return false
+    }
+  })
+}
+
 /** 按站点 id 解析搜索页链接（聚合搜索 / 站内搜索共用） */
 export function parseLinksForSite(siteId: string, html: string, base: string): BuonduaLinkItem[] {
   const site = COMPILED_SITES.find((s) => s.id === siteId)
   const parser = site ? LINK_PARSERS[site.def.linkParser] : undefined
-  if (site && parser) return parser(html, base, site)
+  if (site && parser) return filterAlbumLinks(site, parser(html, base, site))
   if (site && site.searchAlbumPath) return parseGoogleResults(html, site)
   return parseSitePostLinks(html, base, site ? site.hosts : [siteId])
 }
