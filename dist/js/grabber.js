@@ -3152,10 +3152,9 @@
       return img.downloadUrl ?? img.url;
     }
     function collectSelectedItems() {
-      const items = [];
-      for (const img of images) {
-        if (selected.has(img.url)) items.push({ url: downloadUrlOf(img) });
-      }
+      const selectedImages = images.filter((img) => selected.has(img.url));
+      const { kept } = applyDedupe(selectedImages);
+      const items = kept.map((img) => ({ url: downloadUrlOf(img) }));
       const albumName = options.getAlbumName ? options.getAlbumName() : "";
       return items.map((u, i) => ({ url: u.url, filename: extractFilename(u.url, i + 1, albumName || void 0) }));
     }
@@ -6804,7 +6803,7 @@ og:image: ${p.ogImage || "\u65E0"}
 
   // src/grabber/grabber.ts
   var logger9 = initLogger("grabber");
-  var BUILD_TIME = true ? "20261011100542" : "dev";
+  var BUILD_TIME = true ? "20261011100823" : "dev";
   var params = new URLSearchParams(location.search);
   var srcTabId = Number(params.get("srcTabId"));
   var imagesView = null;

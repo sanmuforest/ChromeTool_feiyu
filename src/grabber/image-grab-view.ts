@@ -163,10 +163,14 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     // - imgbb：翻页序；主抓取页：DOM / 滚动序
     // 注意：禁止按 URL 字典序重排——曾导致 hash / base64 文件名的站点（imgbb、phimvuspot 等）
     //      编号与页面顺序错位（变更日志 2026-09-29-004）
-    const items: { url: string }[] = []
-    for (const img of images) {
-      if (selected.has(img.url)) items.push({ url: downloadUrlOf(img) })
-    }
+    //
+    // 2026-10-11：与网格保持一致 —— 先按选中过滤，再应用**去重**（跳过被去重隐藏的重复项）。
+    // 此前直接遍历 images，导致「网格显示 90 张、下载/打包却是 180 项」（同一相册抓两次时最明显）。
+    // 说明：只应用 applyDedupe，**不引入尺寸筛选 / 小图过滤**（避免"我没筛它却不下"）；
+    //      filter 与 applyDedupe 均保持首次出现顺序，故命名顺序仍严格等于抓取顺序。
+    const selectedImages = images.filter((img) => selected.has(img.url))
+    const { kept } = applyDedupe(selectedImages)
+    const items = kept.map((img) => ({ url: downloadUrlOf(img) }))
     const albumName = options.getAlbumName ? options.getAlbumName() : ''
     return items.map((u, i) => ({ url: u.url, filename: extractFilename(u.url, i + 1, albumName || undefined) }))
   }
