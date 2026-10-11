@@ -2698,14 +2698,28 @@
             if (t.length >= 2 && t.length < 200 && !/^[.#@]/.test(t) && !/[{;}]/.test(t)) title = t;
           }
         }
+        let cover = "";
+        const after = html.slice(m.index, m.index + 1500);
+        const im = after.match(/<img[^>]+(?:data-src|data-lazy-src|src)="([^"]+)"/i);
+        if (im) {
+          try {
+            const cu = new URL(im[1], baseUrl).href;
+            const isAsset = /\.(js|css|svg|ico)(\?|$)/i.test(cu);
+            const isChrome = /(favicon|logo|avatar|sprite|placeholder|blank|loading)/i.test(cu);
+            if (!isAsset && !isChrome) cover = cu;
+          } catch {
+            cover = "";
+          }
+        }
         const existing = byUrl.get(url);
         if (existing) {
-          if (existing.title === url && title && title !== url) {
-            byUrl.set(url, { ...existing, title });
-          }
+          const next = { ...existing };
+          if (existing.title === url && title && title !== url) next.title = title;
+          if (!existing.coverUrl && cover) next.coverUrl = cover;
+          if (next.title !== existing.title || next.coverUrl !== existing.coverUrl) byUrl.set(url, next);
           continue;
         }
-        byUrl.set(url, { url, title: title || url, coverUrl: "", imageCount: void 0 });
+        byUrl.set(url, { url, title: title || url, coverUrl: cover, imageCount: void 0 });
       } catch {
       }
     }

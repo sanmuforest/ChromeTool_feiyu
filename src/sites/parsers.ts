@@ -115,15 +115,33 @@ export function parseSitePostLinks(
           if (t.length >= 2 && t.length < 200 && !/^[.#@]/.test(t) && !/[{;}]/.test(t)) title = t
         }
       }
+      // 封面（2026-10-10 新增）：卡片常见写法是 <a href="文章"><img src="封面"></a>，
+      // 故取该链接之后 1500 字符内的首个图片，并过滤 favicon/logo/占位图。
+      // 此前通用解析器完全不给封面（注释写「封面不提取」），导致使用它的站点（knitbid/cangcuc/phimvuspot/ilovexs）
+      // 在聚合搜索里全部没有预览图。
+      let cover = ''
+      const after = html.slice(m.index, m.index + 1500)
+      const im = after.match(/<img[^>]+(?:data-src|data-lazy-src|src)="([^"]+)"/i)
+      if (im) {
+        try {
+          const cu = new URL(im[1], baseUrl).href
+          const isAsset = /\.(js|css|svg|ico)(\?|$)/i.test(cu)
+          const isChrome = /(favicon|logo|avatar|sprite|placeholder|blank|loading)/i.test(cu)
+          if (!isAsset && !isChrome) cover = cu
+        } catch {
+          cover = ''
+        }
+      }
       const existing = byUrl.get(url)
       if (existing) {
-        // 同 URL 后到者补齐标题（封面 a 先出现但无文本，标题 a 后出现）
-        if (existing.title === url && title && title !== url) {
-          byUrl.set(url, { ...existing, title })
-        }
+        // 同 URL 后到者补齐标题/封面（封面 a 先出现但无文本，标题 a 后出现）
+        const next = { ...existing }
+        if (existing.title === url && title && title !== url) next.title = title
+        if (!existing.coverUrl && cover) next.coverUrl = cover
+        if (next.title !== existing.title || next.coverUrl !== existing.coverUrl) byUrl.set(url, next)
         continue
       }
-      byUrl.set(url, { url, title: title || url, coverUrl: '', imageCount: undefined })
+      byUrl.set(url, { url, title: title || url, coverUrl: cover, imageCount: undefined })
     } catch {
       // 忽略非法链接
     }
