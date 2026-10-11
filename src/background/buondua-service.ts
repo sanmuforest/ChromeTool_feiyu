@@ -344,6 +344,7 @@ export class BuonduaService {
     const imagesMap = new Map<string, BuonduaImage>()
     let scanned = 0
     let emptyStreak = 0
+    let repeatStreak = 0
     // 页间节流（站点定义 throttle，与站内搜索共用）：顺序翻页的站点请求较多，避免触发站点限流（429）
     const pageThrottle = site.def.throttle
     for (let pageIndex = 0; pageIndex < all.length; pageIndex++) {
@@ -370,13 +371,18 @@ export class BuonduaService {
       }
       scanned += imgs.length
       emptyStreak = imgs.length === 0 ? emptyStreak + 1 : 0
+      const beforeSize = imagesMap.size
       for (const img of imgs) {
         // 去重键：路径 + 文件名（去掉签名/尺寸 query）
         const key = `${img.url.split('?')[0]}`
         if (!imagesMap.has(key)) imagesMap.set(key, img)
       }
-      // 连续 3 页无图（视频页/末尾）提前停止，避免超限浪费
-      if (emptyStreak >= 3) break
+      // 重复页检测（2026-10-11 实测）：knit.bid 对超出实际范围的页会「返回第 1 页内容」，
+      // 只看「无图」永远停不下来（实测 90 张的相册被翻满 40 页，其中 31 页纯重复）→
+      // 连续 3 页没有任何新图同样判为到底，既省请求也降低被站点限流（429）的风险
+      repeatStreak = imagesMap.size === beforeSize ? repeatStreak + 1 : 0
+      // 连续 3 页无图（视频页/末尾）或无新图（重复页）→ 提前停止
+      if (emptyStreak >= 3 || repeatStreak >= 3) break
     }
     const images = [...imagesMap.values()]
     logger.info('buondua', '相册全子页抓取完成', {

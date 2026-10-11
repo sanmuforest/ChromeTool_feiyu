@@ -3108,6 +3108,7 @@
       const imagesMap = /* @__PURE__ */ new Map();
       let scanned = 0;
       let emptyStreak = 0;
+      let repeatStreak = 0;
       const pageThrottle = site.def.throttle;
       for (let pageIndex = 0; pageIndex < all.length; pageIndex++) {
         const pageUrl = all[pageIndex];
@@ -3130,11 +3131,13 @@
         }
         scanned += imgs.length;
         emptyStreak = imgs.length === 0 ? emptyStreak + 1 : 0;
+        const beforeSize = imagesMap.size;
         for (const img of imgs) {
           const key = `${img.url.split("?")[0]}`;
           if (!imagesMap.has(key)) imagesMap.set(key, img);
         }
-        if (emptyStreak >= 3) break;
+        repeatStreak = imagesMap.size === beforeSize ? repeatStreak + 1 : 0;
+        if (emptyStreak >= 3 || repeatStreak >= 3) break;
       }
       const images = [...imagesMap.values()];
       logger4.info("buondua", "\u76F8\u518C\u5168\u5B50\u9875\u6293\u53D6\u5B8C\u6210", {
