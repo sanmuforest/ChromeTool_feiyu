@@ -22,9 +22,15 @@ export const se8: SiteDef = {
   // 正文容器 class 未知且不稳定（正文是 background-image，探测的容器候选里没有它）
   // → 宽容器（整页 body）+ imageOnlyHosts 精确取图，不依赖容器 class
   container: { tag: 'body', className: '' },
-  pagination: { kind: 'html-from-1' },
+  pagination: { kind: 'html-auto' },
   baseUrl: { stripPagePath: 'html' },
-  titleStrip: [{ source: '\\s*-\\s*8色人體攝影\\s*-\\s*第\\s*\\d+\\s*頁\\s*$' }],
+  // 两条规则按序执行（2026-10-15 实测两种相册形态）：
+  //   多页相册标题：`… - 8色人體攝影 - 第 2 頁`（先去掉页码段）
+  //   单页相册标题：`… - 8色人體攝影`（再去掉站名段）
+  titleStrip: [
+    { source: '\\s*-\\s*第\\s*\\d+\\s*頁\\s*$' },
+    { source: '\\s*-\\s*8色人體攝影\\s*$' },
+  ],
   imageThumbFix: { source: '_\\d+x\\d+\\.webp$', flags: 'i', replace: '.jpg' },
   imageOnlyHosts: ['img.xchina.io'],
   // 分页总数不可测（标题只显示当前页）→ 顺序翻页，靠「连续 3 页无新图」停止

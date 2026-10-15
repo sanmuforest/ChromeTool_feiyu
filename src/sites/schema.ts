@@ -32,10 +32,13 @@ export type PaginationKind =
   | 'path-slash-from-2'
   /** 第 1 页用基址，其后 /page/N/（WP 标准分页；knit.bid） */
   | 'page-path-slash'
-  /** 全页均为 /N.html（含第 1 页；8se.me 的 `2.html` 形态） */
+  /** 全页均为 /N.html（含第 1 页；8se.me 的多页形态 `…/id-xxx/2.html`） */
   | 'html-from-1'
   /** 第 1 页用基址，其后 /N.html（8se.me 的另一种可能：第 1 页不带 .html） */
   | 'html-from-2'
+  /** 自适应（2026-10-15，8se.me）：基址以 .html 结尾 = 单页相册（本身即全部内容，不分页）；
+   *  否则按 `{base}N.html` 分页 —— 同站两种相册形态并存时用它 */
+  | 'html-auto'
   /** 不分页（ilovexs） */
   | 'single'
 

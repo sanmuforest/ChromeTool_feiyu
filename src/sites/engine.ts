@@ -54,6 +54,11 @@ function buildPageUrl(def: SiteDef, base: string, page: number): string {
     case 'html-from-2':
       // 第 1 页用基址，其后 /N.html
       return page <= 1 ? base : `${base.replace(/\/?$/, '/')}${page}.html`
+    case 'html-auto':
+      // 2026-10-15（8se.me）：基址以 .html 结尾 = 单页相册 → 第 1 页即基址本身；
+      // 后续页返回同一基址，由抓取流程的「连续页无新图」检测自然停止（不制造 404 以免中断抓取）
+      if (/\.html?$/i.test(base)) return base
+      return `${base.replace(/\/?$/, '/')}${page}.html`
     case 'single':
       return base
     default:
