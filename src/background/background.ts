@@ -236,8 +236,22 @@ async function sendToTabAndGet<T>(tabId: number, message: Message): Promise<T | 
 
 // ---------- 页面结构探测（FP-014 站点扩充） ----------
 
-/** 探测执行函数（executeScript 注入，返回页面结构特征供新站适配） */
-function extractProbeData(): PageProbeResult {
+/** 探测执行函数（executeScript 注入，返回页面结构特征供新站适配）
+ *  2026-10-11：改为 async —— 先滚动触发懒加载。探测标签页是后台打开且从不滚动，
+ *  正文图始终不进入 DOM（8se.me 实测：正文图床 img.xchina.io 一张都探测不到） */
+async function extractProbeData(): Promise<PageProbeResult> {
+  // 分段滚到底再回顶，触发各段懒加载
+  try {
+    const total = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)
+    for (let i = 1; i <= 4; i++) {
+      window.scrollTo(0, Math.floor((total * i) / 4))
+      await new Promise((r) => setTimeout(r, 400))
+    }
+    window.scrollTo(0, 0)
+    await new Promise((r) => setTimeout(r, 200))
+  } catch {
+    // 滚动失败不影响后续提取
+  }
   const out: PageProbeResult = {
     title: document.title,
     url: location.href,
@@ -247,9 +261,23 @@ function extractProbeData(): PageProbeResult {
     pagination: [],
   }
   out.ogImage = document.querySelector('meta[property="og:image"]')?.getAttribute('content') ?? ''
+  /** 图片真实 URL 取值（2026-10-11 扩展：各站 lazy 属性不一，逐一尝试并支持 srcset） */
+  const srcOf = (img: Element): string => {
+    const el = img as HTMLImageElement
+    for (const a of ['data-src', 'data-original', 'data-lazy-src', 'data-lazyload', 'data-url', 'data-image', 'data-echo']) {
+      const v = el.getAttribute(a)
+      if (v) return v
+    }
+    const srcset = el.getAttribute('srcset')
+    if (srcset) {
+      const first = srcset.split(',')[0]?.trim().split(/\s+/)[0]
+      if (first) return first
+    }
+    return el.currentSrc || el.src || ''
+  }
   const seenImg = new Set<string>()
   for (const img of Array.from(document.querySelectorAll('img'))) {
-    const s = img.getAttribute('data-src') || img.src || img.getAttribute('data-original') || ''
+    const s = srcOf(img)
     if (!s || seenImg.has(s)) continue
     seenImg.add(s)
     out.imgSrcs.push(s)
@@ -286,7 +314,7 @@ function extractProbeData(): PageProbeResult {
   // 完全看不出正文容器；而按 host 分组后「img.xchina.io ×14」与其父级 class 链会直接暴露正文结构
   const groups = new Map<string, { host: string; count: number; samples: string[]; chains: string[][] }>()
   for (const img of Array.from(document.querySelectorAll('img'))) {
-    const s = img.getAttribute('data-src') || img.getAttribute('data-original') || img.src || ''
+    const s = srcOf(img)
     if (!s || !/^https?:/i.test(s)) continue
     let host = ''
     try {
@@ -328,6 +356,29 @@ function extractProbeData(): PageProbeResult {
   }
   out.pageLinks = pageLinks
   out.lazyCount = document.querySelectorAll('img[data-src]').length
+  // ---- 2026-10-11 第二轮增强：正文图不在 <img> 时的排查线索 ----
+  const attrKeys = new Set<string>()
+  for (const im of Array.from(document.querySelectorAll('img')).slice(0, 40)) {
+    for (const a of Array.from(im.attributes)) {
+      if (/^(src|data-)/i.test(a.name)) attrKeys.add(a.name)
+    }
+  }
+  out.imgAttrKeys = Array.from(attrKeys).slice(0, 24)
+  const bgSeen = new Set<string>()
+  const bgImages: string[] = []
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>('[style]'))) {
+    const m = (el.getAttribute('style') || '').match(/url\((['"]?)([^'")]+)\1\)/i)
+    if (!m) continue
+    const u = m[2]
+    if (!/^https?:/i.test(u) || bgSeen.has(u)) continue
+    bgSeen.add(u)
+    bgImages.push(u)
+    if (bgImages.length >= 20) break
+  }
+  out.bgImages = bgImages
+  out.iframeSrcs = Array.from(document.querySelectorAll('iframe[src]'))
+    .map((f) => (f as HTMLIFrameElement).src)
+    .slice(0, 10)
   return out
 }
 

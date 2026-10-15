@@ -270,7 +270,11 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
                 .join('\n')
             : '') +
           (p.pageLinks && p.pageLinks.length ? `\n\n== 疑似分页链接（任意形态）==\n  ${p.pageLinks.slice(0, 12).join('\n  ')}` : '') +
-          (p.lazyCount ? `\n\ndata-src（lazy）数量: ${p.lazyCount}` : '')
+          (p.lazyCount ? `\n\ndata-src（lazy）数量: ${p.lazyCount}` : '') +
+          // 2026-10-11 第二轮增强：正文图不在 <img> 时的排查线索
+          (p.imgAttrKeys && p.imgAttrKeys.length ? `\n\n== img 上的 src/data-* 属性名 ==\n  ${p.imgAttrKeys.join(' , ')}` : '') +
+          (p.bgImages && p.bgImages.length ? `\n\n== 内联 background-image 样本 ==\n  ${p.bgImages.slice(0, 8).join('\n  ')}` : '') +
+          (p.iframeSrcs && p.iframeSrcs.length ? `\n\n== iframe src ==\n  ${p.iframeSrcs.join('\n  ')}` : '')
         logger.info('view', '页面结构探测完成', {
           url,
           imgs: p.imgSrcs.length,

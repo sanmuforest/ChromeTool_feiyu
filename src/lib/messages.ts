@@ -250,6 +250,12 @@ export interface PageProbeResult {
   pageLinks?: string[]
   /** `img[data-src]` 数量（判断 lazy load：真图在 data-src 而非 src） */
   lazyCount?: number
+  /** img 上实际出现的 `src` / `data-*` 属性名（2026-10-11 新增：判断该站 lazy 究竟用哪个属性） */
+  imgAttrKeys?: string[]
+  /** 内联 `background-image` 的 URL 样本（正文图可能用 CSS 背景而非 img 元素） */
+  bgImages?: string[]
+  /** iframe src 样本（正文可能嵌在 iframe 内） */
+  iframeSrcs?: string[]
 }
 
 /** 通用发送：扩展页面 → background */
