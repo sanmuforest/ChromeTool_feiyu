@@ -500,7 +500,7 @@ export class BuonduaService {
       let pagesFetched = 0
       try {
         // Google 通道站点（searchAlbumPath）或 Google 全站模式（useGoogleAll）或无站内搜索接口的站（isGoogleOnly）或
-        // Google 组站点（googleSites 显式指定，FP-014：pixibb/rrwsh/cangcuc 站内无结果 → 强制 Google 优先，失败降级站内）：
+        // Google 组站点（googleSites 显式指定，FP-014：pixibb/rrwsh 站内无结果 → 强制 Google 优先，失败降级站内）：
         // 后台 fetch 拿不到新版 Google 结果（JS 渲染壳），走页面降级通道（静默开标签渲染 + 提取，FP-012/093）
         const isGoogleOnly = !site.searchUrl && !site.searchAlbumPath
         if (site.searchAlbumPath || useGoogleAll || isGoogleOnly || googleSites.includes(siteId)) {

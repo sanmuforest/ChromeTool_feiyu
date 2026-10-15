@@ -32,7 +32,7 @@ export type PaginationKind =
   | 'path-slash-from-2'
   /** 第 1 页用基址，其后 /page/N/（WP 标准分页；knit.bid） */
   | 'page-path-slash'
-  /** 不分页（cangcuc / ilovexs） */
+  /** 不分页（ilovexs） */
   | 'single'
 
 export interface SitePagination {

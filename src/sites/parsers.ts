@@ -117,7 +117,7 @@ export function parseSitePostLinks(
       }
       // 封面（2026-10-10 新增）：卡片常见写法是 <a href="文章"><img src="封面"></a>，
       // 故取该链接之后 1500 字符内的首个图片，并过滤 favicon/logo/占位图。
-      // 此前通用解析器完全不给封面（注释写「封面不提取」），导致使用它的站点（knitbid/cangcuc/phimvuspot/ilovexs）
+      // 此前通用解析器完全不给封面（注释写「封面不提取」），导致使用它的站点（knitbid/phimvuspot/ilovexs）
       // 在聚合搜索里全部没有预览图。
       let cover = ''
       const after = html.slice(m.index, m.index + 1500)
