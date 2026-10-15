@@ -48,31 +48,57 @@ export function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary)
 }
 
+/** 源页注入取字节的结果（2026-10-11：改为结构化返回，便于日志定位真实失败原因 ——
+ *  原先注入函数内部抛错会被 executeScript 吞掉，统一表现为「页面未返回字节」，
+ *  无法区分「页面内 fetch 也被 403」与「CORS 拦截」，导致无法对症修复） */
+export interface SrcTabFetchResult {
+  ok: boolean
+  bytes?: ArrayBuffer
+  error?: string
+}
+
 /**
- * 源页（imgbb 域页面）MAIN world 注入抓图字节：
- * 页面上下文 fetch 的 Referer = 页面 URL（imgbb 域），imgbb 放行原图（= 用户浏览行为）；
- * srcTab 非 imgbb 域 / 已关闭 / 无 host 权限时注入失败，由调用方降级
+ * 源页（当前标签页）MAIN world 注入抓图字节：
+ * 页面上下文 fetch 的 Referer = 页面 URL，可带该页面对目标域的会话，用于穿透防盗链/反爬；
+ * 目标域非页面同源时受 CORS 约束（这一点必须由日志暴露，不能再被吞掉）
  */
+export async function fetchViaSrcTab(srcTabId: number, url: string): Promise<SrcTabFetchResult> {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: srcTabId },
+      world: 'MAIN',
+      func: (imgUrl: string) =>
+        (async () => {
+          try {
+            const resp = await fetch(imgUrl, {
+              headers: {
+                Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+              },
+            })
+            if (!resp.ok) return { error: 'HTTP ' + resp.status }
+            const buf = await resp.arrayBuffer()
+            return { bytes: Array.from(new Uint8Array(buf)) }
+          } catch (e) {
+            return { error: String(e) }
+          }
+        })(),
+      args: [url],
+    })
+    const r = results?.[0]?.result as { bytes?: number[]; error?: string } | undefined
+    if (!r) return { ok: false, error: '注入无返回（标签页可能已关闭）' }
+    if (r.error) return { ok: false, error: `页面内 fetch 失败：${r.error}` }
+    if (!r.bytes || r.bytes.length === 0) return { ok: false, error: '页面返回空字节' }
+    return { ok: true, bytes: new Uint8Array(r.bytes).buffer }
+  } catch (e) {
+    return { ok: false, error: `注入异常：${String(e)}` }
+  }
+}
+
+/** 抛错式包装（保留既有调用签名） */
 export async function fetchImgbbViaSrcTab(srcTabId: number, url: string): Promise<ArrayBuffer> {
-  const results = await chrome.scripting.executeScript({
-    target: { tabId: srcTabId },
-    world: 'MAIN',
-    func: (imgUrl: string): Promise<number[]> =>
-      (async () => {
-        const resp = await fetch(imgUrl, {
-          headers: {
-            Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-          },
-        })
-        if (!resp.ok) throw new Error('HTTP ' + resp.status)
-        const buf = await resp.arrayBuffer()
-        return Array.from(new Uint8Array(buf))
-      })(),
-    args: [url],
-  })
-  const arr = results?.[0]?.result as number[] | undefined
-  if (!arr || arr.length === 0) throw new Error('页面未返回字节')
-  return new Uint8Array(arr).buffer
+  const res = await fetchViaSrcTab(srcTabId, url)
+  if (!res.ok || !res.bytes) throw new Error(res.error ?? '源页注入失败')
+  return res.bytes
 }
 
 interface ActiveDownload {

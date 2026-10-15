@@ -6,7 +6,7 @@
 // 4. 下载队列管理（DownloadManager）
 // 注意：SW 生命周期短、无 DOM，状态持久化到 chrome.storage（内存 Map 可重建）
 
-import { DownloadManager, arrayBufferToBase64, fetchImageBytes, fetchImgbbViaSrcTab } from '../lib/downloader'
+import { DownloadManager, arrayBufferToBase64, fetchImageBytes, fetchViaSrcTab } from '../lib/downloader'
 import { DiffuseEngine } from './imgbb-diffuse'
 import { emptyDb, loadDb, mergeInDegree, mergeDb, dbSummary, inDegreeDist, unconfirmedCandidates, unconfirmedCount, confirmedScored, matchAlbums, scoreTop, degreeTop, albumTop, resetConfirmations, setStarRating, ensureEntry, starInfo, PRODUCER_DB_KEY } from '../lib/producer-db'
 import { normalizeConfig, pullDb, pushDb, GITHUB_CONFIG_KEY } from '../lib/github-sync'
@@ -632,11 +632,18 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       try {
         let buf: ArrayBuffer
         if (message.srcTabId) {
-          try {
-            buf = await fetchImgbbViaSrcTab(message.srcTabId, message.url)
+          // 2026-10-11：改用结构化返回的 fetchViaSrcTab —— 把「页面内 fetch 的真实失败原因」写进日志。
+          // 原先注入函数内部抛错会被 executeScript 吞掉，统一显示「页面未返回字节」，
+          // 无法区分「页面内 fetch 也被 403」与「CORS 拦截」，导致只能猜着改
+          const srcRes = await fetchViaSrcTab(message.srcTabId, message.url)
+          if (srcRes.ok && srcRes.bytes) {
+            buf = srcRes.bytes
             logger.debug('download', 'GRAB_FETCH_IMAGE 源页注入抓取完成', { bytes: buf.byteLength, url: message.url })
-          } catch (err) {
-            logger.warn('download', 'GRAB_FETCH_IMAGE 源页注入失败，降级 background', { url: message.url, error: String(err) })
+          } else {
+            logger.warn('download', 'GRAB_FETCH_IMAGE 源页注入失败，降级 background', {
+              url: message.url,
+              srcError: srcRes.error,
+            })
             buf = await fetchImageBytes(message.url)
           }
         } else {
