@@ -59,7 +59,7 @@ export interface SiteBaseUrl {
 /** 搜索通道声明 */
 export type SiteSearch =
   /** 站内 query 搜索（buondua：?search=q 分页 &start=offset） */
-  | { kind: 'query'; path?: string; param: string; pageParam?: string; pageStep?: number }
+  | { kind: 'query'; path?: string; param: string; pageParam?: string; pageStep?: number; pageBase?: number }
   /** 路径模板搜索，仅第 1 页（rrwsh：/search/{q}） */
   | { kind: 'path-template'; template: string }
   /** WP 站内搜索（?s=q 与 /page/N?s=q；trailingSlash 控制分页路径末尾斜杠，path 指定搜索页路径） */

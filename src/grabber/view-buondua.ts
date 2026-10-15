@@ -644,7 +644,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     // 2026-10-07 调整：jrants 站内搜索被反爬（403）→ 移入 Google 组并取消默认勾选；
     // rrwsh（域名已被他人站占用）取消默认勾选，仍可在列表中手动勾选
     // 2026-10-11：cangcuc 域名长期失效，用户决定放弃 → 定义已归档并从站点列表移除
-    const googleGroupIds = ['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs', 'pixibb', 'jrants', 'se8']
+    const googleGroupIds = ['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs', 'pixibb', 'jrants']
     const defaultChecked = new Set(['buondua'])
     const googleChannel = new Set(googleGroupIds)
     const googleAllCheck = panel.querySelector('#bd-google-all') as HTMLInputElement
@@ -670,8 +670,8 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           )
           .join('')
       }
-      // 站内搜索类：buondua/rrwsh/knitbid + imgbb（无搜索灰显，保留原列表提示）；jrants 已移入 Google 组
-      renderGroup(['buondua', 'rrwsh', 'knitbid', 'imgbb'], 'bd-search-sites-site')
+      // 站内搜索类：buondua/rrwsh/knitbid/se8 + imgbb（无搜索灰显，保留原列表提示）；jrants 已移入 Google 组
+      renderGroup(['buondua', 'rrwsh', 'knitbid', 'se8', 'imgbb'], 'bd-search-sites-site')
       // Google 通道类：仅 Google 可搜
       renderGroup(googleGroupIds, 'bd-search-sites-google')
       // 站点名点击 → 打开网站首页（FP-014 修复 6：点击名字跳首页，checkbox 勾选不受影响）

@@ -18,12 +18,13 @@ export const se8: SiteDef = {
   id: 'se8',
   label: '8se.me',
   uiOrder: 110,
-  // 未探测到站内搜索接口 → 归入 Google 通道组
-  channels: ['google'],
+  // 站内搜索（2026-10-15 用户提供）：/search.html?keyword={q} → 归入站内搜索组
+  channels: ['site'],
   defaultChecked: false,
   folderTag: 'buondua',
-  // 站点部署在区域子域（tw.8se.me）；primary 用裸域，匹配时自动覆盖子域
-  endpoints: [{ host: '8se.me', role: 'primary' }],
+  // 站点部署在区域子域：实测可用的是 tw.8se.me（用户使用的入口）→ primary 用该子域，
+  // 裸域作为 mirror；搜索 URL 由 primary 生成，必须指向实际可用的域
+  endpoints: [{ host: 'tw.8se.me', role: 'primary' }, { host: '8se.me', role: 'mirror' }],
   // 正文容器 class 未知且不稳定（正文是 background-image，探测的容器候选里没有它）
   // → 宽容器（整页 body）+ imageOnlyHosts 精确取图，不依赖容器 class
   container: { tag: 'body', className: '' },
@@ -41,5 +42,11 @@ export const se8: SiteDef = {
   // 分页总数不可测（标题只显示当前页）→ 顺序翻页，靠「连续 3 页无新图」停止
   followPagesUntilEmpty: true,
   throttle: { fromPage: 2, delayMs: 1200 },
+  // 站内搜索（2026-10-15）：/search.html?keyword={q}；分页暂按页码式 &page=N（pageStep: 1），
+  // 待实测确认（若该站用偏移量或别的参数名，改这里一行即可）
+  search: { kind: 'query', path: '/search.html', param: 'keyword', pageParam: 'page', pageStep: 1, pageBase: 1 },
+  // 搜索结果只保留相册页（实测两种形态）：
+  //   /photo/id-6ab82e0dab417.html（无斜杠）与 /photo/id-6ac1747801b63/2.html（有斜杠 + 页码）
+  searchAlbumPattern: { source: '^/photo/id-[0-9a-f]+(?:\\.html|/\\d+\\.html)?/?$' },
   linkParser: 'generic-post-links',
 }

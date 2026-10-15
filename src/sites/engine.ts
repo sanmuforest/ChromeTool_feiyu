@@ -121,7 +121,10 @@ function buildSearchUrl(def: SiteDef, q: string, page: number): string | null {
     case 'query': {
       const base = `https://${host}${search.path ?? '/'}?${search.param}=${query}`
       if (page > 1 && search.pageParam) {
-        return `${base}&${search.pageParam}=${(page - 1) * (search.pageStep ?? 10)}`
+        // 页码 = (page-1) × pageStep + pageBase（2026-10-15 新增 pageBase）：
+        // 偏移量式站点（buondua 的 &start=）保持默认 pageBase=0；页码式站点（如 8se.me 的 &page=2）配 pageBase=1
+        const value = (page - 1) * (search.pageStep ?? 10) + (search.pageBase ?? 0)
+        return `${base}&${search.pageParam}=${value}`
       }
       return base
     }
