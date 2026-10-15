@@ -205,17 +205,22 @@ const IMAGE_HOSTS = [...new Set(SITE_DEFS.flatMap((d) => d.imageHosts ?? []))]
 const IMG_HOST = IMAGE_HOSTS.length > 0 ? new RegExp(IMAGE_HOSTS.map(escapeRegex).join('|'), 'i') : /(?!)/
 
 /** 提取正文容器块（div 深度匹配，从开标签到闭合） */
-function extractContainerBlock(html: string, openTag: RegExp): string {
+/** 提取容器块：从开标签起按**同标签**嵌套深度配对到闭合标签
+ *  tag（2026-10-11 修复）：原先硬编码只数 `<div>`，容器为非 div 标签时（如 ilovexs 的
+ *  `<section class="image-gallery">`）闭合标签不被识别、深度永不归零 → 一直截取到 HTML 末尾，
+ *  把容器之后的内容一并吞入（实测 ilovexs 解析出 56 张，其中 16 张是相关推荐封面） */
+function extractContainerBlock(html: string, openTag: RegExp, tag = 'div'): string {
   const re = new RegExp(openTag.source, openTag.flags.replace('g', ''))
   const m = re.exec(html)
   if (!m) return ''
   let i = m.index + m[0].length
   let depth = 1
-  const scan = /<div[\s>]|<\/div>/g
+  const closeTag = `</${tag}>`
+  const scan = new RegExp(`<${tag}[\\s>]|${closeTag}`, 'g')
   scan.lastIndex = i
   let mm: RegExpExecArray | null
   while ((mm = scan.exec(html)) !== null) {
-    if (mm[0] === '</div>') depth--
+    if (mm[0] === closeTag) depth--
     else depth++
     if (depth === 0) return html.slice(i, mm.index)
   }
@@ -226,7 +231,7 @@ const IMG_EXT = /\.(jpe?g|png|webp|gif|bmp)(\?|$)/i
 
 /** 从正文容器解析图片：收集块内所有图片 URL（a href / img src），去重 */
 export function parseGalleryImages(html: string, baseUrl: string, site: GallerySiteConfig): BuonduaImage[] {
-  const block = extractContainerBlock(html, site.containerOpen)
+  const block = extractContainerBlock(html, site.containerOpen, site.def.container.tag)
   if (!block) return []
   const seen = new Set<string>()
   const urls: string[] = []

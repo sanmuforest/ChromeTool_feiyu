@@ -19,6 +19,11 @@ export const jrants: SiteDef = {
   // maxPagePattern 缺省 = 无标题标记
   imageHosts: ['jrants.com'],
   search: { kind: 'google-sitesearch' },
+  // 相册 URL 形态（2026-10-11 实测）：/2026101206911.html（13 位数字 + .html，并非 8 位日期）
+  // 作用：① 过滤 Google 结果中的分类/标签页 ② 列表浏览解析的相册过滤（listPages 未配 albumPath 时复用）
+  searchAlbumPattern: { source: '^/\\d+\\.html$' },
+  // 列表浏览（2026-10-11 实测）：首页分页为 /page/N（无尾斜杠 → pageKind: path），每页约 20 条
+  listPages: [{ label: '最新', path: '/', pageKind: 'path' }],
   linkParser: 'google-serp',
   scan: { recommended: 'jrants-recommended', others: 'jrants-others' },
   imageCountRule: 'jrants-p',

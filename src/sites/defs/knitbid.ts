@@ -23,13 +23,18 @@ export const knitbid: SiteDef = {
   pagination: { kind: 'page-path-slash' },
   baseUrl: { stripPagePath: 'page-segment' },
   // maxPagePattern 缺省：页面无 Page X/Y 标记（由 followPagesUntilEmpty 兜底）
-  titleStrip: [{ source: '\\s*-\\s*妹を愛する\\s*$' }],
+  // 2026-10-11：实测 /ja/ 页站名为「妹を愛する」，中文页为「爱妹子」
+  // （用户日志中文件夹名仍带「- 爱妹子」）→ 两种站名都剥离
+  titleStrip: [{ source: '\\s*-\\s*(?:妹を愛する|爱妹子)\\s*$' }],
   followPagesUntilEmpty: true,
   // 顺序翻页请求较多（实测一次抓取即触发站点 429 限流）→ 第 2 页起页间等待 1.2s
   throttle: { fromPage: 2, delayMs: 1200 },
   // 站内搜索：/ja/search/?s={q}，分页 /ja/search/page/N/?s={q}（实测均 HTTP 200）
   search: { kind: 'wp-query-path-page', param: 's', path: '/ja/search/', trailingSlash: true },
-  // 结果只保留相册页（/ja/article/{id}/），排除 /ja/type/N/ 等分类页
-  searchAlbumPattern: { source: '^/ja/article/\\d+/?$' },
+  // 结果只保留相册页，排除 /ja/type/N/ 等分类页。
+  // 2026-10-11 实测：站点同时存在 /ja/article/{id}/ 与 /article/{id}/ 两种形态 → 正则放宽为可选 ja 前缀
+  searchAlbumPattern: { source: '^/(?:ja/)?article/\\d+/?$' },
+  // 列表浏览（2026-10-11 实测）：分类页 /ja/type/N/，分页 /ja/type/N/page/M/（带尾斜杠 → pageKind: path-slash）
+  listPages: [{ label: '分类列表', path: '/ja/type/1/', pageKind: 'path-slash' }],
   linkParser: 'generic-post-links',
 }

@@ -68,7 +68,8 @@ export function parseJrantsPostLinks(
 export function extractJrantsFolderName(title: string): string {
   return (
     title
-      .replace(/\s*[-–—]\s*青年美图\s*$/i, '')
+      // 2026-10-11：站点改用繁体「青年美圖」（实测 title 为「… (21P) – 青年美圖」）→ 简繁都匹配
+      .replace(/\s*[-–—]\s*青年美[图圖]\s*$/i, '')
       .replace(/[\\/:*?"<>|\n\r]/g, '_')
       .trim()
       .slice(0, 120) || 'jrants'
