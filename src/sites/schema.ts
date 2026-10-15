@@ -32,6 +32,10 @@ export type PaginationKind =
   | 'path-slash-from-2'
   /** 第 1 页用基址，其后 /page/N/（WP 标准分页；knit.bid） */
   | 'page-path-slash'
+  /** 全页均为 /N.html（含第 1 页；8se.me 的 `2.html` 形态） */
+  | 'html-from-1'
+  /** 第 1 页用基址，其后 /N.html（8se.me 的另一种可能：第 1 页不带 .html） */
+  | 'html-from-2'
   /** 不分页（ilovexs） */
   | 'single'
 
@@ -44,8 +48,9 @@ export interface SitePagination {
 /** 相册基址提取规则（统一去 query/hash；stripPagePath 处理路径式分页） */
 export interface SiteBaseUrl {
   /** none：仅去 query/hash；suffix：去尾部 /N；trailing-slash：去尾部 /N 或 /N/；
-   *  page-segment（2026-10-10）：去尾部 /page/N 或 /page/N/（WP 标准分页） */
-  stripPagePath?: 'none' | 'suffix' | 'trailing-slash' | 'page-segment'
+   *  page-segment（2026-10-10）：去尾部 /page/N 或 /page/N/（WP 标准分页）；
+   *  html（2026-10-11）：去尾部 /N.html（8se.me 分页形态） */
+  stripPagePath?: 'none' | 'suffix' | 'trailing-slash' | 'page-segment' | 'html'
 }
 
 /** 搜索通道声明 */
@@ -121,6 +126,8 @@ export interface SiteDef {
   imageHosts?: string[]
   /** 图片 URL query 修正（如 Photon ?w=640 → ?w=1920） */
   imageQueryFix?: { param: string; value: string }[]
+  /** 缩略图 → 原图（2026-10-11）：按正则替换 URL（如 8se.me 的 `00019_600x0.webp` → `00019.jpg` 原图） */
+  imageThumbFix?: { source: string; flags?: string; replace: string }
   /** 搜索通道；缺省 = 不支持站内搜索 */
   search?: SiteSearch
   /** 搜索基址 host（默认主域；pixibb 用 sexy 子域） */

@@ -48,6 +48,12 @@ function buildPageUrl(def: SiteDef, base: string, page: number): string {
     case 'page-path-slash':
       // WP 标准分页：/page/N/（第 1 页不带 page 段）
       return page <= 1 ? base : `${base.replace(/\/?$/, '/')}page/${page}/`
+    case 'html-from-1':
+      // 全页 /N.html（8se.me 实测形态：/photo/id-xxx/2.html）
+      return `${base.replace(/\/?$/, '/')}${page}.html`
+    case 'html-from-2':
+      // 第 1 页用基址，其后 /N.html
+      return page <= 1 ? base : `${base.replace(/\/?$/, '/')}${page}.html`
     case 'single':
       return base
     default:
@@ -69,6 +75,9 @@ function buildBaseUrl(def: SiteDef, url: string): string {
     } else if (strip === 'page-segment') {
       // WP 标准分页：/page/N/ 或 /page/N → 去掉该段并保留结尾斜杠
       path = u.pathname.replace(/\/page\/\d+\/?$/, '/')
+    } else if (strip === 'html') {
+      // /N.html 分页（8se.me）：去掉尾部 /N.html，保留目录斜杠
+      path = u.pathname.replace(/\/\d+\.html?$/i, '/')
     } else {
       path = u.pathname.replace(/\/\d+\/$/, '').replace(/\/\d+$/, '')
     }
@@ -135,9 +144,17 @@ function buildRewriteUrl(def: SiteDef, url: string): string {
   return out
 }
 
-/** 图片 URL query 修正（CDN 缩放参数放大等） */
+/** 图片 URL 清洗：缩略图还原原图（imageThumbFix）+ CDN 缩放参数修正（imageQueryFix） */
 function buildImageUrlClean(def: SiteDef, url: string): string {
   let out = url
+  const tf = def.imageThumbFix
+  if (tf) {
+    try {
+      out = out.replace(new RegExp(tf.source, tf.flags ?? ''), tf.replace)
+    } catch {
+      // 正则非法时保持原样（单个定义写错不应导致整站抓取失败）
+    }
+  }
   for (const fix of def.imageQueryFix ?? []) {
     out = out.replace(new RegExp(`[?&]${escapeRegex(fix.param)}=\\d+`), `?${fix.param}=${fix.value}`)
   }
@@ -193,7 +210,7 @@ export function compileSite(def: SiteDef): GallerySiteConfig {
   if (def.search) site.searchUrl = (q, page) => buildSearchUrl(def, q, page)
   if (def.searchAlbumPattern) site.searchAlbumPattern = toRegExp(def.searchAlbumPattern)
   if (def.urlRewrite?.length) site.rewriteUrl = (url) => buildRewriteUrl(def, url)
-  if (def.imageQueryFix?.length) site.imageUrlClean = (url) => buildImageUrlClean(def, url)
+  if (def.imageQueryFix?.length || def.imageThumbFix) site.imageUrlClean = (url) => buildImageUrlClean(def, url)
   return site
 }
 
@@ -277,6 +294,12 @@ export function parseGalleryImages(html: string, baseUrl: string, site: GalleryS
   let m: RegExpExecArray | null
   while ((m = re.exec(block)) !== null) {
     collect(m[1])
+  }
+  // 正文图也可能是 CSS 背景（2026-10-11：8se.me 实测 —— 正文用 background-image 渲染，
+  // <img> 里只有站点 logo，导致纯 img 解析在该站永远 0 张）
+  const reStyle = /style="[^"]*url\((['"]?)([^'")]+)\1\)[^"]*"/gi
+  while ((m = reStyle.exec(block)) !== null) {
+    collect(m[2])
   }
   // 站点图片 URL 清洗（CDN 缩放参数放大等）
   const clean = site.imageUrlClean

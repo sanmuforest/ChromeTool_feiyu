@@ -366,6 +366,7 @@ async function extractProbeData(): Promise<PageProbeResult> {
   out.imgAttrKeys = Array.from(attrKeys).slice(0, 24)
   const bgSeen = new Set<string>()
   const bgImages: string[] = []
+  const bgChains: string[][] = []
   for (const el of Array.from(document.querySelectorAll<HTMLElement>('[style]'))) {
     const m = (el.getAttribute('style') || '').match(/url\((['"]?)([^'")]+)\1\)/i)
     if (!m) continue
@@ -373,9 +374,19 @@ async function extractProbeData(): Promise<PageProbeResult> {
     if (!/^https?:/i.test(u) || bgSeen.has(u)) continue
     bgSeen.add(u)
     bgImages.push(u)
+    // 该背景图元素自身起向上 6 层的 tag.class 链（正文容器判据）
+    const chain: string[] = []
+    let p: HTMLElement | null = el
+    for (let d = 0; d < 6 && p; d++) {
+      const cls = typeof p.className === 'string' && p.className.trim() ? `.${p.className.trim().replace(/\s+/g, '.')}` : ''
+      chain.push(`${p.tagName.toLowerCase()}${cls}`)
+      p = p.parentElement
+    }
+    bgChains.push(chain)
     if (bgImages.length >= 20) break
   }
   out.bgImages = bgImages
+  out.bgChains = bgChains
   out.iframeSrcs = Array.from(document.querySelectorAll('iframe[src]'))
     .map((f) => (f as HTMLIFrameElement).src)
     .slice(0, 10)

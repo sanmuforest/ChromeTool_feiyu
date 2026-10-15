@@ -254,6 +254,8 @@ export interface PageProbeResult {
   imgAttrKeys?: string[]
   /** 内联 `background-image` 的 URL 样本（正文图可能用 CSS 背景而非 img 元素） */
   bgImages?: string[]
+  /** 与 `bgImages` 同序：该背景图元素**自身起**向上 6 层的 `tag.class` 链（正文容器判据） */
+  bgChains?: string[][]
   /** iframe src 样本（正文可能嵌在 iframe 内） */
   iframeSrcs?: string[]
 }
