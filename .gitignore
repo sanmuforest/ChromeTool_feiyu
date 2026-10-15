@@ -8,5 +8,13 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# npm ���ػ���
+# npm 本地缓存
 .npm-cache/
+
+# 构建产物（2026-10-11 起忽略）：Chrome 直接加载 dist/，但入库会产生大量构建 diff。
+# 拉取仓库后请执行 npm install && npm run build 生成。
+dist/
+
+# 遗留设计稿 / 临时图片目录（2026-10-11 起忽略）：内含中文文件名与随手保存的图片素材，非工程资源。
+# 工程图标在 icons/（manifest.json 的 icons 字段引用，必须保留）。
+icon/
