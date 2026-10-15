@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "肥鱼抓兔-改",
-  "version": "0.2.39",
+  "version": "0.2.40",
   "description": "网页图片抓取：解析、尺寸筛选、预览选择、批量/打包下载、多页图站全子页抓取与聚合搜索（肥鱼抓兔-改）",
   "permissions": [
     "storage",

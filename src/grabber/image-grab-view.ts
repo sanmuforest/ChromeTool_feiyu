@@ -61,6 +61,32 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
   /** 缩略图加载失败计数（仅用于日志限流） */
   let thumbFailCount = 0
 
+  // ---------- 取图熔断（2026-10-15）----------
+  // 动机：8se.me 图床对所有取图通道都不可用（页面内 fetch 被 CORS 拦、后台 fetch 403 —— 实测日志），
+  // 大相册（实测 720 张）会让每张图都走完「重试 2 次 + blob 兜底」约 4 次失败请求 → 近 3000 次 → 页面卡死。
+  // 这里按图床 host 熔断：连续失败达阈值后，后续图直接标记失败，不再重试/兜底（正常站点不会触发）。
+  const FAIL_CIRCUIT_LIMIT = 8
+  const hostFailStreak = new Map<string, number>()
+  function hostOf(url: string): string {
+    try {
+      return new URL(url).hostname
+    } catch {
+      return ''
+    }
+  }
+  function isCircuitOpen(url: string): boolean {
+    const h = hostOf(url)
+    return !!h && (hostFailStreak.get(h) ?? 0) >= FAIL_CIRCUIT_LIMIT
+  }
+  function noteFail(url: string): void {
+    const h = hostOf(url)
+    if (h) hostFailStreak.set(h, (hostFailStreak.get(h) ?? 0) + 1)
+  }
+  function noteOk(url: string): void {
+    const h = hostOf(url)
+    if (h) hostFailStreak.delete(h)
+  }
+
   /** 图片直接加载失败的兜底（2026-10-08）：经 background 取字节转 blob 显示
    *  背景：kaizty 等站的图片 URL 可正常取得字节（外部验证 200），但扩展页 <img> 加载/解码失败
    *  → 用本地 blob 绕过加载限制；同时记录体积与文件头，用于判断是否为格式或截断问题 */
@@ -414,6 +440,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
         sizeTag.className = 'size-tag unknown'
         sizeTag.textContent = '加载失败（点击重试）'
         sizeTag.style.cursor = 'pointer'
+        noteFail(img.url)
         thumbFailCount++
         if (thumbFailCount <= MAX_THUMB_FAIL_LOGS) {
           logger.warn('view', '图片加载失败（重试与兜底均失败）', { url: img.url, failedTotal: thumbFailCount })
@@ -436,6 +463,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       // 2) 尺寸补齐：多页图站的图片由后台解析（只给 URL，无宽高），原本恒显示「尺寸未知」；
       //    图片加载后可直接读取真实像素尺寸，零额外请求即可显示尺寸并修正统计
       thumb.addEventListener('load', () => {
+        noteOk(img.url)
         let backfilled = false
         if ((!img.width || !img.height) && thumb.naturalWidth > 0 && thumb.naturalHeight > 0) {
           img.width = thumb.naturalWidth
@@ -448,6 +476,12 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
         if (backfilled) scheduleBackfillRefresh()
       })
       thumb.addEventListener('error', () => {
+        // 熔断（2026-10-15）：该图床连续失败已达阈值（如 8se.me 取图通道全不可用）→
+        // 不再重试与兜底，直接标记失败，避免大相册把页面拖死
+        if (isCircuitOpen(img.url)) {
+          markFailed()
+          return
+        }
         // ① 延迟重试：限流多为暂时性，错峰后重试常可成功
         if (attempt < MAX_RETRY) {
           attempt++
