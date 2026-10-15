@@ -81,8 +81,12 @@ function buildBaseUrl(def: SiteDef, url: string): string {
       // WP 标准分页：/page/N/ 或 /page/N → 去掉该段并保留结尾斜杠
       path = u.pathname.replace(/\/page\/\d+\/?$/, '/')
     } else if (strip === 'html') {
-      // /N.html 分页（8se.me）：去掉尾部 /N.html，保留目录斜杠
-      path = u.pathname.replace(/\/\d+\.html?$/i, '/')
+      // /N.html 分页（8se.me）：去掉尾部 /N.html；并把「无斜杠的 xxx.html」也规范化为目录形式。
+      // 2026-10-15 实测：…/photo/id-xxx.html 与 …/photo/id-xxx/2.html 指向**同一相册**，
+      // 必须归一到同一基址 …/photo/id-xxx/，否则前者会被当成单页而只抓到第 1 页
+      let p = u.pathname.replace(/\/\d+\.html?$/i, '/')
+      if (/\.html?$/i.test(p)) p = p.replace(/\.html?$/i, '/')
+      path = p
     } else {
       path = u.pathname.replace(/\/\d+\/$/, '').replace(/\/\d+$/, '')
     }
@@ -92,9 +96,17 @@ function buildBaseUrl(def: SiteDef, url: string): string {
   }
 }
 
-/** 标题清理：按序 replace + trim */
+/** 标题清理：HTML 实体解码 → 按序 replace → trim
+ *  2026-10-15：后台从 HTML `<title>` 取标题时带实体（如 `瑄瑄&amp;依依`），不解码会直接进文件夹名；
+ *  content script 的 document.title 已是解码后的，两者需一致 */
 function buildCleanTitle(def: SiteDef, title: string): string {
   let out = title
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&nbsp;/gi, ' ')
   for (const spec of def.titleStrip ?? []) out = out.replace(toRegExp(spec), '')
   return out.trim()
 }
