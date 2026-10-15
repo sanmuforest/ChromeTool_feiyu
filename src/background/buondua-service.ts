@@ -323,14 +323,29 @@ export class BuonduaService {
       throw new Error(`暂不支持该站点（${url}）`)
     }
     const base = site.baseUrlOf(url)
-    // 2026-10-15 修复：分页为 {N}.html 的站点（如 8se.me）基址本身不存在（实测 404），
-    // 但其「第 1 页」是 {base}1.html → 仅该形态改用第一页 URL；
-    // 其余分页方式（query / path-from-2 / path-slash-from-2 / page-path-slash / single）继续抓 base，行为零变化
+    // 2026-10-15：分页为 {N}.html 的站点（8se.me）第 1 页地址形态在同一站内并不统一 ——
+    // 实测「…/id-xxx/1.html」与目录本身「…/id-xxx/」都可能有效（用户实测两轮结论不一致）。
+    // 因此不再猜：先试第一页 URL，失败（404 等）则回退基址；两者都失败才抛出。
     const firstPageUrl =
       site.def.pagination.kind === 'html-from-1' || site.def.pagination.kind === 'html-auto'
         ? site.pageUrl(base, 1)
         : base
-    const firstHtml = await getHtml(firstPageUrl)
+    let firstHtml: string
+    if (firstPageUrl !== base) {
+      try {
+        firstHtml = await getHtml(firstPageUrl)
+      } catch (err) {
+        logger.warn('buondua', '第一页地址抓取失败，回退基址重试', {
+          site: site.id,
+          firstPageUrl,
+          base,
+          error: String(err),
+        })
+        firstHtml = await getHtml(base)
+      }
+    } else {
+      firstHtml = await getHtml(base)
+    }
     const title = parseGalleryPageTitle(firstHtml, site)
     // 大相册分页导航只显示部分页码：按标题 Page 标记的最大页数完整遍历
     const detectedMax = parseGalleryMaxPage(firstHtml, site)
