@@ -256,7 +256,21 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           `og:image: ${p.ogImage || '无'}\n` +
           `图片样本(${p.imgSrcs.length}):\n  ${p.imgSrcs.slice(0, 8).join('\n  ')}\n` +
           `容器候选: ${p.containerCandidates.map((c) => `${c.cls}(${c.n})`).join(' ')}\n` +
-          `分页(${p.pagination.length}):\n  ${p.pagination.map((pg) => `${pg.href} [${pg.text}]`).join('\n  ') || '（无）'}`
+          `分页(${p.pagination.length}):\n  ${p.pagination.map((pg) => `${pg.href} [${pg.text}]`).join('\n  ') || '（无）'}` +
+          // 2026-10-11 增强：按图床分组（正文容器与图床的判据）+ 任意形态分页 + lazy 检测
+          (p.imageGroups && p.imageGroups.length
+            ? '\n\n== 按图床分组（正文容器判据）==\n' +
+              p.imageGroups
+                .map(
+                  (g) =>
+                    `${g.host} ×${g.count}\n  样本:\n    ${g.samples.slice(0, 3).join('\n    ')}\n  父级链:\n    ${g.chains
+                      .map((c) => c.join(' < '))
+                      .join('\n    ')}`,
+                )
+                .join('\n')
+            : '') +
+          (p.pageLinks && p.pageLinks.length ? `\n\n== 疑似分页链接（任意形态）==\n  ${p.pageLinks.slice(0, 12).join('\n  ')}` : '') +
+          (p.lazyCount ? `\n\ndata-src（lazy）数量: ${p.lazyCount}` : '')
         logger.info('view', '页面结构探测完成', {
           url,
           imgs: p.imgSrcs.length,

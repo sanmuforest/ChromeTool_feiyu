@@ -236,6 +236,20 @@ export interface PageProbeResult {
   containerCandidates: { cls: string; n: number }[]
   /** 分页链接样本 */
   pagination: { href: string; text: string }[]
+  /** 按图片 host 分组（2026-10-11 新增，新站适配主力依据）：
+   *  旧字段把站点 logo/图标与正文图混在一起（样本常被 logo 占满），且容器候选只统计「有 class 的父元素」，
+   *  遇到正文图父级无 class 或分页为 `N.html` 形态时会完全看不出结构 */
+  imageGroups?: {
+    host: string
+    count: number
+    samples: string[]
+    /** 代表图向上 5 层的 `tag.class` 链（最能指示正文容器） */
+    chains: string[][]
+  }[]
+  /** 疑似分页链接（2026-10-11 新增）：覆盖 `N.html` / `?page=N` / `/page/N` 等任意形态 */
+  pageLinks?: string[]
+  /** `img[data-src]` 数量（判断 lazy load：真图在 data-src 而非 src） */
+  lazyCount?: number
 }
 
 /** 通用发送：扩展页面 → background */

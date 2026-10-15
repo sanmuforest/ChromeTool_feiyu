@@ -281,6 +281,53 @@ function extractProbeData(): PageProbeResult {
       if (out.pagination.length >= 10) break
     }
   }
+  // ---- 2026-10-11 增强：按图床分组（正文容器与图床的判据） ----
+  // 动机（8se.me 实测）：旧输出里 32 张图样本前 8 个全是站点 logo，容器候选清一色是菜单/框架 class，
+  // 完全看不出正文容器；而按 host 分组后「img.xchina.io ×14」与其父级 class 链会直接暴露正文结构
+  const groups = new Map<string, { host: string; count: number; samples: string[]; chains: string[][] }>()
+  for (const img of Array.from(document.querySelectorAll('img'))) {
+    const s = img.getAttribute('data-src') || img.getAttribute('data-original') || img.src || ''
+    if (!s || !/^https?:/i.test(s)) continue
+    let host = ''
+    try {
+      host = new URL(s).hostname
+    } catch {
+      continue
+    }
+    let g = groups.get(host)
+    if (!g) {
+      g = { host, count: 0, samples: [], chains: [] }
+      groups.set(host, g)
+    }
+    g.count++
+    if (g.samples.length < 5) g.samples.push(s)
+    if (g.chains.length < 3) {
+      const chain: string[] = []
+      let p: HTMLElement | null = img.parentElement
+      for (let d = 0; d < 5 && p; d++) {
+        const cls = typeof p.className === 'string' && p.className.trim() ? `.${p.className.trim().replace(/\s+/g, '.')}` : ''
+        chain.push(`${p.tagName.toLowerCase()}${cls}`)
+        p = p.parentElement
+      }
+      g.chains.push(chain)
+    }
+  }
+  out.imageGroups = Array.from(groups.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8)
+  // ---- 2026-10-11 增强：任意形态的分页链接（旧规则漏掉 `N.html`） ----
+  const linkSeen = new Set<string>()
+  const pageLinks: string[] = []
+  for (const a of Array.from(document.querySelectorAll('a[href]'))) {
+    const href = (a as HTMLAnchorElement).href
+    if (!/\d+\.html?($|[?#])|[?&](?:page|paged|p)=\d+|\/page\/\d+/i.test(href)) continue
+    if (linkSeen.has(href)) continue
+    linkSeen.add(href)
+    pageLinks.push(href)
+    if (pageLinks.length >= 20) break
+  }
+  out.pageLinks = pageLinks
+  out.lazyCount = document.querySelectorAll('img[data-src]').length
   return out
 }
 
