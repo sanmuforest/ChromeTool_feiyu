@@ -6,7 +6,12 @@
 // - **正文图用 CSS `background-image` 渲染**（`<img>` 里只有站点 logo）→ 依赖引擎的 `style url(...)` 扫描
 // - 缩略图 `img.xchina.io/photos/{id}/000NN_600x0.webp` → 原图 `img.xchina.io/photos/{id}/000NN.jpg`（imageThumbFix）
 // - 推荐位在 `upload.xchina.io` / `xchina.click`（落在 `z-fixed-zones` 固定层）→ 用 imageOnlyHosts 排除
-// - 抓取与取图均须走源页注入通道（world:'MAIN' 页面上下文 fetch，带 Cookie）→ 从 8se.me 页面打开插件
+// - **取图通道（2026-10-15 实测结论）**：
+//   · 缩略图显示与「打包下载」都需要**读取字节** → 三条通道全不可用（扩展页 img 被服务器拒 /
+//     页面内 fetch 被 CORS 拦（TypeError: Failed to fetch）/ 后台 fetch 403）
+//     → 网格缩略图显示「加载失败」、打包取不到字节，均为预期现象
+//   · 「下载选中」走 chrome.downloads.download（浏览器一级请求，不受 CORS 且带正常 Cookie）
+//     → **实测可用** ✓ 该站请用「下载选中」，不要用「打包下载」
 import type { SiteDef } from '../schema'
 
 export const se8: SiteDef = {
