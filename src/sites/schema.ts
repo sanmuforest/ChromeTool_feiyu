@@ -128,6 +128,10 @@ export interface SiteDef {
   imageQueryFix?: { param: string; value: string }[]
   /** 缩略图 → 原图（2026-10-11）：按正则替换 URL（如 8se.me 的 `00019_600x0.webp` → `00019.jpg` 原图） */
   imageThumbFix?: { source: string; flags?: string; replace: string }
+  /** 只保留这些图床的图片（2026-10-11）：用于正文图床与站点/推荐位不同的站
+   *  （8se.me 正文图在 `img.xchina.io`，推荐位在 `upload.xchina.io` / `xchina.click`）——
+   *  配合宽松容器即可精确取得正文图，无需依赖容器 class */
+  imageOnlyHosts?: string[]
   /** 搜索通道；缺省 = 不支持站内搜索 */
   search?: SiteSearch
   /** 搜索基址 host（默认主域；pixibb 用 sexy 子域） */

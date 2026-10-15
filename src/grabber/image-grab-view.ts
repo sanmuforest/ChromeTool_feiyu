@@ -712,8 +712,27 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
               blob = new Blob([bytes])
             }
           } else {
-            const resp = await fetch(item.url)
-            if (resp.ok) blob = await resp.blob()
+            // 2026-10-11：先试扩展页直连；失败（如 8se.me 图床对服务端请求 403）则回退源页注入取字节，
+            // 否则反爬站点的打包会静默产出 0 字节文件
+            try {
+              const resp = await fetch(item.url)
+              if (resp.ok) blob = await resp.blob()
+            } catch {
+              blob = null
+            }
+            if (!blob) {
+              const res2 = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
+                type: 'GRAB_FETCH_IMAGE',
+                srcTabId: options.srcTabId,
+                url: item.url,
+              })
+              if (res2.ok && res2.data) {
+                const bin = atob(res2.data)
+                const bytes = new Uint8Array(bin.length)
+                for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+                blob = new Blob([bytes])
+              }
+            }
           }
           if (blob) {
             zip.file(item.filename, blob)

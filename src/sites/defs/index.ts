@@ -16,6 +16,7 @@ import { pixibb } from './pixibb'
 import { phimvuspot } from './phimvuspot'
 import { ilovexs } from './ilovexs'
 import { knitbid } from './knitbid'
+import { se8 } from './se8'
 
 /** 全部站点定义（顺序敏感，勿随意调整） */
 export const SITE_DEFS: SiteDef[] = [
@@ -28,4 +29,5 @@ export const SITE_DEFS: SiteDef[] = [
   phimvuspot,
   ilovexs,
   knitbid,
+  se8,
 ]

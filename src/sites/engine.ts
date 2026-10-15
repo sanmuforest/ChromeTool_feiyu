@@ -197,9 +197,11 @@ export function compileSite(def: SiteDef): GallerySiteConfig {
   const site: GallerySiteConfig = {
     id: def.id,
     hosts: def.endpoints.map((e) => e.host),
-    containerOpen: new RegExp(
-      `<${def.container.tag}[^>]*class="[^"]*${escapeRegex(def.container.className)}[^"]*"[^>]*>`,
-    ),
+    // className 为空时匹配该标签的任意出现（2026-10-11）：配合 imageOnlyHosts 使用整页容器，
+    // 适用于「正文图床独立、但容器 class 未知或不稳定」的站点（如 8se.me 正文为 CSS 背景图）
+    containerOpen: def.container.className
+      ? new RegExp(`<${def.container.tag}[^>]*class="[^"]*${escapeRegex(def.container.className)}[^"]*"[^>]*>`)
+      : new RegExp(`<${def.container.tag}(?:\\s[^>]*)?>`, 'i'),
     pagePattern: def.maxPagePattern ? toRegExp(def.maxPagePattern) : /(?!)0/,
     pageUrl: (base, page) => buildPageUrl(def, base, page),
     baseUrlOf: (url) => buildBaseUrl(def, url),
@@ -277,6 +279,9 @@ export function parseGalleryImages(html: string, baseUrl: string, site: GalleryS
       return
     }
     if (!IMG_EXT.test(u) && !IMG_HOST.test(host)) return
+    // 只保留指定图床（2026-10-11）：正文图床与站点自身/推荐位不同时，用它精确过滤
+    const onlyHosts = site.def.imageOnlyHosts
+    if (onlyHosts?.length && !onlyHosts.some((h) => host === h || host.endsWith(`.${h}`))) return
     // 页面链接（.html 等）非图片：排除（jrants 的 page-links 分页链接在正文容器内）
     if (/\.html?($|[\/?#])/i.test(u)) return
     // 数字路径分页链接（/N/ 或 /N 结尾，无扩展名）非图片：排除（pixibb 路径式分页在正文容器内）
