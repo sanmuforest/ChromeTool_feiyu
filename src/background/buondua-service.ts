@@ -323,7 +323,11 @@ export class BuonduaService {
       throw new Error(`暂不支持该站点（${url}）`)
     }
     const base = site.baseUrlOf(url)
-    const firstHtml = await getHtml(base)
+    // 2026-10-15 修复：分页为 {N}.html 的站点（如 8se.me）基址本身不存在（实测 404），
+    // 但其「第 1 页」是 {base}1.html → 仅该形态改用第一页 URL；
+    // 其余分页方式（query / path-from-2 / path-slash-from-2 / page-path-slash / single）继续抓 base，行为零变化
+    const firstPageUrl = site.def.pagination.kind === 'html-from-1' ? site.pageUrl(base, 1) : base
+    const firstHtml = await getHtml(firstPageUrl)
     const title = parseGalleryPageTitle(firstHtml, site)
     // 大相册分页导航只显示部分页码：按标题 Page 标记的最大页数完整遍历
     const detectedMax = parseGalleryMaxPage(firstHtml, site)
