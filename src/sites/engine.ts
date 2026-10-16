@@ -299,6 +299,8 @@ export function parseGalleryImages(html: string, baseUrl: string, site: GalleryS
       return
     }
     if (!IMG_EXT.test(u) && !IMG_HOST.test(host)) return
+    // 占位图过滤（2026-10-15）：懒加载占位图会混入正文（实测 xiuzhai5 的 /img/load.gif）
+    if (/\/(?:load|loading|placeholder|blank|spacer|pixel|1x1|lazyload|grey)\.(?:gif|png|jpe?g|webp)$/i.test(u)) return
     // 只保留指定图床（2026-10-11）：正文图床与站点自身/推荐位不同时，用它精确过滤
     const onlyHosts = site.def.imageOnlyHosts
     if (onlyHosts?.length && !onlyHosts.some((h) => host === h || host.endsWith(`.${h}`))) return
@@ -324,8 +326,10 @@ export function parseGalleryImages(html: string, baseUrl: string, site: GalleryS
       collect(m[1])
     }
   } else {
-    // 同时匹配绝对与相对 URL（相对路径在 collect 内用页面基址解析为绝对 URL）
-    const re = /(?:href|src)="([^"]+)"/g
+    // 同时匹配绝对与相对 URL（相对路径在 collect 内用页面基址解析为绝对 URL）。
+    // 2026-10-15：加入 data-src —— 大量站点用「src=占位图 + data-src=真图」的懒加载写法
+    // （实测 xiuzhai5：src=/img/load.gif、data-src=真图；只扫 src 会漏掉大半图片）
+    const re = /(?:href|src|data-src)="([^"]+)"/g
     while ((m = re.exec(block)) !== null) {
       collect(m[1])
     }
