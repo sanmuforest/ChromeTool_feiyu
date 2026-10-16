@@ -644,7 +644,7 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
     // 2026-10-07 调整：jrants 站内搜索被反爬（403）→ 移入 Google 组并取消默认勾选；
     // rrwsh（域名已被他人站占用）取消默认勾选，仍可在列表中手动勾选
     // 2026-10-11：cangcuc 域名长期失效，用户决定放弃 → 定义已归档并从站点列表移除
-    const googleGroupIds = ['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs', 'pixibb', 'jrants', 'xiuzhai5']
+    const googleGroupIds = ['hitxhot', 'kaizty', 'phimvuspot', 'ilovexs', 'pixibb', 'jrants']
     const defaultChecked = new Set(['buondua'])
     const googleChannel = new Set(googleGroupIds)
     const googleAllCheck = panel.querySelector('#bd-google-all') as HTMLInputElement
