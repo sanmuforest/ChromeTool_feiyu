@@ -670,8 +670,8 @@ export function initBuonduaView(root: HTMLElement, srcTabId: number, sourceUrl?:
           )
           .join('')
       }
-      // 站内搜索类：buondua/rrwsh/knitbid/se8 + imgbb（无搜索灰显，保留原列表提示）；jrants 已移入 Google 组
-      renderGroup(['buondua', 'rrwsh', 'knitbid', 'se8', 'imgbb'], 'bd-search-sites-site')
+      // 站内搜索类：buondua/rrwsh/knitbid/se8/jliji + imgbb（无搜索灰显，保留原列表提示）；jrants 已移入 Google 组
+      renderGroup(['buondua', 'rrwsh', 'knitbid', 'se8', 'jliji', 'imgbb'], 'bd-search-sites-site')
       // Google 通道类：仅 Google 可搜
       renderGroup(googleGroupIds, 'bd-search-sites-google')
       // 站点名点击 → 打开网站首页（FP-014 修复 6：点击名字跳首页，checkbox 勾选不受影响）

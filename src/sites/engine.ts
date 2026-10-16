@@ -314,17 +314,27 @@ export function parseGalleryImages(html: string, baseUrl: string, site: GalleryS
     seen.add(u)
     urls.push(u)
   }
-  // 同时匹配绝对与相对 URL（相对路径在 collect 内用页面基址解析为绝对 URL）
-  const re = /(?:href|src)="([^"]+)"/g
   let m: RegExpExecArray | null
-  while ((m = re.exec(block)) !== null) {
-    collect(m[1])
-  }
-  // 正文图也可能是 CSS 背景（2026-10-11：8se.me 实测 —— 正文用 background-image 渲染，
-  // <img> 里只有站点 logo，导致纯 img 解析在该站永远 0 张）
-  const reStyle = /style="[^"]*url\((['"]?)([^'")]+)\1\)[^"]*"/gi
-  while ((m = reStyle.exec(block)) !== null) {
-    collect(m[2])
+  const imgAttr = site.def.imageAttr
+  if (imgAttr) {
+    // 站点声明了图片属性（2026-10-15）：如 jliji.com 的真图在 data-full、src 只是缩略图。
+    // 声明后只扫该属性，避免把缩略图与原图同时收进来
+    const reAttr = new RegExp(`${escapeRegex(imgAttr)}="([^"]+)"`, 'gi')
+    while ((m = reAttr.exec(block)) !== null) {
+      collect(m[1])
+    }
+  } else {
+    // 同时匹配绝对与相对 URL（相对路径在 collect 内用页面基址解析为绝对 URL）
+    const re = /(?:href|src)="([^"]+)"/g
+    while ((m = re.exec(block)) !== null) {
+      collect(m[1])
+    }
+    // 正文图也可能是 CSS 背景（2026-10-11：8se.me 实测 —— 正文用 background-image 渲染，
+    // <img> 里只有站点 logo，导致纯 img 解析在该站永远 0 张）
+    const reStyle = /style="[^"]*url\((['"]?)([^'")]+)\1\)[^"]*"/gi
+    while ((m = reStyle.exec(block)) !== null) {
+      collect(m[2])
+    }
   }
   // 站点图片 URL 清洗（CDN 缩放参数放大等）
   const clean = site.imageUrlClean

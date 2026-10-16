@@ -129,6 +129,9 @@ export interface SiteDef {
   imageHosts?: string[]
   /** 图片 URL query 修正（如 Photon ?w=640 → ?w=1920） */
   imageQueryFix?: { param: string; value: string }[]
+  /** 图片 URL 所在属性（2026-10-15）：某些站的真图不在 `src` 而在 `data-*` 属性
+   *  （实例：jliji.com 的 `data-full` = 原图、`src` = 缩略图）→ 声明后引擎只扫该属性 */
+  imageAttr?: string
   /** 缩略图 → 原图（2026-10-11）：按正则替换 URL（如 8se.me 的 `00019_600x0.webp` → `00019.jpg` 原图） */
   imageThumbFix?: { source: string; flags?: string; replace: string }
   /** 只保留这些图床的图片（2026-10-11）：用于正文图床与站点/推荐位不同的站
