@@ -127,6 +127,10 @@ export interface SiteDef {
   maxPagePattern?: RegexSpec
   /** 标题清理：按序 replace（正则源），最后统一 trim */
   titleStrip?: RegexSpec[]
+  /** 标题唯一后缀（2026-10-17）：从页面 HTML 额外提取一个标识（捕获组 1），拼到标题尾部。
+   *  用于同名相册（se8 多本都叫「一月 - PANS - 中國工作室」）——把 Vol. 1508 补进文件夹名/文件名，
+   *  避免打包 ZIP 与解压后文件重名 */
+  titleSuffixPattern?: RegexSpec
   /** 本站图床域名（与其它站合并为「无扩展名图片」的判定白名单） */
   imageHosts?: string[]
   /** 图片 URL query 修正（如 Photon ?w=640 → ?w=1920） */
@@ -140,6 +144,10 @@ export interface SiteDef {
    *  （8se.me 正文图在 `img.xchina.io`，推荐位在 `upload.xchina.io` / `xchina.click`）——
    *  配合宽松容器即可精确取得正文图，无需依赖容器 class */
   imageOnlyHosts?: string[]
+  /** 图片路径过滤（2026-10-17）：只保留 pathname 匹配该正则的图片。
+   *  用于「同域混入非相册图」的站点——如 xiuren.org 的正文容器内还有下载按钮 gif
+   *  和广告图，仅靠域名过滤无法剔除 */
+  imagePathPattern?: RegexSpec
   /** 搜索通道；缺省 = 不支持站内搜索 */
   search?: SiteSearch
   /** 搜索基址 host（默认主域；pixibb 用 sexy 子域） */

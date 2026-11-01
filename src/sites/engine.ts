@@ -98,8 +98,14 @@ function buildBaseUrl(def: SiteDef, url: string): string {
 
 /** 标题清理：HTML 实体解码 → 按序 replace → trim
  *  2026-10-15：后台从 HTML `<title>` 取标题时带实体（如 `瑄瑄&amp;依依`），不解码会直接进文件夹名；
- *  content script 的 document.title 已是解码后的，两者需一致 */
+ *  content script 的 document.title 已是解码后的，两者需一致
+ *  2026-11-01：补**数字实体**（`&#8211;` = –）—— 实测 misskon 的标题用 `&#8211; Page 2 &#8211; MissKon.com`，
+ *  不解析数字实体时 titleStrip 里的 `[-–—]` 匹配不到，标题清理直接失效 */
 function buildCleanTitle(def: SiteDef, title: string): string {
+  const decodeCp = (raw: string, radix: number, whole: string): string => {
+    const cp = parseInt(raw, radix)
+    return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : whole
+  }
   let out = title
     .replace(/&amp;/gi, '&')
     .replace(/&lt;/gi, '<')
@@ -107,6 +113,8 @@ function buildCleanTitle(def: SiteDef, title: string): string {
     .replace(/&quot;/gi, '"')
     .replace(/&#0*39;|&apos;/gi, "'")
     .replace(/&nbsp;/gi, ' ')
+    .replace(/&#x([0-9a-f]+);/gi, (whole, hex: string) => decodeCp(hex, 16, whole))
+    .replace(/&#(\d+);/g, (whole, dec: string) => decodeCp(dec, 10, whole))
   for (const spec of def.titleStrip ?? []) out = out.replace(toRegExp(spec), '')
   return out.trim()
 }
@@ -304,6 +312,17 @@ export function parseGalleryImages(html: string, baseUrl: string, site: GalleryS
     // 只保留指定图床（2026-10-11）：正文图床与站点自身/推荐位不同时，用它精确过滤
     const onlyHosts = site.def.imageOnlyHosts
     if (onlyHosts?.length && !onlyHosts.some((h) => host === h || host.endsWith(`.${h}`))) return
+    // 图片路径过滤（2026-10-17）：同域混入下载按钮/广告图时，只保留路径匹配的图
+    const pathPattern = site.def.imagePathPattern
+    if (pathPattern) {
+      let pathname = ''
+      try {
+        pathname = new URL(u).pathname
+      } catch {
+        return
+      }
+      if (!toRegExp(pathPattern).test(pathname)) return
+    }
     // 页面链接（.html 等）非图片：排除（jrants 的 page-links 分页链接在正文容器内）
     if (/\.html?($|[\/?#])/i.test(u)) return
     // 数字路径分页链接（/N/ 或 /N 结尾，无扩展名）非图片：排除（pixibb 路径式分页在正文容器内）
@@ -351,7 +370,10 @@ export function parseGalleryImages(html: string, baseUrl: string, site: GalleryS
       filename = finalUrl.split('/').pop() || ''
     }
     filename = filename.replace(/[\\/:*?"<>|]/g, '_')
-    return { url: finalUrl, filename }
+    // 2026-10-17：imageThumbFix 把预览图还原成原图时，保留预览 URL 作为展示缩略图。
+    // 网格只加载这个 600px 级预览，下载/打包仍用 url（原图），避免「显示原图导致全屏解码卡顿」。
+    const thumbUrl = finalUrl !== url ? url : undefined
+    return { url: finalUrl, filename, thumbUrl }
   })
 }
 
@@ -408,5 +430,13 @@ export function parseGalleryPageTitle(html: string, site: GallerySiteConfig): st
     const h2s = [...html.matchAll(/<h2[^>]*>([^<]{16,})<\/h2>/g)]
     if (h2s.length > 0) raw = h2s[0][1].trim()
   }
-  return site.cleanTitle(raw)
+  let title = site.cleanTitle(raw)
+  // 2026-10-17：从页面额外标记补唯一后缀（se8 的 Vol. 1508），避免同名相册的文件夹/ZIP/文件名冲突
+  const suffixSpec = site.def.titleSuffixPattern
+  if (suffixSpec && title) {
+    const m = html.match(toRegExp(suffixSpec))
+    const suffix = m?.[1]?.trim()
+    if (suffix && !title.includes(suffix)) title = `${title} (${suffix})`
+  }
+  return title
 }

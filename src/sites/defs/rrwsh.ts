@@ -14,8 +14,13 @@ export const rrwsh: SiteDef = {
   // 原 4KHD 图集站不在该域，解析器依赖的 li.wp-block-post 结构也已消失 → 暂不默认勾选（避免聚合搜索白跑）
   defaultChecked: false,
   folderTag: 'buondua',
+  // 2026-10-15：实测 hfjsg.ssuu.uk 是**同一 4KHD 模板的可用镜像**
+  // （页面 title 含「4KHD」、正文容器同为 div.entry-content、单页无分页）
+  // 而 rrwsh.uuss.uk 已被「豆豆」视频站占用、4khd.com 被反爬网关拦截 → primary 改为实测可用的 hfjsg.ssuu.uk
   endpoints: [
-    { host: 'rrwsh.uuss.uk', role: 'primary' },
+    { host: 'hfjsg.ssuu.uk', role: 'primary' },
+    { host: 'ssuu.uk', role: 'mirror' },
+    { host: 'rrwsh.uuss.uk', role: 'mirror' },
     { host: '4khd.com', role: 'mirror' },
     { host: 'iftye.uuss.uk', role: 'mirror' },
   ],

@@ -112,6 +112,55 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       return null
     }
   }
+  // ---------- 原图尺寸异步探测（2026-10-17）----------
+  // 网格显示 thumbUrl（预览图），拿不到原图尺寸；对进入视口的图异步加载原图一次，
+  // 成功读 naturalWidth/Height 回填，失败保持「尺寸未知」。并发 2，失败不重试，避免重新引入卡顿。
+  const PROBE_CONCURRENCY = 2
+  const PROBE_TIMEOUT_MS = 15000
+  const probeQueue: { img: GrabbedImage; el: HTMLImageElement }[] = []
+  const probedUrls = new Set<string>()
+  let probeActive = 0
+  const restoreTagMap = new WeakMap<HTMLImageElement, () => void>()
+  const thumbImgMap = new WeakMap<HTMLImageElement, GrabbedImage>()
+
+  function enqueueSizeProbe(img: GrabbedImage, el: HTMLImageElement): void {
+    if (img.width && img.height) return
+    if (probedUrls.has(img.url)) return
+    probedUrls.add(img.url)
+    probeQueue.push({ img, el })
+    runProbeQueue()
+  }
+
+  function runProbeQueue(): void {
+    while (probeActive < PROBE_CONCURRENCY && probeQueue.length > 0) {
+      const { img, el } = probeQueue.shift()!
+      probeActive++
+      const probe = new Image()
+      probe.referrerPolicy = 'no-referrer'
+      probe.decoding = 'async'
+      let settled = false
+      const finish = (ok: boolean): void => {
+        if (settled) return
+        settled = true
+        probe.onload = null
+        probe.onerror = null
+        probeActive--
+        if (ok && probe.naturalWidth > 0 && probe.naturalHeight > 0) {
+          img.width = probe.naturalWidth
+          img.height = probe.naturalHeight
+          img.sizeStatus = 'ok'
+          restoreTagMap.get(el)?.()
+          scheduleBackfillRefresh()
+        }
+        runProbeQueue()
+      }
+      probe.onload = () => finish(true)
+      probe.onerror = () => finish(false)
+      window.setTimeout(() => finish(false), PROBE_TIMEOUT_MS)
+      probe.src = img.url
+    }
+  }
+
   let selected = new Set<string>()
   let filterSize: { w: number; h: number } | null = null
   let job: DownloadJob | null = null
@@ -357,10 +406,15 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
           window.setTimeout(() => {
             const pending = el.dataset.pendingSrc
             if (pending) el.src = pending
+            // 同时异步探测原图尺寸（仅进入视口的图，失败不重试）
+            const img = thumbImgMap.get(el)
+            if (img) enqueueSizeProbe(img, el)
           }, delay)
         }
       },
-      { rootMargin: '300px' },
+      // rootMargin 300 → 150（2026-10-17）：全屏时 300px 预加载范围叠加 loading=lazy 的视口阈值，
+      // 一次把 40–60 张图塞进加载队列；收紧到 150px 只预载近一行，滚动时再补
+      { rootMargin: '150px' },
     )
     return thumbObserver
   }
@@ -416,6 +470,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       thumb.draggable = false
       // 2026-10-08：扩展页 Referer 为 chrome-extension://，部分站点据此判为盗链 → 不发送 Referer
       thumb.referrerPolicy = 'no-referrer'
+      thumbImgMap.set(thumb, img)
 
       const sizeTag = document.createElement('div')
       const restoreSizeTag = (): void => {
@@ -424,6 +479,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
         sizeTag.textContent =
           img.sizeStatus === 'ok' ? `${img.width}×${img.height}` : img.sizeStatus === 'loading' ? '尺寸获取中…' : '尺寸未知'
       }
+      restoreTagMap.set(thumb, restoreSizeTag)
       restoreSizeTag()
 
       // 五级容错（2026-10-10）：错开加载 → 失败延迟重试 → blob 兜底 → 标记失败 → 手动重试入口
@@ -465,7 +521,9 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       thumb.addEventListener('load', () => {
         noteOk(img.url)
         let backfilled = false
-        if ((!img.width || !img.height) && thumb.naturalWidth > 0 && thumb.naturalHeight > 0) {
+        // 有 thumbUrl 时加载的是预览图（如 600×800），不能用它的 naturalWidth 回填原图尺寸，
+        // 否则尺寸标签/尺寸筛选会把原图误标成预览尺寸（2026-10-17 实测反馈）
+        if (!img.thumbUrl && (!img.width || !img.height) && thumb.naturalWidth > 0 && thumb.naturalHeight > 0) {
           img.width = thumb.naturalWidth
           img.height = thumb.naturalHeight
           img.sizeStatus = 'ok'
@@ -781,6 +839,16 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       }
     }
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, () => worker()))
+    // 0 张成功时不生成/下载空 ZIP（2026-10-17 实测：xchina 图床三条取字节通道全拒，产出 1K 空包）
+    if (okCount === 0) {
+      zipState = null
+      dlRow.style.display = 'flex'
+      dlLabel.textContent = '打包'
+      dlFill.style.width = '0%'
+      dlText.textContent = `打包失败：0/${items.length} 张可读取（图床拒绝扩展读取，请改用「下载选中」）`
+      logger.warn('grab-view', '打包失败：没有任何图片可读取', { total: items.length })
+      return
+    }
     // STORE：图片本身已压缩（jpg/png），跳过 DEFLATE 纯 CPU 开销，体积几乎不变
     const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' })
     const objectUrl = URL.createObjectURL(blob)

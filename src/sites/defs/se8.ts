@@ -37,6 +37,10 @@ export const se8: SiteDef = {
     { source: '\\s*-\\s*第\\s*\\d+\\s*頁\\s*$' },
     { source: '\\s*-\\s*8色人體攝影\\s*$' },
   ],
+  // 同名相册（多本都叫「一月 - PANS - 中國工作室」）→ 从套图信息里补 Vol 号作唯一后缀：
+  // <div class="item"><div class="icon"><i class="fas fa-file"></i></div><div class="text">Vol. 1508</div></div>
+  // 拼接结果：`一月 - PANS - 中國工作室 (Vol. 1508)` → 文件夹名/ZIP/文件名唯一
+  titleSuffixPattern: { source: 'fa-file[^>]*>\\s*</i>\\s*</div>\\s*<div class="text">([^<]+)</div>' },
   imageThumbFix: { source: '_\\d+x\\d+\\.webp$', flags: 'i', replace: '.jpg' },
   imageOnlyHosts: ['img.xchina.io'],
   // 分页总数不可测（标题只显示当前页）→ 顺序翻页，靠「连续 3 页无新图」停止

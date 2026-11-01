@@ -387,6 +387,7 @@ export class BuonduaService {
           site: site.id,
           url: pageUrl,
           hasContainer: site.containerOpen.test(html),
+          hasThum: html.includes('/Thum/Thum-'),
           htmlLen: html.length,
           imgTags: (html.match(/<img\b/gi) ?? []).length,
         })

@@ -223,6 +223,9 @@ export interface DiffuseSnapshot {
 export interface BuonduaImage {
   url: string
   filename: string
+  /** 展示用缩略图（2026-10-17）：解析时保留 imageThumbFix 之前的预览 URL，
+   *  仅用于网格显示；url 始终为原图（下载/打包不受影响） */
+  thumbUrl?: string
   width?: number
   height?: number
 }
