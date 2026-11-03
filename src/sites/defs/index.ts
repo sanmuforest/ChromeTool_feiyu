@@ -22,6 +22,7 @@ import { jliji } from './jliji'
 import { xchina } from './xchina'
 import { xiuren } from './xiuren'
 import { misskon } from './misskon'
+import { tuzac } from './tuzac'
 
 /** 全部站点定义（顺序敏感，勿随意调整） */
 export const SITE_DEFS: SiteDef[] = [
@@ -39,4 +40,5 @@ export const SITE_DEFS: SiteDef[] = [
   xchina,
   xiuren,
   misskon,
+  tuzac,
 ]
