@@ -19,6 +19,10 @@ const FETCH_TIMEOUT_MS = 40000
 //      未触发过限流的 host 完全不受影响（正常站点速度不变）。
 const RETRY_THROTTLE_MAX = 3
 const HOST_THROTTLE_GAP_MS = 500
+/** 退避基数（2026-11-06 调整）：原 800/1600/3200 累计 5.6s，对 503 失败图拖慢明显
+ *  实测日志：59 张的相册前 1.5 分钟处理 55 张，后 2 分钟全耗在 4 张失败图的重试上
+ *  → 改为 500/1000/2000，累计 3.5s，成功率影响可接受 */
+const THROTTLE_BACKOFF_BASE_MS = 500
 const hostThrottle = new Map<string, { gap: number; lastAt: number }>()
 
 function hostOf(url: string): string {
@@ -94,7 +98,7 @@ export async function fetchImageBytes(url: string, signal?: AbortSignal): Promis
       clearTimeout(timer)
     }
     if (!retryable || attempt >= RETRY_THROTTLE_MAX) break
-    const backoff = 800 * Math.pow(2, attempt) // 800 / 1600 / 3200 ms
+    const backoff = THROTTLE_BACKOFF_BASE_MS * Math.pow(2, attempt) // 500 / 1000 / 2000 ms
     logger.debug('download', '取字节受限，退避后重试', { attempt: attempt + 1, backoff, host })
     await sleep(backoff)
   }

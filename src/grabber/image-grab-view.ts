@@ -94,18 +94,18 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
    *  列表重建（筛选/排序/刷新）时 object URL 持续累积 → 越用越卡。 */
   const blobCache = new Map<string, { blob: Blob; objectUrl: string }>()
   const BLOB_CACHE_LIMIT = 400
+  /** 同一 URL 的取字节请求去重（2026-11-06）
+   *  实测日志里同一条 URL 会连续出现两次「兜底取字节成功」——
+   *  列表重建导致同一张图在两个时刻各发起一次请求，白跑一遍 */
+  const inflightBytes = new Map<string, Promise<{ blob: Blob; objectUrl: string } | null>>()
 
-  /** 图片直接加载失败的兜底（2026-10-08）：经 background 取字节转 blob 显示
-   *  背景：kaizty 等站的图片 URL 可正常取得字节（外部验证 200），但扩展页 <img> 加载/解码失败
-   *  → 用本地 blob 绕过加载限制；同时记录体积与文件头，用于判断是否为格式或截断问题 */
-  async function recoverThumb(el: HTMLImageElement, url: string): Promise<number | null> {
-    try {
-      // 命中缓存直接复用（打包时同 url 不再重复取字节；显示时复用同一个 object URL）
-      const cached = blobCache.get(url)
-      if (cached) {
-        el.src = cached.objectUrl
-        return cached.blob.size
-      }
+  /** 取一次字节并缓存；同一 URL 并发调用共享同一个 Promise */
+  function fetchBytesOnce(url: string): Promise<{ blob: Blob; objectUrl: string } | null> {
+    const cached = blobCache.get(url)
+    if (cached) return Promise.resolve(cached)
+    const existing = inflightBytes.get(url)
+    if (existing) return existing
+    const task = (async (): Promise<{ blob: Blob; objectUrl: string } | null> => {
       const res = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
         type: 'GRAB_FETCH_IMAGE',
         srcTabId: options.srcTabId,
@@ -120,10 +120,27 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
         .join(' ')
       logger.info('view', '图片兜底取字节成功（改用 blob 显示）', { url, bytes: bytes.length, head })
       const blob = new Blob([bytes])
-      const objectUrl = URL.createObjectURL(blob)
-      if (blobCache.size < BLOB_CACHE_LIMIT) blobCache.set(url, { blob, objectUrl })
-      el.src = objectUrl
-      return bytes.length
+      const entry = { blob, objectUrl: URL.createObjectURL(blob) }
+      if (blobCache.size < BLOB_CACHE_LIMIT) blobCache.set(url, entry)
+      return entry
+    })().catch((err) => {
+      logger.warn('view', '图片兜底取字节失败', { url, error: String(err) })
+      return null
+    })
+    inflightBytes.set(url, task)
+    void task.finally(() => inflightBytes.delete(url))
+    return task
+  }
+
+  /** 图片直接加载失败的兜底（2026-10-08）：经 background 取字节转 blob 显示
+   *  背景：kaizty 等站的图片 URL 可正常取得字节（外部验证 200），但扩展页 <img> 加载/解码失败
+   *  → 用本地 blob 绕过加载限制；同时记录体积与文件头，用于判断是否为格式或截断问题 */
+  async function recoverThumb(el: HTMLImageElement, url: string): Promise<number | null> {
+    try {
+      const got = await fetchBytesOnce(url)
+      if (!got) return null
+      el.src = got.objectUrl
+      return got.blob.size
     } catch (err) {
       logger.warn('view', '图片兜底取字节失败', { url, error: String(err) })
       return null
