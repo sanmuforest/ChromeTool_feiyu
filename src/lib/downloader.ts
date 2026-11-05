@@ -11,30 +11,94 @@ const DEFAULT_CONCURRENCY = 12
 const MAX_RETRY = 1
 const FETCH_TIMEOUT_MS = 40000
 
+// 2026-11-06：429 自适应限速 + 退避重试
+// 实测（v0.2.59 用户日志）：kaizty 的图床 i0.wp.com 单张请求 200，但打包时 12 并发
+// 同时打同一 CDN 会被限流，日志出现大量 "HTTP 429" 且打包只成功一半左右。
+// Referer 不是原因（实测 imgbb/无/kaizty/同源 四种 Referer 单张全部 200）。
+// 策略：命中 429/503 时对该 host 启用最小间隔（此后同 host 串行化），并退避重试；
+//      未触发过限流的 host 完全不受影响（正常站点速度不变）。
+const RETRY_THROTTLE_MAX = 3
+const HOST_THROTTLE_GAP_MS = 500
+const hostThrottle = new Map<string, { gap: number; lastAt: number }>()
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return ''
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** 同图床取字节节流：仅对已触发限流的 host 生效 */
+async function awaitHostSlot(host: string): Promise<void> {
+  const st = hostThrottle.get(host)
+  if (!st || st.gap <= 0) return
+  const wait = st.lastAt + st.gap - Date.now()
+  if (wait > 0) await sleep(wait)
+}
+
+function noteHostResult(host: string, throttled: boolean): void {
+  if (!host) return
+  const st = hostThrottle.get(host) ?? { gap: 0, lastAt: 0 }
+  if (throttled) st.gap = HOST_THROTTLE_GAP_MS
+  st.lastAt = Date.now()
+  hostThrottle.set(host, st)
+}
+
 /** background fetch 抓取图片字节（imgbb 防 180x180 降级用；signal 支持取消）
- * 导出供 GRAB_FETCH_IMAGE（打包下载）复用 */
+ * 导出供 GRAB_FETCH_IMAGE（打包下载）复用
+ * 2026-11-06：限流（429/503）自动退避重试，最多 RETRY_THROTTLE_MAX 次 */
 export async function fetchImageBytes(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
   const t0 = Date.now()
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
-  // 外部取消（用户点取消按钮）时同时中断
-  signal?.addEventListener('abort', () => controller.abort(), { once: true })
-  try {
-    const resp = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-        Referer: 'https://imgbb.com/',
-      },
-    })
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    const buf = await resp.arrayBuffer()
-    logger.debug('download', 'imgbb 字节抓取完成', { ms: Date.now() - t0, bytes: buf.byteLength })
-    return buf
-  } finally {
-    clearTimeout(timer)
+  const host = hostOf(url)
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt <= RETRY_THROTTLE_MAX; attempt++) {
+    await awaitHostSlot(host)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+    // 外部取消（用户点取消按钮）时同时中断
+    signal?.addEventListener('abort', () => controller.abort(), { once: true })
+    let retryable = false
+    try {
+      const resp = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+          Referer: 'https://imgbb.com/',
+        },
+      })
+      if (resp.status === 429 || resp.status === 503) {
+        noteHostResult(host, true)
+        lastErr = new Error(`HTTP ${resp.status}`)
+        retryable = true
+      } else if (!resp.ok) {
+        noteHostResult(host, false)
+        throw new Error(`HTTP ${resp.status}`)
+      } else {
+        const buf = await resp.arrayBuffer()
+        noteHostResult(host, false)
+        logger.debug('download', '图片字节抓取完成', { ms: Date.now() - t0, bytes: buf.byteLength })
+        return buf
+      }
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err))
+      // 4xx（除 429）是确定性失败，不重试；网络错误/超时/限流可重试
+      const m = /^HTTP (\d{3})$/.exec(lastErr.message)
+      retryable = !m || m[1] === '429' || m[1] === '503'
+    } finally {
+      clearTimeout(timer)
+    }
+    if (!retryable || attempt >= RETRY_THROTTLE_MAX) break
+    const backoff = 800 * Math.pow(2, attempt) // 800 / 1600 / 3200 ms
+    logger.debug('download', '取字节受限，退避后重试', { attempt: attempt + 1, backoff, host })
+    await sleep(backoff)
   }
+  throw lastErr ?? new Error('图片字节抓取失败')
 }
 
 /** ArrayBuffer → base64（data URL 下载 / 消息回传用，避免大文件栈溢出分块拼接） */
