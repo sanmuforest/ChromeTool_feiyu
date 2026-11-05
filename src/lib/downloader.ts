@@ -214,11 +214,25 @@ export class DownloadManager {
   private jobs = new Map<number, DownloadJob>()
   private active = new Map<number, ActiveDownload>() // downloadId → active（下载中）
   private queue: { jobId: number; item: DownloadItem; enqueuedAt: number }[] = []
-  private pendingFetches = new Set<number>() // jobId → 正在 background fetch（占并发槽）
-  private fetchControllers = new Map<number, AbortController>() // jobId → imgbb 字节抓取 controller
+  /** 每个 job 正在 fetch 阶段的项数（2026-11-06 修复）
+   *  原实现是 `Set<number>`，写入的是 jobId —— 同一 job 的多个文件共享一个 jobId，
+   *  Set 去重后 size 恒为 1，导致并发上限完全失效，整个队列被一次性派发
+   *  （77 个 chrome.downloads.download 同时发起 → 浏览器卡死、imgbb 限流缺图） */
+  private pendingByJob = new Map<number, number>()
+  /** fetch 阶段的取消控制器（2026-11-06 修复）
+   *  原实现 `Map<jobId, AbortController>` 会被同一 job 的后续项覆盖，取消时只能中断最后一项。
+   *  改为以 controller 为键记录所属 job，取消时按 jobId 遍历中断 */
+  private fetchControllers = new Map<AbortController, number>() // controller → jobId
   private jobStartedAt = new Map<number, number>() // jobId → 任务启动时刻（汇总统计用）
   private nextJobId = 1
   private maxConcurrent = DEFAULT_CONCURRENCY
+
+  /** 当前处于 fetch 阶段的项总数（跨 job 汇总） */
+  private pendingFetchTotal(): number {
+    let n = 0
+    for (const v of this.pendingByJob.values()) n += v
+    return n
+  }
 
   /** 设置下载并发（1~128），由 background 经 GRAB_SET_CONCURRENCY 调用 */
   setConcurrency(n: number): void {
@@ -263,8 +277,12 @@ export class DownloadManager {
     job.status = 'cancelled'
     this.queue = this.queue.filter((q) => q.jobId !== jobId)
     // 中断正在进行的 imgbb 字节抓取（fetch 阶段无 downloadId，需 abort controller）
-    this.fetchControllers.get(jobId)?.abort()
-    this.fetchControllers.delete(jobId)
+    for (const [ctrl, jid] of [...this.fetchControllers]) {
+      if (jid === jobId) {
+        ctrl.abort()
+        this.fetchControllers.delete(ctrl)
+      }
+    }
     for (const [downloadId, a] of this.active) {
       if (a.jobId === jobId) {
         this.active.delete(downloadId)
@@ -324,14 +342,17 @@ export class DownloadManager {
 
   private pump(): void {
     // 派发排队项：fetch 阶段与下载中合并计入并发槽（避免一次性全派发导致排队）
-    while (this.active.size + this.pendingFetches.size < this.maxConcurrent && this.queue.length > 0) {
+    while (this.active.size + this.pendingFetchTotal() < this.maxConcurrent && this.queue.length > 0) {
       const next = this.queue.shift()
       if (!next) break
       const job = this.jobs.get(next.jobId)
       if (!job || job.status !== 'running') continue
-      this.pendingFetches.add(next.jobId)
+      const jid = next.jobId
+      this.pendingByJob.set(jid, (this.pendingByJob.get(jid) ?? 0) + 1)
       void this.startOne(job, next.item, next.enqueuedAt).finally(() => {
-        this.pendingFetches.delete(next.jobId)
+        const n = (this.pendingByJob.get(jid) ?? 1) - 1
+        if (n <= 0) this.pendingByJob.delete(jid)
+        else this.pendingByJob.set(jid, n)
         this.pump()
       })
     }
@@ -340,7 +361,7 @@ export class DownloadManager {
       if (job.status !== 'running') continue
       const hasQueued = this.queue.some((q) => q.jobId === job.id)
       const hasActive = [...this.active.values()].some((a) => a.jobId === job.id)
-      const hasFetch = this.pendingFetches.has(job.id)
+      const hasFetch = (this.pendingByJob.get(job.id) ?? 0) > 0
       if (!hasQueued && !hasActive && !hasFetch) {
         job.status = 'done'
         const totalMs = Date.now() - (this.jobStartedAt.get(job.id) ?? Date.now())
@@ -369,21 +390,18 @@ export class DownloadManager {
       if (/(i\.ibb\.co|ibb\.co)/.test(url)) {
         const tFetch = Date.now()
         const controller = new AbortController()
-        this.fetchControllers.set(job.id, controller)
+        this.fetchControllers.set(controller, job.id)
         try {
           const buf = await fetchImgbbViaSrcTab(job.srcTabId, item.url)
-          this.fetchControllers.delete(job.id)
           if (job.status !== 'running') return // 抓取期间已取消
           url = `data:image/jpeg;base64,${arrayBufferToBase64(buf)}`
           logger.debug('download', 'imgbb 源页注入转 data URL', { jobId: job.id, fetchMs: Date.now() - tFetch, bytes: buf.byteLength })
         } catch (err) {
           // 降级 1：background fetch（历史方案，现可能拿到 180 缩略图）
-          this.fetchControllers.delete(job.id)
           if (job.status !== 'running') return
           logger.warn('download', 'imgbb 源页注入失败，降级 background fetch', { url: item.url, error: String(err) })
           try {
             const buf = await fetchImageBytes(item.url, controller.signal)
-            this.fetchControllers.delete(job.id)
             if (job.status !== 'running') return // 抓取期间已取消
             const tB64 = Date.now()
             url = `data:image/jpeg;base64,${arrayBufferToBase64(buf)}`
@@ -394,10 +412,11 @@ export class DownloadManager {
               bytes: buf.byteLength,
             })
           } catch (err2) {
-            this.fetchControllers.delete(job.id)
             if (job.status !== 'running') return
             logger.warn('download', 'imgbb background 抓取失败，降级直连', { url: item.url, error: String(err2) })
           }
+        } finally {
+          this.fetchControllers.delete(controller)
         }
       }
       const tDl = Date.now()

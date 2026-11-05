@@ -89,8 +89,10 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
 
   /** blob 字节缓存（2026-11-06）
    *  v0.2.61 起 imgbb 图片走 blob 显示，而打包又要取一次字节 → 同一张图请求两遍，打包明显变慢。
-   *  这里把显示阶段取到的 Blob 缓存起来，打包时直接复用，省掉一半请求。 */
-  const blobCache = new Map<string, Blob>()
+   *  这里把显示阶段取到的 Blob 缓存起来，打包时直接复用，省掉一半请求。
+   *  同时缓存 object URL：原实现每次调用 recoverThumb 都新建一个 URL 对象且从不 revoke，
+   *  列表重建（筛选/排序/刷新）时 object URL 持续累积 → 越用越卡。 */
+  const blobCache = new Map<string, { blob: Blob; objectUrl: string }>()
   const BLOB_CACHE_LIMIT = 400
 
   /** 图片直接加载失败的兜底（2026-10-08）：经 background 取字节转 blob 显示
@@ -98,11 +100,11 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
    *  → 用本地 blob 绕过加载限制；同时记录体积与文件头，用于判断是否为格式或截断问题 */
   async function recoverThumb(el: HTMLImageElement, url: string): Promise<number | null> {
     try {
-      // 命中缓存直接复用（打包时同 url 不再重复取字节）
+      // 命中缓存直接复用（打包时同 url 不再重复取字节；显示时复用同一个 object URL）
       const cached = blobCache.get(url)
       if (cached) {
-        el.src = URL.createObjectURL(cached)
-        return cached.size
+        el.src = cached.objectUrl
+        return cached.blob.size
       }
       const res = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
         type: 'GRAB_FETCH_IMAGE',
@@ -118,8 +120,9 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
         .join(' ')
       logger.info('view', '图片兜底取字节成功（改用 blob 显示）', { url, bytes: bytes.length, head })
       const blob = new Blob([bytes])
-      if (blobCache.size < BLOB_CACHE_LIMIT) blobCache.set(url, blob)
-      el.src = URL.createObjectURL(blob)
+      const objectUrl = URL.createObjectURL(blob)
+      if (blobCache.size < BLOB_CACHE_LIMIT) blobCache.set(url, { blob, objectUrl })
+      el.src = objectUrl
       return bytes.length
     } catch (err) {
       logger.warn('view', '图片兜底取字节失败', { url, error: String(err) })
@@ -819,7 +822,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
           let blob: Blob | null = null
           // 2026-11-06：优先复用显示阶段已取到的字节（imgbb 走 blob 显示后会写入 blobCache），
           // 命中时打包不再发起任何请求
-          const cachedBlob = blobCache.get(item.url)
+          const cachedBlob = blobCache.get(item.url)?.blob
           if (cachedBlob) {
             blob = cachedBlob
           } else if (/(i\.ibb\.co|ibb\.co)/.test(item.url)) {
