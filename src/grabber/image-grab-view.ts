@@ -87,11 +87,23 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     if (h) hostFailStreak.delete(h)
   }
 
+  /** blob 字节缓存（2026-11-06）
+   *  v0.2.61 起 imgbb 图片走 blob 显示，而打包又要取一次字节 → 同一张图请求两遍，打包明显变慢。
+   *  这里把显示阶段取到的 Blob 缓存起来，打包时直接复用，省掉一半请求。 */
+  const blobCache = new Map<string, Blob>()
+  const BLOB_CACHE_LIMIT = 400
+
   /** 图片直接加载失败的兜底（2026-10-08）：经 background 取字节转 blob 显示
    *  背景：kaizty 等站的图片 URL 可正常取得字节（外部验证 200），但扩展页 <img> 加载/解码失败
    *  → 用本地 blob 绕过加载限制；同时记录体积与文件头，用于判断是否为格式或截断问题 */
   async function recoverThumb(el: HTMLImageElement, url: string): Promise<number | null> {
     try {
+      // 命中缓存直接复用（打包时同 url 不再重复取字节）
+      const cached = blobCache.get(url)
+      if (cached) {
+        el.src = URL.createObjectURL(cached)
+        return cached.size
+      }
       const res = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
         type: 'GRAB_FETCH_IMAGE',
         srcTabId: options.srcTabId,
@@ -105,7 +117,9 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
         .map((b) => b.toString(16).padStart(2, '0'))
         .join(' ')
       logger.info('view', '图片兜底取字节成功（改用 blob 显示）', { url, bytes: bytes.length, head })
-      el.src = URL.createObjectURL(new Blob([bytes]))
+      const blob = new Blob([bytes])
+      if (blobCache.size < BLOB_CACHE_LIMIT) blobCache.set(url, blob)
+      el.src = URL.createObjectURL(blob)
       return bytes.length
     } catch (err) {
       logger.warn('view', '图片兜底取字节失败', { url, error: String(err) })
@@ -803,7 +817,12 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
         const t0 = Date.now()
         try {
           let blob: Blob | null = null
-          if (/(i\.ibb\.co|ibb\.co)/.test(item.url)) {
+          // 2026-11-06：优先复用显示阶段已取到的字节（imgbb 走 blob 显示后会写入 blobCache），
+          // 命中时打包不再发起任何请求
+          const cachedBlob = blobCache.get(item.url)
+          if (cachedBlob) {
+            blob = cachedBlob
+          } else if (/(i\.ibb\.co|ibb\.co)/.test(item.url)) {
             // imgbb：background 抓取字节（内部优先源页注入拿原图，失败降级 SW fetch）
             // 响应为 base64 字符串（runtime message 为 JSON 序列化，ArrayBuffer 直传会丢失数据）
             const res = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({

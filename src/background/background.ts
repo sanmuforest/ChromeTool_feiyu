@@ -631,7 +631,12 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
     case 'GRAB_FETCH_IMAGE': {
       try {
         let buf: ArrayBuffer
-        if (message.srcTabId) {
+        // 2026-11-06：imgbb 图片**跳过源页注入**。
+        // 原因：图片在 i.ibb.co、相册页在 ibb.co，属跨子域 → 页面内 fetch 必然 CORS 失败
+        // （日志里每张图都先报一次 "TypeError: Failed to fetch" 才降级，白花一次请求与往返）。
+        // 实测 i.ibb.co 对任意 Referer（含 chrome-extension://）都返回正常大图，background fetch 可靠。
+        const isImgbbImage = /^https?:\/\/(?:i\.ibb\.co|[^/]*\.imgbb\.com)\//i.test(message.url)
+        if (message.srcTabId && !isImgbbImage) {
           // 2026-10-11：改用结构化返回的 fetchViaSrcTab —— 把「页面内 fetch 的真实失败原因」写进日志。
           // 原先注入函数内部抛错会被 executeScript 吞掉，统一显示「页面未返回字节」，
           // 无法区分「页面内 fetch 也被 403」与「CORS 拦截」，导致只能猜着改
