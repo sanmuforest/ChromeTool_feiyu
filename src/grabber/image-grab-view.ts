@@ -311,6 +311,13 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     return img.thumbUrl || img.url
   }
 
+  /** 必须走 blob 显示的图床（2026-11-06）
+   *  imgbb 的图片在扩展页用 <img> 加载时，会返回 **HTTP 200 + 一张 "service unavailable" 错误图**
+   *  → 浏览器视为加载成功，不触发 error 事件 → 重试/blob 兜底五级容错全部失效，网格显示错误图。
+   *  实测：i.ibb.co 对任意 Referer（含 chrome-extension://）都返回正常大图（1024×768 / 102KB，
+   *  也不是 180×180 降级），说明 background 取字节可靠 → 该域图片直接走 blob。 */
+  const IMGBB_IMG_RE = /^https?:\/\/(?:i\.ibb\.co|[\w-]+\.imgbb\.com)\//i
+
   // ---------- 尺寸筛选 ----------
   function applyFilter(list: GrabbedImage[]): GrabbedImage[] {
     const fs = filterSize
@@ -405,7 +412,14 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
           const delay = Math.min(batchIndex++ * 80, 1600)
           window.setTimeout(() => {
             const pending = el.dataset.pendingSrc
-            if (pending) el.src = pending
+            if (pending) {
+              if (IMGBB_IMG_RE.test(pending)) {
+                // 2026-11-06：imgbb 图片直接取字节转 blob（<img> 会拿到 200 的错误图，见 IMGBB_IMG_RE 注释）
+                void recoverThumb(el, pending)
+              } else {
+                el.src = pending
+              }
+            }
             // 同时异步探测原图尺寸（仅进入视口的图，失败不重试）
             const img = thumbImgMap.get(el)
             if (img) enqueueSizeProbe(img, el)
