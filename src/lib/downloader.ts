@@ -75,7 +75,13 @@ export interface HostPolicy {
 const HOST_POLICIES: { re: RegExp; policy: HostPolicy }[] = [
   {
     re: /^(?:i\.ibb\.co|[^.]*\.imgbb\.com)$/i,
-    policy: { concurrency: 3, timeoutMs: 12000, retryMax: 1, backoffBaseMs: 300 },
+    // 2026-11-06 v0.2.67 修正：v0.2.66 曾把超时压到 12 秒，实测代价极大 ——
+    //   抓取 92 张只打包成功 52 张（57%），耗时 6 分 15 秒，日志出现 40+ 次 AbortError。
+    // 根因判断错误：imgbb 的问题不是"请求太多"，而是"每次请求本身就慢"
+    //   （实测单张 1~10 秒，并发下更慢）。压超时 = 自己把还在传输的请求掐断。
+    // 现取值：超时 30 秒（覆盖实测最慢 10.5 秒并留并发余量）、并发 8（折中）、
+    //         重试 2 次、退避 1 秒（给服务端喘息）。
+    policy: { concurrency: 8, timeoutMs: 30000, retryMax: 2, backoffBaseMs: 1000 },
   },
 ]
 
@@ -129,6 +135,17 @@ export async function fetchImageBytes(url: string, signal?: AbortSignal): Promis
       }
     } catch (err) {
       lastErr = err instanceof Error ? err : new Error(String(err))
+      // 诊断（2026-11-06）：区分「超时掐断」与「其他中断」—— 前者该加长超时，后者该查 SW 生命周期，
+      // 两者优化方向相反，不能靠猜。likelyTimeout=true 表示请求跑满超时才被中断。
+      if (/abort/i.test(lastErr.message)) {
+        const elapsedMs = Date.now() - t0
+        logger.warn('download', '取字节被中断', {
+          host,
+          elapsedMs,
+          timeoutMs,
+          likelyTimeout: elapsedMs >= timeoutMs - 800,
+        })
+      }
       // 4xx（除 429）是确定性失败，不重试；网络错误/超时/限流可重试
       const m = /^HTTP (\d{3})$/.exec(lastErr.message)
       retryable = !m || m[1] === '429' || m[1] === '503'

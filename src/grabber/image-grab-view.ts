@@ -834,6 +834,49 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     const hasImgbb = imgbbLimit !== undefined && items.some((i) => /(?:^|\/\/)(?:[^/]*\.)?(?:ibb\.co|imgbb\.com)\//i.test(i.url))
     const CONCURRENCY = hasImgbb ? Math.min(CONCURRENCY_RAW, imgbbLimit) : CONCURRENCY_RAW
     let cursor = 0
+    /** 取单张图片字节（含 blobCache 复用与 imgbb 专用通道）；失败返回 null */
+    const fetchOneBlob = async (item: DownloadItem): Promise<Blob | null> => {
+      // 2026-11-06：优先复用显示阶段已取到的字节（imgbb 走 blob 显示后会写入 blobCache），命中时零请求
+      const cachedBlob = blobCache.get(item.url)?.blob
+      if (cachedBlob) return cachedBlob
+      if (/(i\.ibb\.co|ibb\.co)/.test(item.url)) {
+        // imgbb：background 抓取字节（响应为 base64，runtime message 的 JSON 序列化会丢 ArrayBuffer）
+        const res = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
+          type: 'GRAB_FETCH_IMAGE',
+          srcTabId: options.srcTabId,
+          url: item.url,
+        })
+        if (res.ok && res.data) {
+          const bin = atob(res.data)
+          const bytes = new Uint8Array(bin.length)
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+          return new Blob([bytes])
+        }
+        return null
+      }
+      // 2026-10-11：非 imgbb 先试扩展页直连；失败（如 8se.me 图床对服务端请求 403）则回退后台取字节，
+      // 否则反爬站点的打包会静默产出 0 字节文件
+      try {
+        const resp = await fetch(item.url)
+        if (resp.ok) return await resp.blob()
+      } catch {
+        /* 继续走回退通道 */
+      }
+      const res2 = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
+        type: 'GRAB_FETCH_IMAGE',
+        srcTabId: options.srcTabId,
+        url: item.url,
+      })
+      if (res2.ok && res2.data) {
+        const bin = atob(res2.data)
+        const bytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+        return new Blob([bytes])
+      }
+      return null
+    }
+    /** 第一轮取字节失败的项目，供阶段 2 集中重试 */
+    const failedItems: DownloadItem[] = []
     const worker = async (): Promise<void> => {
       while (true) {
         const idx = cursor++
@@ -841,55 +884,16 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
         const item = items[idx]
         const t0 = Date.now()
         try {
-          let blob: Blob | null = null
-          // 2026-11-06：优先复用显示阶段已取到的字节（imgbb 走 blob 显示后会写入 blobCache），
-          // 命中时打包不再发起任何请求
-          const cachedBlob = blobCache.get(item.url)?.blob
-          if (cachedBlob) {
-            blob = cachedBlob
-          } else if (/(i\.ibb\.co|ibb\.co)/.test(item.url)) {
-            // imgbb：background 抓取字节（内部优先源页注入拿原图，失败降级 SW fetch）
-            // 响应为 base64 字符串（runtime message 为 JSON 序列化，ArrayBuffer 直传会丢失数据）
-            const res = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
-              type: 'GRAB_FETCH_IMAGE',
-              srcTabId: options.srcTabId,
-              url: item.url,
-            })
-            if (res.ok && res.data) {
-              const bin = atob(res.data)
-              const bytes = new Uint8Array(bin.length)
-              for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-              blob = new Blob([bytes])
-            }
-          } else {
-            // 2026-10-11：先试扩展页直连；失败（如 8se.me 图床对服务端请求 403）则回退源页注入取字节，
-            // 否则反爬站点的打包会静默产出 0 字节文件
-            try {
-              const resp = await fetch(item.url)
-              if (resp.ok) blob = await resp.blob()
-            } catch {
-              blob = null
-            }
-            if (!blob) {
-              const res2 = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
-                type: 'GRAB_FETCH_IMAGE',
-                srcTabId: options.srcTabId,
-                url: item.url,
-              })
-              if (res2.ok && res2.data) {
-                const bin = atob(res2.data)
-                const bytes = new Uint8Array(bin.length)
-                for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-                blob = new Blob([bytes])
-              }
-            }
-          }
+          const blob = await fetchOneBlob(item)
           if (blob) {
             zip.file(item.filename, blob)
             okCount++
+          } else {
+            failedItems.push(item)
           }
           logger.debug('grab-view', '打包单图完成', { url: item.url, ms: Date.now() - t0, bytes: blob?.size })
         } catch (err) {
+          failedItems.push(item)
           logger.warn('grab-view', '打包抓取图片失败', { url: item.url, error: String(err) })
         }
         zipState!.current = Math.min(items.length, zipState!.current + 1)
@@ -897,6 +901,32 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       }
     }
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, () => worker()))
+    // 阶段 2（2026-11-06）：失败项集中重试。
+    // 依据：imgbb 的失败多为瞬时（503 / 连接重置 / 传输中断），换时间点重试常能成功；
+    // 而原地重试受限于同一时刻的服务端状态，效果有限（实测 v0.2.65 原地重试 3 次仍有 10 张失败）。
+    // 这里改为**顺序**重试（低并发，避免再次触发限流）。
+    const RETRY_ROUNDS = 2
+    for (let round = 1; round <= RETRY_ROUNDS && failedItems.length > 0; round++) {
+      const batch = failedItems.splice(0, failedItems.length)
+      logger.info('grab-view', '打包失败项集中重试', { round, count: batch.length })
+      for (const item of batch) {
+        try {
+          const blob = await fetchOneBlob(item)
+          if (blob) {
+            zip.file(item.filename, blob)
+            okCount++
+          } else {
+            failedItems.push(item)
+          }
+        } catch {
+          failedItems.push(item)
+        }
+        renderZip()
+      }
+    }
+    if (failedItems.length > 0) {
+      logger.warn('grab-view', '打包失败项（集中重试后仍失败）', { count: failedItems.length })
+    }
     // 0 张成功时不生成/下载空 ZIP（2026-10-17 实测：xchina 图床三条取字节通道全拒，产出 1K 空包）
     if (okCount === 0) {
       zipState = null
