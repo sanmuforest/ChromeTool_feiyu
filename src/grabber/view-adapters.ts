@@ -1521,11 +1521,13 @@ export function initAdaptersView(root: HTMLElement, srcTabId: number, sourceUrl?
   // ---------- 对外句柄 ----------
   /** 按下载文件夹名路由下载进度到对应子场景视图 */
   function routeDownloadJob(job: DownloadJob): void {
-    if (job.folderName.includes('用户主页')) {
-      homeGrabView.setDownloadJob(job)
-    } else if (job.folderName.includes('相册')) {
-      albumGrabView.setDownloadJob(job)
-    }
+    // 2026-11-07 修复：原实现用 `job.folderName.includes('相册')` / `includes('用户主页')` 判断去向。
+    // 但相册文件夹名来自用户/站点（实测为「白衬衫」「JK」「JVID Caroline - 卡洛琳《乳夹の调教》」），
+    // 几乎不可能包含「相册」二字 → 两个分支都不命中 → 进度既不推给用户主页也不推给相册视图，
+    // 于是下载进度条与缩略图角标全部不更新（下载本身正常，因为队列在 background）。
+    // 改为同时推给两个视图：它们各自持有独立的 job 状态，未激活的那个只是不可见，无副作用。
+    homeGrabView.setDownloadJob(job)
+    albumGrabView.setDownloadJob(job)
   }
 
   return {
