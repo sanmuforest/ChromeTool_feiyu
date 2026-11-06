@@ -53,17 +53,55 @@ function noteHostResult(host: string, throttled: boolean): void {
   hostThrottle.set(host, st)
 }
 
+/** 图床策略（2026-11-06）
+ *  实测（v0.2.65，8 张图并发 vs 顺序）：
+ *   - imgbb 的 i.ibb.co 单张响应 1~10 秒波动
+ *   - 并发 8 张 → 成功 4/8，失败的 4 张全部卡到 30 秒超时
+ *   - 顺序 8 张 → 成功 6/8，平均 8.7 秒/张
+ *   - 网页端同样卡顿、相册加载不全 → 服务端本身慢且对并发极度敏感
+ *  结论：对 imgbb 用默认的 12 并发 + 40 秒超时是反向优化（大量超时反而更慢）。
+ *  策略：降并发（3）、缩短超时（12 秒快速失败）、只重试 1 次且快速退避（300ms）。 */
+export interface HostPolicy {
+  /** 该图床允许的并发上限 */
+  concurrency?: number
+  /** 单张取字节超时 */
+  timeoutMs?: number
+  /** 限流重试次数上限 */
+  retryMax?: number
+  /** 退避基数（指数递增） */
+  backoffBaseMs?: number
+}
+
+const HOST_POLICIES: { re: RegExp; policy: HostPolicy }[] = [
+  {
+    re: /^(?:i\.ibb\.co|[^.]*\.imgbb\.com)$/i,
+    policy: { concurrency: 3, timeoutMs: 12000, retryMax: 1, backoffBaseMs: 300 },
+  },
+]
+
+/** 按 URL 取图床策略；未命中返回空对象（= 使用全局默认策略） */
+export function policyForUrl(url: string): HostPolicy {
+  const host = hostOf(url)
+  if (!host) return {}
+  for (const p of HOST_POLICIES) if (p.re.test(host)) return p.policy
+  return {}
+}
+
 /** background fetch 抓取图片字节（imgbb 防 180x180 降级用；signal 支持取消）
  * 导出供 GRAB_FETCH_IMAGE（打包下载）复用
- * 2026-11-06：限流（429/503）自动退避重试，最多 RETRY_THROTTLE_MAX 次 */
+ * 2026-11-06：限流（429/503）自动退避重试；超时/重试次数/退避按图床策略生效 */
 export async function fetchImageBytes(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
   const t0 = Date.now()
   const host = hostOf(url)
+  const policy = policyForUrl(url)
+  const timeoutMs = policy.timeoutMs ?? FETCH_TIMEOUT_MS
+  const retryMax = policy.retryMax ?? RETRY_THROTTLE_MAX
+  const backoffBase = policy.backoffBaseMs ?? THROTTLE_BACKOFF_BASE_MS
   let lastErr: Error | null = null
-  for (let attempt = 0; attempt <= RETRY_THROTTLE_MAX; attempt++) {
+  for (let attempt = 0; attempt <= retryMax; attempt++) {
     await awaitHostSlot(host)
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
     // 外部取消（用户点取消按钮）时同时中断
     signal?.addEventListener('abort', () => controller.abort(), { once: true })
     let retryable = false
@@ -97,8 +135,8 @@ export async function fetchImageBytes(url: string, signal?: AbortSignal): Promis
     } finally {
       clearTimeout(timer)
     }
-    if (!retryable || attempt >= RETRY_THROTTLE_MAX) break
-    const backoff = THROTTLE_BACKOFF_BASE_MS * Math.pow(2, attempt) // 500 / 1000 / 2000 ms
+    if (!retryable || attempt >= retryMax) break
+    const backoff = backoffBase * Math.pow(2, attempt)
     logger.debug('download', '取字节受限，退避后重试', { attempt: attempt + 1, backoff, host })
     await sleep(backoff)
   }
@@ -163,6 +201,12 @@ export async function fetchViaSrcTab(srcTabId: number, url: string): Promise<Src
 }
 
 /** 抛错式包装（保留既有调用签名） */
+/** @deprecated 2026-11-06 起不再被调用
+ *  原因：imgbb 图片在 i.ibb.co、源页在 ibb.co，跨子域 fetch 必然 CORS 失败
+ *  （日志里每张都白跑一次 TypeError: Failed to fetch），且该通道没有超时约束；
+ *  实测 i.ibb.co 对任意 Referer 都返回原图（1024×768 / 102KB，非 180 降级），
+ *  background 的 fetchImageBytes 已能可靠取得原图。
+ *  保留定义仅为避免与历史变更记录失联，勿在新代码中调用。 */
 export async function fetchImgbbViaSrcTab(srcTabId: number, url: string): Promise<ArrayBuffer> {
   const res = await fetchViaSrcTab(srcTabId, url)
   if (!res.ok || !res.bytes) throw new Error(res.error ?? '源页注入失败')
@@ -396,29 +440,16 @@ export class DownloadManager {
         const controller = new AbortController()
         this.fetchControllers.set(controller, job.id)
         try {
-          const buf = await fetchImgbbViaSrcTab(job.srcTabId, item.url)
+          // 2026-11-06：跳过源页注入 —— imgbb 图片在 i.ibb.co、源页在 ibb.co，跨子域必然 CORS 失败
+          // （日志里每张都白跑一次 TypeError: Failed to fetch，且该通道没有超时约束）。
+          // 实测 i.ibb.co 对任意 Referer 都返回原图（1024×768 / 102KB，非 180 降级）→ 直接用 background fetch。
+          const buf = await fetchImageBytes(item.url, controller.signal)
           if (job.status !== 'running') return // 抓取期间已取消
           url = `data:image/jpeg;base64,${arrayBufferToBase64(buf)}`
-          logger.debug('download', 'imgbb 源页注入转 data URL', { jobId: job.id, fetchMs: Date.now() - tFetch, bytes: buf.byteLength })
+          logger.debug('download', 'imgbb 原图转 data URL', { jobId: job.id, fetchMs: Date.now() - tFetch, bytes: buf.byteLength })
         } catch (err) {
-          // 降级 1：background fetch（历史方案，现可能拿到 180 缩略图）
           if (job.status !== 'running') return
-          logger.warn('download', 'imgbb 源页注入失败，降级 background fetch', { url: item.url, error: String(err) })
-          try {
-            const buf = await fetchImageBytes(item.url, controller.signal)
-            if (job.status !== 'running') return // 抓取期间已取消
-            const tB64 = Date.now()
-            url = `data:image/jpeg;base64,${arrayBufferToBase64(buf)}`
-            logger.debug('download', 'imgbb 原图转 data URL', {
-              jobId: job.id,
-              fetchMs: tB64 - tFetch,
-              b64Ms: Date.now() - tB64,
-              bytes: buf.byteLength,
-            })
-          } catch (err2) {
-            if (job.status !== 'running') return
-            logger.warn('download', 'imgbb background 抓取失败，降级直连', { url: item.url, error: String(err2) })
-          }
+          logger.warn('download', 'imgbb 取字节失败，降级直连', { url: item.url, error: String(err) })
         } finally {
           this.fetchControllers.delete(controller)
         }

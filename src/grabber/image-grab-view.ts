@@ -5,7 +5,7 @@
 // 解析数据由外部注入（appendImages），解析控制通过回调（onReparse/onLoadMore/onCancelParse）
 
 import JSZip from 'jszip'
-import { extractFilename } from '../lib/downloader'
+import { extractFilename, policyForUrl } from '../lib/downloader'
 import { initLogger } from '../lib/logger'
 import { sendMessage } from '../lib/messages'
 import type { DownloadItem, DownloadJob, GrabbedImage } from '../lib/types'
@@ -827,7 +827,12 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     let okCount = 0
     // 打包并发 = 全局下载并发设置（imgbb/buondua/通用统一生效），读取失败回退默认 12
     const ccRes = await sendMessage<{ ok: true; concurrency: number } | { ok: false; error: string }>({ type: 'GRAB_GET_CONCURRENCY' })
-    const CONCURRENCY = Math.max(1, Math.min(128, ccRes.ok ? ccRes.concurrency : 12))
+    const CONCURRENCY_RAW = Math.max(1, Math.min(128, ccRes.ok ? ccRes.concurrency : 12))
+    // 2026-11-06：imgbb 对并发极度敏感（实测 8 并发时一半卡到 30 秒超时，顺序反而成功率更高），
+    // 打包内容含 imgbb 图片时按图床策略压并发 —— 否则"并发越高反而越慢"
+    const imgbbLimit = policyForUrl('https://i.ibb.co/x').concurrency
+    const hasImgbb = imgbbLimit !== undefined && items.some((i) => /(?:^|\/\/)(?:[^/]*\.)?(?:ibb\.co|imgbb\.com)\//i.test(i.url))
+    const CONCURRENCY = hasImgbb ? Math.min(CONCURRENCY_RAW, imgbbLimit) : CONCURRENCY_RAW
     let cursor = 0
     const worker = async (): Promise<void> => {
       while (true) {
