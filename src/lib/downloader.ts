@@ -343,6 +343,7 @@ export class DownloadManager {
       failed: 0,
       status: 'running',
       failedItems: [],
+      doneUrls: [],
     }
     this.jobs.set(job.id, job)
     this.jobStartedAt.set(job.id, Date.now())
@@ -420,6 +421,8 @@ export class DownloadManager {
 
     if (state === 'complete') {
       job.done++
+      // 2026-11-06：记录已完成项的 URL，供抓取页在缩略图上标出逐张状态
+      if (!job.doneUrls.includes(active.item.url)) job.doneUrls.push(active.item.url)
       logger.debug('download', '单项下载完成', {
         jobId: active.jobId,
         downloadId: delta.id,

@@ -77,6 +77,10 @@ export interface DownloadJob {
   failed: number
   status: DownloadJobStatus
   failedItems: DownloadFailedItem[]
+  /** 已完成项的 URL（2026-11-06）
+   *  抓取页需要在每张缩略图上标出逐张下载状态；只有计数无法知道「哪一张」成功，
+   *  因此 background 在每项完成时把 url 追加进来。 */
+  doneUrls: string[]
 }
 
 // ========== imgbb 适配器（FP-003） ==========

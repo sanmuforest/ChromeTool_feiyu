@@ -198,6 +198,8 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
   let selected = new Set<string>()
   let filterSize: { w: number; h: number } | null = null
   let job: DownloadJob | null = null
+  /** 缩略图上的下载状态角标（url → 元素）；必须在渲染卡片前定义（卡片渲染时写入） */
+  const dlBadgeMap = new Map<string, HTMLElement>()
   let zipState: { current: number; total: number } | null = null
   let dedupeOn = true
   let filterSmallOn = true // 默认剔除 <100x100 小图
@@ -494,6 +496,7 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     const filtered = visibleImages()
     thumbObserver?.disconnect() // 重建前解除旧观察（避免观察器持有已被移除的节点）
     grid.innerHTML = ''
+    dlBadgeMap.clear() // 卡片重建，旧角标引用作废（否则 Map 无限增长且更新到已移除节点）
     if (filtered.length === 0) {
       const { kept } = applyDedupe(images)
       if (images.length === 0) {
@@ -616,7 +619,22 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       check.className = 'check-mark'
       check.textContent = '✓'
 
-      card.append(thumb, sizeTag, check)
+      // 2026-11-06：下载状态角标（等待 / 成功 / 失败；失败可点击重试单张）
+      // 依据：用户反馈进度条无法反映逐张结果，且需要一眼看出哪张没下来
+      const dlBadge = document.createElement('div')
+      dlBadge.className = 'dl-badge'
+      dlBadge.dataset.state = 'pending'
+      dlBadge.title = '等待下载'
+      dlBadgeMap.set(img.url, dlBadge)
+      dlBadge.addEventListener('click', (ev) => {
+        if (dlBadge.dataset.state !== 'fail') return
+        ev.stopPropagation()
+        if (job?.status === 'running') return // 有任务在跑时不打断
+        logger.info('view', '手动重试单张下载', { url: img.url })
+        void retrySingleDownload(img)
+      })
+
+      card.append(thumb, sizeTag, check, dlBadge)
       grid.appendChild(card)
     }
     updateStats()
@@ -745,9 +763,24 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
   })
 
   // ---------- 下载渲染 ----------
+  /** 依据 job 的 doneUrls / failedItems 刷新每张缩略图的角标 */
+  function updateDownloadBadges(): void {
+    if (dlBadgeMap.size === 0) return
+    const doneSet = new Set(job?.doneUrls ?? [])
+    const failSet = new Set((job?.failedItems ?? []).map((f) => f.url))
+    for (const [url, badge] of dlBadgeMap) {
+      const state = doneSet.has(url) ? 'ok' : failSet.has(url) ? 'fail' : 'pending'
+      if (badge.dataset.state === state) continue
+      badge.dataset.state = state
+      badge.textContent = state === 'ok' ? '✓' : state === 'fail' ? '!' : ''
+      badge.title = state === 'ok' ? '已下载' : state === 'fail' ? '下载失败（点击重试）' : '等待下载'
+    }
+  }
+
   function renderDownload(): void {
     if (!job) {
       dlRow.style.display = 'none'
+      updateDownloadBadges()
       return
     }
     dlRow.style.display = 'flex'
@@ -758,8 +791,59 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     dlFill.classList.toggle('done', job.status === 'done')
     const statusText =
       job.status === 'running' ? '下载中' : job.status === 'cancelled' ? '已取消' : job.status === 'done' ? '完成' : '异常'
-    dlText.innerHTML = `${statusText} ${doneCount}/${job.total} <span class="stat-text">成功 ${job.done}</span> <span class="stat-fail">失败 ${job.failed}</span>`
+    // 2026-11-06：补上「进行中」计数 —— 原实现只显示成功/失败，
+    // 重试中的项既不算 done 也不算 failed，进度条会长时间停在某个数字上，看起来像卡死。
+    const inflight = Math.max(0, job.total - job.done - job.failed)
+    dlText.innerHTML =
+      `${statusText} ${doneCount}/${job.total}（${pct}%）` +
+      ` <span class="stat-text">成功 ${job.done}</span>` +
+      ` <span class="stat-fail">失败 ${job.failed}</span>` +
+      (job.status === 'running' ? ` <span class="stat-text">进行中 ${inflight}</span>` : '')
     renderFailed()
+    updateDownloadBadges()
+  }
+
+  /** 单张重试下载（2026-11-06）：与批量下载走同一通道
+   *  imgbb 图片经后台取字节（绕开 <img> 的 200 错误图），其余直连下载。
+   *  成功后把角标置为 ✓，失败仍为 !（可再次点击）。 */
+  async function retrySingleDownload(img: GrabbedImage): Promise<void> {
+    // 文件名必须与批量下载一致：从当前选中列表里找出该项的既有 filename
+    // （批量命名 = extractFilename(url, 选中序号, 相册名)，序号不同则文件名不同）
+    const candidates = collectSelectedItems()
+    const hit = candidates.find((it) => it.url === downloadUrlOf(img) || it.url === img.url)
+    const filename =
+      `${options.getFolderName()}/` +
+      (hit?.filename ?? extractFilename(downloadUrlOf(img), 1, options.getAlbumName?.() || undefined))
+    const badge = dlBadgeMap.get(img.url)
+    const setBadge = (state: string, text: string, title: string): void => {
+      if (!badge) return
+      badge.dataset.state = state
+      badge.textContent = text
+      badge.title = title
+    }
+    setBadge('pending', '', '正在重试…')
+    try {
+      if (IMGBB_IMG_RE.test(img.url)) {
+        const res = await sendMessage<{ ok: true; data?: string } | { ok: false; error: string }>({
+          type: 'GRAB_FETCH_IMAGE',
+          srcTabId: options.srcTabId,
+          url: img.url,
+        })
+        if (!res.ok || !res.data) throw new Error(res.ok ? '后台返回空数据' : res.error)
+        const bin = atob(res.data)
+        const bytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+        const objectUrl = URL.createObjectURL(new Blob([bytes]))
+        await chrome.downloads.download({ url: objectUrl, filename })
+      } else {
+        await chrome.downloads.download({ url: img.url, filename })
+      }
+      setBadge('ok', '✓', '已下载')
+      logger.info('view', '单张重试下载成功', { url: img.url })
+    } catch (err) {
+      setBadge('fail', '!', '下载失败（点击重试）')
+      logger.warn('view', '单张重试下载失败', { url: img.url, error: String(err) })
+    }
   }
 
   function renderZip(): void {
