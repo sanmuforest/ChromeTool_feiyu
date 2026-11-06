@@ -8,7 +8,10 @@ import type { DownloadItem, DownloadJob } from './types'
 const logger = initLogger('background')
 
 const DEFAULT_CONCURRENCY = 12
-const MAX_RETRY = 1
+/** 单项下载中断后的自动重试次数（2026-11-06：1 → 2）
+ *  imgbb 的下载经常在传输中途被中断（Service Worker 生命周期 + 图床慢），
+ *  只重试 1 次时容易留下永久失败项；提到 2 次可显著降低断联残留。 */
+const MAX_RETRY = 2
 const FETCH_TIMEOUT_MS = 40000
 
 // 2026-11-06：429 自适应限速 + 退避重试
@@ -19,6 +22,8 @@ const FETCH_TIMEOUT_MS = 40000
 //      未触发过限流的 host 完全不受影响（正常站点速度不变）。
 const RETRY_THROTTLE_MAX = 3
 const HOST_THROTTLE_GAP_MS = 500
+/** imgbb 图床主机（图片在 i.ibb.co，站点在 ibb.co / *.imgbb.com） */
+const IMGBB_HOST_RE = /^(?:i\.ibb\.co|[^.]*\.imgbb\.com)$/i
 /** 退避基数（2026-11-06 调整）：原 800/1600/3200 累计 5.6s，对 503 失败图拖慢明显
  *  实测日志：59 张的相册前 1.5 分钟处理 55 张，后 2 分钟全耗在 4 张失败图的重试上
  *  → 改为 500/1000/2000，累计 3.5s，成功率影响可接受 */
@@ -48,7 +53,12 @@ async function awaitHostSlot(host: string): Promise<void> {
 function noteHostResult(host: string, throttled: boolean): void {
   if (!host) return
   const st = hostThrottle.get(host) ?? { gap: 0, lastAt: 0 }
-  if (throttled) st.gap = HOST_THROTTLE_GAP_MS
+  // 2026-11-06：imgbb 的失败形态是「超时（AbortError）」，不是「429 限流」。
+  // 对它启用 host 串行化只会把整个 host 拖成串行执行 ——
+  // 实测（v0.2.67 日志）avgMsPerItem 3806ms × 92 张 = 350 秒，恰好等于「完全串行」的耗时，
+  // 而同一份日志里的失败全是 elapsedMs=30000 的超时、没有 429。
+  // → 并发改由 jobConcurrency（图床策略值）控制，这里不再给它加间隔。
+  if (throttled && !IMGBB_HOST_RE.test(host)) st.gap = HOST_THROTTLE_GAP_MS
   st.lastAt = Date.now()
   hostThrottle.set(host, st)
 }
@@ -74,7 +84,7 @@ export interface HostPolicy {
 
 const HOST_POLICIES: { re: RegExp; policy: HostPolicy }[] = [
   {
-    re: /^(?:i\.ibb\.co|[^.]*\.imgbb\.com)$/i,
+    re: IMGBB_HOST_RE,
     // 2026-11-06 v0.2.67 修正：v0.2.66 曾把超时压到 12 秒，实测代价极大 ——
     //   抓取 92 张只打包成功 52 张（57%），耗时 6 分 15 秒，日志出现 40+ 次 AbortError。
     // 根因判断错误：imgbb 的问题不是"请求太多"，而是"每次请求本身就慢"
@@ -278,7 +288,7 @@ export function extractFilename(url: string, index: number, albumName?: string):
 export class DownloadManager {
   private jobs = new Map<number, DownloadJob>()
   private active = new Map<number, ActiveDownload>() // downloadId → active（下载中）
-  private queue: { jobId: number; item: DownloadItem; enqueuedAt: number }[] = []
+  private queue: { jobId: number; item: DownloadItem; enqueuedAt: number; attempt?: number }[] = []
   /** 每个 job 正在 fetch 阶段的项数（2026-11-06 修复）
    *  原实现是 `Set<number>`，写入的是 jobId —— 同一 job 的多个文件共享一个 jobId，
    *  Set 去重后 size 恒为 1，导致并发上限完全失效，整个队列被一次性派发
@@ -289,8 +299,19 @@ export class DownloadManager {
    *  改为以 controller 为键记录所属 job，取消时按 jobId 遍历中断 */
   private fetchControllers = new Map<AbortController, number>() // controller → jobId
   private jobStartedAt = new Map<number, number>() // jobId → 任务启动时刻（汇总统计用）
+  /** 每个任务的并发上限（2026-11-06）
+   *  全局上限之外，任务还可因图床策略被压得更低：imgbb 对并发敏感
+   *  （实测 12 并发时大量请求跑满 30 秒超时；同一张图不同时刻时好时坏）。 */
+  private jobConcurrency = new Map<number, number>()
   private nextJobId = 1
   private maxConcurrent = DEFAULT_CONCURRENCY
+
+  /** 该任务在途（fetch 中 + 下载中）的项数 */
+  private countInflightOfJob(jobId: number): number {
+    let downloading = 0
+    for (const a of this.active.values()) if (a.jobId === jobId) downloading++
+    return downloading + (this.pendingByJob.get(jobId) ?? 0)
+  }
 
   /** 当前处于 fetch 阶段的项总数（跨 job 汇总） */
   private pendingFetchTotal(): number {
@@ -325,6 +346,17 @@ export class DownloadManager {
     }
     this.jobs.set(job.id, job)
     this.jobStartedAt.set(job.id, Date.now())
+    // 2026-11-06：按图床策略设定本任务并发上限。
+    // 实测（v0.2.67 日志）：imgbb 在全局 12 并发下大量请求跑满 30 秒超时（elapsedMs 精确 30000/61000），
+    // 而同一张图换个时刻又能成功 → 降低并发可减少相互拥塞。
+    const imgbbPolicy = policyForUrl(items[0]?.url ?? '')
+    const hasImgbb = items.some((i) => /(?:^|\/\/)(?:[^/]*\.)?(?:ibb\.co|imgbb\.com)\//i.test(i.url))
+    const jobLimit =
+      hasImgbb && imgbbPolicy.concurrency !== undefined
+        ? Math.min(this.maxConcurrent, imgbbPolicy.concurrency)
+        : this.maxConcurrent
+    this.jobConcurrency.set(job.id, jobLimit)
+    if (hasImgbb) logger.info('download', '按图床策略限制本任务并发', { jobId: job.id, jobLimit, total: items.length })
     for (const item of items) {
       this.queue.push({ jobId: job.id, item, enqueuedAt: Date.now() })
     }
@@ -341,6 +373,7 @@ export class DownloadManager {
     if (!job || job.status !== 'running') return
     job.status = 'cancelled'
     this.queue = this.queue.filter((q) => q.jobId !== jobId)
+    this.jobConcurrency.delete(jobId)
     // 中断正在进行的 imgbb 字节抓取（fetch 阶段无 downloadId，需 abort controller）
     for (const [ctrl, jid] of [...this.fetchControllers]) {
       if (jid === jobId) {
@@ -395,7 +428,10 @@ export class DownloadManager {
       })
     } else if (active.attempts < MAX_RETRY) {
       logger.warn('download', '下载中断，自动重试', { url: active.item.url, attempt: active.attempts + 1 })
-      this.queue.push({ jobId: active.jobId, item: active.item, enqueuedAt: Date.now() })
+      // 2026-11-06 修复：原实现重新入队时**没有带上重试次数**，
+      // 导致每次重建的 active.attempts 都是 0 → `0 < MAX_RETRY` 永远成立 → 无限重试。
+      // 现在把 attempt 随队列入队并在 startOne 时回填到 active。
+      this.queue.push({ jobId: active.jobId, item: active.item, enqueuedAt: Date.now(), attempt: active.attempts + 1 })
     } else {
       job.failed++
       job.failedItems.push({ url: active.item.url, filename: active.item.filename, error: '下载中断' })
@@ -406,15 +442,29 @@ export class DownloadManager {
   }
 
   private pump(): void {
-    // 派发排队项：fetch 阶段与下载中合并计入并发槽（避免一次性全派发导致排队）
+    // 派发排队项：fetch 阶段与下载中合并计入并发槽（避免一次性全派发导致排队）。
+    // 2026-11-06：除全局上限外，还要满足各任务自身的并发上限（图床策略），
+    // 否则 imgbb 任务仍会按全局 12 并发铺开，继续互相拥塞。
     while (this.active.size + this.pendingFetchTotal() < this.maxConcurrent && this.queue.length > 0) {
-      const next = this.queue.shift()
+      let pickIdx = -1
+      for (let i = 0; i < this.queue.length; i++) {
+        const cand = this.queue[i]
+        const candJob = this.jobs.get(cand.jobId)
+        if (!candJob || candJob.status !== 'running') continue
+        const jobLimit = this.jobConcurrency.get(cand.jobId) ?? this.maxConcurrent
+        if (this.countInflightOfJob(cand.jobId) < jobLimit) {
+          pickIdx = i
+          break
+        }
+      }
+      if (pickIdx < 0) break // 所有排队项所属任务都已达到各自并发上限
+      const next = this.queue.splice(pickIdx, 1)[0]
       if (!next) break
       const job = this.jobs.get(next.jobId)
       if (!job || job.status !== 'running') continue
       const jid = next.jobId
       this.pendingByJob.set(jid, (this.pendingByJob.get(jid) ?? 0) + 1)
-      void this.startOne(job, next.item, next.enqueuedAt).finally(() => {
+      void this.startOne(job, next.item, next.enqueuedAt, next.attempt ?? 0).finally(() => {
         const n = (this.pendingByJob.get(jid) ?? 1) - 1
         if (n <= 0) this.pendingByJob.delete(jid)
         else this.pendingByJob.set(jid, n)
@@ -445,9 +495,9 @@ export class DownloadManager {
     }
   }
 
-  private async startOne(job: DownloadJob, item: DownloadItem, enqueuedAt: number): Promise<void> {
+  private async startOne(job: DownloadJob, item: DownloadItem, enqueuedAt: number, attempt = 0): Promise<void> {
     const filename = `${job.folderName}/${item.filename}`
-    logger.debug('download', '派发下载项', { jobId: job.id, filename: item.filename, queueWaitMs: Date.now() - enqueuedAt })
+    logger.debug('download', '派发下载项', { jobId: job.id, filename: item.filename, queueWaitMs: Date.now() - enqueuedAt, attempt })
     try {
       let url = item.url
       // imgbb 防 180x180：SW / 扩展页 / 沙箱上下文一律被降级（2026-08-11 实测），
@@ -473,7 +523,7 @@ export class DownloadManager {
       }
       const tDl = Date.now()
       const downloadId = await chrome.downloads.download({ url, filename })
-      this.active.set(downloadId, { jobId: job.id, downloadId, item, attempts: 0, startedAt: Date.now() })
+      this.active.set(downloadId, { jobId: job.id, downloadId, item, attempts: attempt, startedAt: Date.now() })
       logger.debug('download', 'downloads.download 已发起', { jobId: job.id, downloadId, setupMs: Date.now() - tDl })
     } catch (err) {
       // 启动即失败（参数问题/URL 非法）
