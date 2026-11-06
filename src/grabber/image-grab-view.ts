@@ -624,6 +624,11 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       const dlBadge = document.createElement('div')
       dlBadge.className = 'dl-badge'
       dlBadge.dataset.state = 'pending'
+      // 2026-11-07：记住该卡片「下载时实际使用的 URL」。
+      // background 写入 doneUrls / failedItems 的是下载项 URL（= downloadUrlOf(img)），
+      // 而这里以 img.url 作 map 键；两者在 imgbb 等站点可能不同（downloadUrl ≠ 显示 URL），
+      // 直接比对 img.url 会永远匹配不上，角标就一直是 pending（隐藏）状态。
+      dlBadge.dataset.dlUrl = downloadUrlOf(img)
       dlBadge.title = '等待下载'
       dlBadgeMap.set(img.url, dlBadge)
       dlBadge.addEventListener('click', (ev) => {
@@ -764,12 +769,32 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
 
   // ---------- 下载渲染 ----------
   /** 依据 job 的 doneUrls / failedItems 刷新每张缩略图的角标 */
+  let badgeDebugLogged = false
   function updateDownloadBadges(): void {
     if (dlBadgeMap.size === 0) return
     const doneSet = new Set(job?.doneUrls ?? [])
     const failSet = new Set((job?.failedItems ?? []).map((f) => f.url))
+    // 诊断（2026-11-07）：只打一次，用于比对「角标记录的下载 URL」与「background 记录的完成 URL」
+    // 是否同一字符串 —— 不一致会导致角标永远停在 pending（隐藏）。
+    if (!badgeDebugLogged && job && (doneSet.size > 0 || failSet.size > 0)) {
+      badgeDebugLogged = true
+      logger.info('view', '下载角标刷新（诊断）', {
+        badges: dlBadgeMap.size,
+        doneCount: doneSet.size,
+        failCount: failSet.size,
+        sampleBadgeDlUrl: [...dlBadgeMap.values()][0]?.dataset.dlUrl ?? '',
+        sampleDoneUrl: [...doneSet][0] ?? '',
+      })
+    }
     for (const [url, badge] of dlBadgeMap) {
-      const state = doneSet.has(url) ? 'ok' : failSet.has(url) ? 'fail' : 'pending'
+      // 2026-11-07：用「下载时实际使用的 URL」比对（background 记的是它），
+      // 同时兼容 img.url —— 两者不同时任一命中即算匹配
+      const dlUrl = badge.dataset.dlUrl || url
+      const state = doneSet.has(dlUrl) || doneSet.has(url)
+        ? 'ok'
+        : failSet.has(dlUrl) || failSet.has(url)
+          ? 'fail'
+          : 'pending'
       if (badge.dataset.state === state) continue
       badge.dataset.state = state
       badge.textContent = state === 'ok' ? '✓' : state === 'fail' ? '!' : ''
