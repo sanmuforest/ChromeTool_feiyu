@@ -986,11 +986,25 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     }
     /** 第一轮取字节失败的项目，供阶段 2 集中重试 */
     const failedItems: DownloadItem[] = []
+    /** 必须走浏览器原生下载的项目（2026-11-11）
+     *  实测 img.xchina.io（8se.me / xchina 共用图床）对 fetch 一律返回 403（Cloudflare），
+     *  而同一 URL 用 <img> 或 chrome.downloads 能正常取到（浏览器请求栈带完整身份）。
+     *  ZIP 需要字节、拿不到，因此这些图改为「直接落盘」，不进入 ZIP。
+     *  代价：不打包，逐个下载；收益：能真正下全（否则 522 张只成 22 张）。 */
+    const NATIVE_DL_RE = /^https?:\/\/img\.xchina\.io\//i
+    const nativeItems: DownloadItem[] = []
     const worker = async (): Promise<void> => {
       while (true) {
         const idx = cursor++
         if (idx >= items.length) return
         const item = items[idx]
+        // 该图床不试 fetch（100% 失败且要等超时），直接进原生下载队列
+        if (NATIVE_DL_RE.test(item.url)) {
+          nativeItems.push(item)
+          zipState!.current = Math.min(items.length, zipState!.current + 1)
+          renderZip()
+          continue
+        }
         const t0 = Date.now()
         try {
           const blob = await fetchOneBlob(item)
@@ -1036,14 +1050,39 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     if (failedItems.length > 0) {
       logger.warn('grab-view', '打包失败项（集中重试后仍失败）', { count: failedItems.length })
     }
+    // 阶段 3（2026-11-11）：浏览器原生下载
+    // 这些图床（img.xchina.io）对 fetch 一律 403，只能用 chrome.downloads ——
+    // 与「下载选中」同一条通道，带完整浏览器身份，能真正取到图。
+    // 它们无法进 ZIP（ZIP 需要字节），所以改为逐个落盘；每张之间留间隔降低触发限流的概率。
+    let nativeOk = 0
+    let nativeFail = 0
+    if (nativeItems.length > 0) {
+      logger.info('grab-view', '改用浏览器原生下载（图床拒绝 fetch）', { count: nativeItems.length })
+      const folder = options.getFolderName()
+      for (const item of nativeItems) {
+        try {
+          await chrome.downloads.download({ url: item.url, filename: `${folder}/${item.filename}` })
+          nativeOk++
+        } catch (err) {
+          nativeFail++
+          logger.warn('grab-view', '浏览器原生下载失败', { url: item.url, error: String(err) })
+        }
+        // 节流：Cloudflare 对该图床按请求频率限流（实测 22 张即触发），50～80ms 起步足够温和
+        await new Promise((resolve) => setTimeout(resolve, 60))
+      }
+      logger.info('grab-view', '浏览器原生下载完成', { ok: nativeOk, fail: nativeFail, total: nativeItems.length })
+    }
     // 0 张成功时不生成/下载空 ZIP（2026-10-17 实测：xchina 图床三条取字节通道全拒，产出 1K 空包）
     if (okCount === 0) {
       zipState = null
       dlRow.style.display = 'flex'
       dlLabel.textContent = '打包'
-      dlFill.style.width = '0%'
-      dlText.textContent = `打包失败：0/${items.length} 张可读取（图床拒绝扩展读取，请改用「下载选中」）`
-      logger.warn('grab-view', '打包失败：没有任何图片可读取', { total: items.length })
+      dlFill.style.width = nativeOk > 0 ? '100%' : '0%'
+      dlText.textContent =
+        nativeItems.length > 0
+          ? `无图可打包；已用浏览器原生下载 ${nativeOk} 张（${nativeFail > 0 ? `失败 ${nativeFail} 张` : '全部成功'}）`
+          : `打包失败：0/${items.length} 张可读取（图床拒绝扩展读取，请改用「下载选中」）`
+      logger.warn('grab-view', '打包失败：没有任何图片可进入 ZIP', { total: items.length, nativeOk, nativeFail })
       return
     }
     // STORE：图片本身已压缩（jpg/png），跳过 DEFLATE 纯 CPU 开销，体积几乎不变
@@ -1051,13 +1090,25 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     const objectUrl = URL.createObjectURL(blob)
     try {
       await chrome.downloads.download({ url: objectUrl, filename: `${options.getFolderName()}.zip` })
-      logger.info('grab-view', '打包下载完成', { total: items.length, ok: okCount })
+      logger.info('grab-view', '打包下载完成', {
+        total: items.length,
+        ok: okCount,
+        nativeOk,
+        nativeFail,
+      })
     } catch (err) {
       logger.error('grab-view', 'zip 下载失败', String(err))
     }
     URL.revokeObjectURL(objectUrl)
     zipState = null
     renderZip()
+    // 结尾提示：说明 ZIP 内张数与「另走原生下载」的张数，避免用户以为漏了
+    if (nativeItems.length > 0) {
+      dlText.textContent =
+        `打包完成：ZIP 内 ${okCount} 张；另用浏览器原生下载 ${nativeOk} 张` +
+        (nativeFail > 0 ? `（失败 ${nativeFail} 张）` : '') +
+        '（该图床拒绝打包读取）'
+    }
   }
 
   // ---------- 事件 ----------
