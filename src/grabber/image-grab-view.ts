@@ -993,6 +993,38 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
      *  代价：不打包，逐个下载；收益：能真正下全（否则 522 张只成 22 张）。 */
     const NATIVE_DL_RE = /^https?:\/\/img\.xchina\.io\//i
     const nativeItems: DownloadItem[] = []
+    /** 断点续传（2026-11-11）
+     *  实测：chrome.downloads 约 175 张后仍被 Cloudflare 限流（比 fetch 的 22 张宽容约 8 倍，但仍有限）。
+     *  因此把「已成功落盘的 URL」记入 chrome.storage.local（按文件夹名分组），
+     *  下次打包只下缺的部分 —— 用户可分几次把 500+ 张补齐，而不是每次都从 0 跑到 175。
+     *  分批：每 NATIVE_BATCH_SIZE 张暂停 NATIVE_BATCH_PAUSE_MS，让限流计数降温。 */
+    const DL_RESUME_KEY = 'grab_native_done_urls'
+    const NATIVE_BATCH_SIZE = 100
+    const NATIVE_BATCH_PAUSE_MS = 30000
+    const NATIVE_GAP_MS = 250
+    const nativeFolder = options.getFolderName()
+    const nativeDone = await loadNativeDone(nativeFolder)
+
+    async function loadNativeDone(folder: string): Promise<Set<string>> {
+      try {
+        const res = await chrome.storage.local.get(DL_RESUME_KEY)
+        const all = (res[DL_RESUME_KEY] ?? {}) as Record<string, string[]>
+        return new Set(all[folder] ?? [])
+      } catch {
+        return new Set()
+      }
+    }
+
+    async function saveNativeDone(doneSet: Set<string>): Promise<void> {
+      try {
+        const res = await chrome.storage.local.get(DL_RESUME_KEY)
+        const all = (res[DL_RESUME_KEY] ?? {}) as Record<string, string[]>
+        all[nativeFolder] = [...doneSet]
+        await chrome.storage.local.set({ [DL_RESUME_KEY]: all })
+      } catch {
+        /* 存储失败不影响本次下载，下次会重下 */
+      }
+    }
     const worker = async (): Promise<void> => {
       while (true) {
         const idx = cursor++
@@ -1056,21 +1088,65 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     // 它们无法进 ZIP（ZIP 需要字节），所以改为逐个落盘；每张之间留间隔降低触发限流的概率。
     let nativeOk = 0
     let nativeFail = 0
+    let nativeSkipped = 0
     if (nativeItems.length > 0) {
-      logger.info('grab-view', '改用浏览器原生下载（图床拒绝 fetch）', { count: nativeItems.length })
-      const folder = options.getFolderName()
-      for (const item of nativeItems) {
+      const pending = nativeItems.filter((it) => !nativeDone.has(it.url))
+      nativeSkipped = nativeItems.length - pending.length
+      logger.info('grab-view', '改用浏览器原生下载（图床拒绝 fetch）', {
+        total: nativeItems.length,
+        alreadyDone: nativeSkipped,
+        pending: pending.length,
+        batchSize: NATIVE_BATCH_SIZE,
+        gapMs: NATIVE_GAP_MS,
+      })
+      // 分批：每批次结束后暂停，让 Cloudflare 的频率/流量计数降温
+      for (let i = 0; i < pending.length; i++) {
+        if (i > 0 && i % NATIVE_BATCH_SIZE === 0) {
+          logger.info('grab-view', '原生下载批次暂停', {
+            completed: i,
+            remaining: pending.length - i,
+            pauseMs: NATIVE_BATCH_PAUSE_MS,
+          })
+          const pauseText = `已完成 ${nativeOk} 张（跳过 ${nativeSkipped} 张已下），暂停 ${Math.round(NATIVE_BATCH_PAUSE_MS / 1000)} 秒避开限流…`
+          dlText.textContent = pauseText
+          await new Promise((resolve) => setTimeout(resolve, NATIVE_BATCH_PAUSE_MS))
+        }
+        const item = pending[i]
         try {
-          await chrome.downloads.download({ url: item.url, filename: `${folder}/${item.filename}` })
+          await chrome.downloads.download({ url: item.url, filename: `${nativeFolder}/${item.filename}` })
           nativeOk++
+          nativeDone.add(item.url)
+          // 每张成功后立刻落盘进度，确保中途被打断也能续跑
+          if (nativeOk % 10 === 0) await saveNativeDone(nativeDone)
         } catch (err) {
           nativeFail++
           logger.warn('grab-view', '浏览器原生下载失败', { url: item.url, error: String(err) })
         }
-        // 节流：Cloudflare 对该图床按请求频率限流（实测 22 张即触发），50～80ms 起步足够温和
-        await new Promise((resolve) => setTimeout(resolve, 60))
+        // UI 同步（2026-11-11）：原生下载是逐个跑、耗时较长，必须让用户看到实时进度，
+        // 包括「本次成功」「跳过多少已下」「累计完成多少」「还剩多少」
+        const handled = nativeSkipped + i + 1
+        const pctNative = Math.round((handled / nativeItems.length) * 100)
+        dlRow.style.display = 'flex'
+        dlLabel.textContent = '下载'
+        dlFill.style.width = `${pctNative}%`
+        dlFill.classList.remove('done')
+        const remainCount = nativeItems.length - nativeDone.size
+        dlText.textContent =
+          `原生下载 ${handled}/${nativeItems.length}（${pctNative}%）` +
+          ` 本次成功 ${nativeOk}` +
+          (nativeSkipped > 0 ? ` 跳过 ${nativeSkipped}` : '') +
+          (nativeFail > 0 ? ` 失败 ${nativeFail}` : '') +
+          ` 累计 ${nativeDone.size}/${nativeItems.length}` +
+          (remainCount > 0 ? ` 剩余 ${remainCount}` : ' 已全部完成')
+        await new Promise((resolve) => setTimeout(resolve, NATIVE_GAP_MS))
       }
-      logger.info('grab-view', '浏览器原生下载完成', { ok: nativeOk, fail: nativeFail, total: nativeItems.length })
+      await saveNativeDone(nativeDone)
+      logger.info('grab-view', '浏览器原生下载完成', {
+        ok: nativeOk,
+        fail: nativeFail,
+        skipped: nativeSkipped,
+        total: nativeItems.length,
+      })
     }
     // 0 张成功时不生成/下载空 ZIP（2026-10-17 实测：xchina 图床三条取字节通道全拒，产出 1K 空包）
     if (okCount === 0) {
@@ -1078,11 +1154,19 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
       dlRow.style.display = 'flex'
       dlLabel.textContent = '打包'
       dlFill.style.width = nativeOk > 0 ? '100%' : '0%'
+      const remain = nativeItems.length - nativeDone.size
       dlText.textContent =
         nativeItems.length > 0
-          ? `无图可打包；已用浏览器原生下载 ${nativeOk} 张（${nativeFail > 0 ? `失败 ${nativeFail} 张` : '全部成功'}）`
+          ? `无图可打包；本次原生下载 ${nativeOk} 张${nativeSkipped > 0 ? `（另跳过 ${nativeSkipped} 张已下）` : ''}` +
+            `${nativeFail > 0 ? `，失败 ${nativeFail} 张` : ''}。累计已下 ${nativeDone.size}/${nativeItems.length}` +
+            `${remain > 0 ? '，再点一次「打包」可继续补齐剩余' : '，已全部完成'}`
           : `打包失败：0/${items.length} 张可读取（图床拒绝扩展读取，请改用「下载选中」）`
-      logger.warn('grab-view', '打包失败：没有任何图片可进入 ZIP', { total: items.length, nativeOk, nativeFail })
+      logger.warn('grab-view', '打包失败：没有任何图片可进入 ZIP', {
+        total: items.length,
+        nativeOk,
+        nativeFail,
+        nativeCumulative: nativeDone.size,
+      })
       return
     }
     // STORE：图片本身已压缩（jpg/png），跳过 DEFLATE 纯 CPU 开销，体积几乎不变
@@ -1104,10 +1188,13 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     renderZip()
     // 结尾提示：说明 ZIP 内张数与「另走原生下载」的张数，避免用户以为漏了
     if (nativeItems.length > 0) {
+      const remain = nativeItems.length - nativeDone.size
       dlText.textContent =
-        `打包完成：ZIP 内 ${okCount} 张；另用浏览器原生下载 ${nativeOk} 张` +
-        (nativeFail > 0 ? `（失败 ${nativeFail} 张）` : '') +
-        '（该图床拒绝打包读取）'
+        `打包完成：ZIP 内 ${okCount} 张；本次原生下载 ${nativeOk} 张` +
+        (nativeSkipped > 0 ? `（跳过 ${nativeSkipped} 张已下）` : '') +
+        (nativeFail > 0 ? `，失败 ${nativeFail} 张` : '') +
+        `；累计 ${nativeDone.size}/${nativeItems.length}` +
+        (remain > 0 ? '，再点一次「打包」可继续补齐' : '，已全部完成')
     }
   }
 
