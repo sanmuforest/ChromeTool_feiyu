@@ -63,31 +63,79 @@ export async function extractDomImages(
   return (res[0]?.result as string[] | undefined) ?? []
 }
 
-/** 打开临时标签页加载 URL，等渲染完成后提取图片，随后关闭标签页
- *  用于 SPA 站点的翻页：必须真实导航 + 等 JS 渲染，fetch 拿不到内容。
- *  使用独立标签页，避免打断用户当前浏览。
- *  selector/hosts 与 extractDomImages 相同 —— 逐页都要用同一套取图判据。 */
-export async function extractImagesByNavigation(
-  url: string,
-  opts?: { selector?: string; hosts?: string[]; renderWaitMs?: number; timeoutMs?: number },
-): Promise<string[]> {
-  const renderWaitMs = opts?.renderWaitMs ?? 800
-  const timeoutMs = opts?.timeoutMs ?? 25000
-  const tab = await chrome.tabs.create({ url, active: false })
+/** 在原标签页里逐页导航抓取（SPA 翻页专用）
+ *
+ *  2026-11-11 修正：原先用 `chrome.tabs.create({ active: false })` 开后台临时标签页，
+ *  实测「循环几次后卡住」——后台标签页会被浏览器节流，`status: 'complete'` 迟迟不触发，
+ *  每页都要等满超时，几页之后体感等同卡死。
+ *  改为**复用传入的标签页**（通常是源页，处于激活态不会被节流）：
+ *    记住原 URL → 逐页导航 → 每页等加载 + 渲染 → 读 DOM → 最后导航回原 URL。
+ *  代价：会短暂占用用户当前标签页（这是可靠的代价，已与用户确认方向）。
+ */
+export async function extractPagesByTabNavigation(
+  tabId: number,
+  urls: string[],
+  opts?: {
+    selector?: string
+    hosts?: string[]
+    renderWaitMs?: number
+    timeoutMs?: number
+    /** 连续该数量的空页即停止（默认 3）—— SPA 读不到总页数，靠这个收敛 */
+    stopAfterEmptyPages?: number
+    /** 每抓完一页回调，用于上层打日志/上报进度 */
+    onPage?: (index: number, url: string, count: number) => void
+  },
+): Promise<{ url: string; images: string[] }[]> {
+  const renderWaitMs = opts?.renderWaitMs ?? 600
+  const timeoutMs = opts?.timeoutMs ?? 15000
+  const stopAfterEmpty = opts?.stopAfterEmptyPages ?? 3
+  const results: { url: string; images: string[] }[] = []
+  // 记住用户原本停留的页面，全部抓完后导航回去
+  let originalUrl = ''
   try {
-    const tabId = tab.id
-    if (!tabId) throw new Error('无法创建标签页')
-    // 等待加载完成
+    const t = await chrome.tabs.get(tabId)
+    originalUrl = t.url ?? ''
+  } catch {
+    /* ignore */
+  }
+
+  const waitComplete = async (): Promise<void> => {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
-      const t = await chrome.tabs.get(tabId)
-      if (t.status === 'complete') break
-      await new Promise((r) => setTimeout(r, 300))
+      try {
+        const t = await chrome.tabs.get(tabId)
+        if (t.status === 'complete') return
+      } catch {
+        return // 标签页被关闭等情况，直接放弃本页
+      }
+      await new Promise((r) => setTimeout(r, 250))
     }
-    // 额外等待 JS 渲染（SPA 的图片通常在 hydration 之后才插入 DOM）
-    await new Promise((r) => setTimeout(r, renderWaitMs))
-    return await extractDomImages(tabId, { selector: opts?.selector, hosts: opts?.hosts })
-  } finally {
-    if (tab.id) await chrome.tabs.remove(tab.id).catch(() => {})
   }
+
+  try {
+    let emptyStreak = 0
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i]
+      let images: string[] = []
+      try {
+        await chrome.tabs.update(tabId, { url })
+        await waitComplete()
+        // 额外等 JS 渲染（SPA 图片通常在 hydration 之后插入 DOM）
+        await new Promise((r) => setTimeout(r, renderWaitMs))
+        images = await extractDomImages(tabId, { selector: opts?.selector, hosts: opts?.hosts })
+      } catch {
+        images = []
+      }
+      results.push({ url, images })
+      opts?.onPage?.(i, url, images.length)
+      // 连续空页收敛：SPA 读不到总页数，不能靠 maxPage 决定何时停
+      emptyStreak = images.length === 0 ? emptyStreak + 1 : 0
+      if (emptyStreak >= stopAfterEmpty) break
+    }
+  } finally {
+    if (originalUrl) {
+      await chrome.tabs.update(tabId, { url: originalUrl }).catch(() => {})
+    }
+  }
+  return results
 }

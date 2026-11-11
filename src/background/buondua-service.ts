@@ -318,11 +318,20 @@ export class BuonduaService {
     fetchHtmlFn?: (u: string) => Promise<string>,
     /** DOM 通道（2026-11-11）：SPA 站点（rrwsh 改版后）服务端 HTML 是空壳（约 1991 字节、
      *  0 个 img、title 为站点默认标题），fetch 拿不到任何图片。
-     *  这条通道在真实浏览器上下文里执行 JS、等渲染完成后读 DOM，返回图片 URL 数组。
-     *  仅在 HTML 通道解析为 0 张时才启用。
-     *  参数 selector/hosts 与 HTML 解析用同一套判据（正文容器 + 图床白名单），
+     *  这条通道在真实浏览器上下文里执行 JS、等渲染完成后读 DOM。
+     *
+     *  **批量语义**：一次传入全部页 URL，由实现方在一个导航上下文里逐页处理并最后回原页。
+     *  早期版本是逐页调用（每次重新开标签页），实测「循环几次后卡住」——后台标签页被节流。
+     *  返回每页的图片 URL；实现方内部按「连续空页」自行收敛。
+     *
+     *  selector/hosts 与 HTML 解析用同一套判据（正文容器 + 图床白名单），
      *  否则会把推荐位/广告/相关文章的缩略图一起混进来。 */
-    domFetchFn?: (u: string, selector: string, hosts: string[]) => Promise<string[]>,
+    domFetchFn?: (
+      urls: string[],
+      selector: string,
+      hosts: string[],
+      onPage?: (index: number, url: string, count: number) => void,
+    ) => Promise<{ url: string; images: string[] }[]>,
   ): Promise<{ images: BuonduaImage[]; pages: string[]; title: string }> {
     const getHtml = fetchHtmlFn ?? ((u: string) => this.fetchHtml(u))
     const site = matchGallerySite(url)
@@ -374,6 +383,57 @@ export class BuonduaService {
     let scanned = 0
     let emptyStreak = 0
     let repeatStreak = 0
+
+    // ---------- SPA 站点：整站走浏览器 DOM 批量通道（2026-11-11） ----------
+    // 判据：首页 HTML 里连一个 <img> 都没有（实测 rrwsh 空壳 1991 字节 / 0 img / 默认标题）。
+    // 关键：必须**一次性**把全部页交给 DOM 通道处理，而不是逐页调用 ——
+    // 逐页调用每页都要重新导航一轮，且后台标签页会被浏览器节流导致「循环几次后卡住」。
+    if (domFetchFn && site.def.domFallback) {
+      const imgTags = (firstHtml.match(/<img\b/gi) ?? []).length
+      if (imgTags === 0) {
+        const cls = site.def.container.className.trim()
+        const containerSel = cls ? `${site.def.container.tag}.${cls.split(/\s+/)[0]}` : ''
+        const hosts = site.def.imageOnlyHosts ?? []
+        logger.warn('buondua', 'SPA 站点：改走浏览器 DOM 批量通道', {
+          site: site.id,
+          url,
+          htmlLen: firstHtml.length,
+          maxPage,
+          selector: containerSel,
+          hosts,
+        })
+        const pageResults = await domFetchFn(all, containerSel, hosts, (i, u, c) => {
+          logger.info('buondua', 'DOM 页抓取', { page: i + 1, url: u, count: c })
+        })
+        const clean = site.imageUrlClean
+        for (const pr of pageResults) {
+          for (const raw of pr.images) {
+            const abs = clean ? clean(raw) : raw
+            const key = abs.split('?')[0]
+            if (imagesMap.has(key)) continue
+            let filename = ''
+            try {
+              filename = decodeURIComponent(new URL(abs).pathname.split('/').pop() || '')
+            } catch {
+              filename = ''
+            }
+            imagesMap.set(key, { url: abs, filename: filename || `image-${imagesMap.size + 1}` })
+            scanned++
+          }
+        }
+        const spaImages = [...imagesMap.values()]
+        logger.info('buondua', '相册全子页抓取完成（DOM 批量通道）', {
+          site: site.id,
+          url,
+          pages: pageResults.length,
+          scanned,
+          unique: spaImages.length,
+          title,
+        })
+        return { images: spaImages, pages: all, title }
+      }
+    }
+
     // 页间节流（站点定义 throttle，与站内搜索共用）：顺序翻页的站点请求较多，避免触发站点限流（429）
     const pageThrottle = site.def.throttle
     for (let pageIndex = 0; pageIndex < all.length; pageIndex++) {
@@ -400,47 +460,9 @@ export class BuonduaService {
           imgTags: (html.match(/<img\b/gi) ?? []).length,
         })
       }
-      // 2026-11-11：SPA 逐页降级 —— 该页 HTML 里连一个 <img> 都没有（典型 SPA 空壳），
-      // 且**站点显式开启了 domFallback** 并提供 DOM 通道 → 用浏览器渲染后的 DOM 取本页图片。
-      // 注意必须**在循环内**逐页判断：只处理第 1 页会让多页相册只抓到一页。
-      // 加 domFallback 门槛是为了不影响其他站点：正常站点的末页即使无图，也不会去开标签页。
-      if (isSpaShell && domFetchFn && site.def.domFallback) {
-        try {
-          // 与 HTML 解析同一套判据：正文容器 + 图床白名单
-          // 容器 class 为空时（整页容器站点）selector 留空，由 hosts 白名单兜底
-          const cls = site.def.container.className.trim()
-          const containerSel = cls ? `${site.def.container.tag}.${cls.split(/\s+/)[0]}` : ''
-          const domImgs = await domFetchFn(pageUrl, containerSel, site.def.imageOnlyHosts ?? [])
-          const clean = site.imageUrlClean
-          const converted: BuonduaImage[] = []
-          for (const raw of domImgs) {
-            const abs = clean ? clean(raw) : raw
-            let filename = ''
-            try {
-              filename = decodeURIComponent(new URL(abs).pathname.split('/').pop() || '')
-            } catch {
-              filename = ''
-            }
-            converted.push({ url: abs, filename: filename || `image-${converted.length + 1}` })
-          }
-          if (converted.length > 0) {
-            logger.info('buondua', 'SPA 页改用 DOM 通道', {
-              site: site.id,
-              page: pageIndex + 1,
-              url: pageUrl,
-              count: converted.length,
-            })
-            imgs = converted
-          }
-        } catch (err) {
-          logger.warn('buondua', 'DOM 通道失败（本页跳过）', {
-            site: site.id,
-            page: pageIndex + 1,
-            url: pageUrl,
-            error: String(err),
-          })
-        }
-      }
+      // 2026-11-11：SPA 站点已在上方「DOM 批量通道」分支统一处理并提前返回，
+      // 这里只处理正常站点的 HTML 解析结果（保留 isSpaShell 仅用于诊断日志）。
+      void isSpaShell
       scanned += imgs.length
       emptyStreak = imgs.length === 0 ? emptyStreak + 1 : 0
       const beforeSize = imagesMap.size
