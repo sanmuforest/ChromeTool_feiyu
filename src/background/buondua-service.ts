@@ -319,8 +319,10 @@ export class BuonduaService {
     /** DOM 通道（2026-11-11）：SPA 站点（rrwsh 改版后）服务端 HTML 是空壳（约 1991 字节、
      *  0 个 img、title 为站点默认标题），fetch 拿不到任何图片。
      *  这条通道在真实浏览器上下文里执行 JS、等渲染完成后读 DOM，返回图片 URL 数组。
-     *  仅在 HTML 通道解析为 0 张时才启用。 */
-    domFetchFn?: (u: string) => Promise<string[]>,
+     *  仅在 HTML 通道解析为 0 张时才启用。
+     *  参数 selector/hosts 与 HTML 解析用同一套判据（正文容器 + 图床白名单），
+     *  否则会把推荐位/广告/相关文章的缩略图一起混进来。 */
+    domFetchFn?: (u: string, selector: string, hosts: string[]) => Promise<string[]>,
   ): Promise<{ images: BuonduaImage[]; pages: string[]; title: string }> {
     const getHtml = fetchHtmlFn ?? ((u: string) => this.fetchHtml(u))
     const site = matchGallerySite(url)
@@ -399,11 +401,16 @@ export class BuonduaService {
         })
       }
       // 2026-11-11：SPA 逐页降级 —— 该页 HTML 里连一个 <img> 都没有（典型 SPA 空壳），
-      // 且调用方提供了 DOM 通道 → 用浏览器渲染后的 DOM 取本页图片。
+      // 且**站点显式开启了 domFallback** 并提供 DOM 通道 → 用浏览器渲染后的 DOM 取本页图片。
       // 注意必须**在循环内**逐页判断：只处理第 1 页会让多页相册只抓到一页。
-      if (isSpaShell && domFetchFn) {
+      // 加 domFallback 门槛是为了不影响其他站点：正常站点的末页即使无图，也不会去开标签页。
+      if (isSpaShell && domFetchFn && site.def.domFallback) {
         try {
-          const domImgs = await domFetchFn(pageUrl)
+          // 与 HTML 解析同一套判据：正文容器 + 图床白名单
+          // 容器 class 为空时（整页容器站点）selector 留空，由 hosts 白名单兜底
+          const cls = site.def.container.className.trim()
+          const containerSel = cls ? `${site.def.container.tag}.${cls.split(/\s+/)[0]}` : ''
+          const domImgs = await domFetchFn(pageUrl, containerSel, site.def.imageOnlyHosts ?? [])
           const clean = site.imageUrlClean
           const converted: BuonduaImage[] = []
           for (const raw of domImgs) {

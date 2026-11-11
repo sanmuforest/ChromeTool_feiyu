@@ -1114,7 +1114,8 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       // 2026-11-11：DOM 通道（SPA 站点专用）
       // 当前页就是目标 URL 时直接读它的 DOM（渲染已完成）；否则开临时标签页导航后读，读完关闭。
       // 用临时标签页是为了不打断用户正在浏览的页面。
-      const domFetch = async (u: string): Promise<string[]> => {
+      // selector/hosts 由调用方按站点定义传入，保证与 HTML 解析的取图口径一致。
+      const domFetch = async (u: string, selector: string, hosts: string[]): Promise<string[]> => {
         let isCurrentTab = false
         try {
           const t = await chrome.tabs.get(message.srcTabId)
@@ -1123,12 +1124,12 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
           /* ignore */
         }
         if (isCurrentTab) {
-          const imgs = await extractDomImages(message.srcTabId)
-          logger.info('buondua', 'DOM 通道：读取当前标签页', { url: u, count: imgs.length })
+          const imgs = await extractDomImages(message.srcTabId, { selector, hosts })
+          logger.info('buondua', 'DOM 通道：读取当前标签页', { url: u, selector, hosts, count: imgs.length })
           return imgs
         }
-        const imgs = await extractImagesByNavigation(u)
-        logger.info('buondua', 'DOM 通道：临时标签页导航抓取', { url: u, count: imgs.length })
+        const imgs = await extractImagesByNavigation(u, { selector, hosts })
+        logger.info('buondua', 'DOM 通道：临时标签页导航抓取', { url: u, selector, hosts, count: imgs.length })
         return imgs
       }
       try {

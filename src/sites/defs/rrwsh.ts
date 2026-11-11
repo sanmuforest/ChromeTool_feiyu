@@ -38,12 +38,19 @@ export const rrwsh: SiteDef = {
   // 代价：每页要开临时标签页 + 等渲染约 1.2 秒，11 页约 20~30 秒。
   followPagesUntilEmpty: true,
   throttle: { fromPage: 2, delayMs: 800 },
+  // SPA 站点：服务端 HTML 无图 → 必须在浏览器里渲染后读 DOM（详见 fetchAlbumAllPages 的 domFetchFn）
+  domFallback: true,
   // 2026-11-11：图床从 wp.com 换成 img.ssuu.uk（用户探测样本 29 张全为该域）。
   // 图片带 .webp 扩展名，引擎按扩展名即可识别；这里把 ssuu.uk 也纳入白名单，
   // 以防将来出现「无扩展名」的图片 URL 被漏掉。
+  // **同时用于 DOM 通道的图床过滤**：SPA 站点的 DOM 里混有推荐位/广告/相关文章缩略图，
+  // 只保留正文图床（img.ssuu.uk）的图片，与 HTML 解析口径一致。
   imageHosts: ['wp.com', 'ssuu.uk'],
-  // 搜索无分页（实测 2026-08-14：/search/{q}/2 为空白页），每页固定 4 条
-  search: { kind: 'path-template', template: '/search/{q}' },
+  imageOnlyHosts: ['img.ssuu.uk'],
+  // 2026-11-11：**移除站内搜索**（原为 path-template: '/search/{q}'）。
+  // 站点改版成 SPA 后，搜索结果页与相册页一样只剩空壳，fetch 拿不到任何结果 ——
+  // 每次聚合搜索都会为它白跑一轮请求再失败，实测表现为「搜索变慢」。
+  // 与其留一条必然失败的通道拖慢全局搜索，不如明确不支持：该站只保留「贴相册 URL 直接抓」。
   // 4khd.com 结果链接改写回 rrwsh 域（primary）
   urlRewrite: [{ fromHost: '4khd.com' }],
   linkParser: 'rrwsh-cards',

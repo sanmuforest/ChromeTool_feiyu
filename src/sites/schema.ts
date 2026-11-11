@@ -144,6 +144,11 @@ export interface SiteDef {
    *  （8se.me 正文图在 `img.xchina.io`，推荐位在 `upload.xchina.io` / `xchina.click`）——
    *  配合宽松容器即可精确取得正文图，无需依赖容器 class */
   imageOnlyHosts?: string[]
+  /** 启用浏览器 DOM 降级通道（2026-11-11）：服务端 HTML 是空壳的 SPA 站点专用。
+   *  开启后，若某页 HTML 里连一个 `<img>` 都没有（典型 SPA 空壳），改在真实浏览器里
+   *  渲染该页并读取 DOM 取图，取图判据仍用本定义的正文容器 + imageOnlyHosts。
+   *  **默认关闭**：只对确认是 SPA 的站点开启，避免正常站点的空页被误判而多开标签页。 */
+  domFallback?: boolean
   /** 图片路径过滤（2026-10-17）：只保留 pathname 匹配该正则的图片。
    *  用于「同域混入非相册图」的站点——如 xiuren.org 的正文容器内还有下载按钮 gif
    *  和广告图，仅靠域名过滤无法剔除 */
