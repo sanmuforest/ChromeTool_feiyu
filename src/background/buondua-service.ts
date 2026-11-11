@@ -384,9 +384,10 @@ export class BuonduaService {
         if (pageThrottle && pageIndex + 1 >= pageThrottle.fromPage) await sleep(pageThrottle.delayMs)
         html = await getHtml(pageUrl)
       }
-      const imgs = parseGalleryImages(html, pageUrl, site)
+      let imgs = parseGalleryImages(html, pageUrl, site)
       // 诊断（2026-10-08）：首页解析 0 张时记录容器匹配情况，用于区分
       // 「容器 class 已变」（hasContainer=false）与「页面本身没有图片内容」（imgCount 小）
+      const isSpaShell = imgs.length === 0 && (html.match(/<img\b/gi) ?? []).length === 0
       if (imgs.length === 0 && imagesMap.size === 0 && pageUrl === all[0]) {
         logger.warn('buondua', '首页解析 0 张，诊断信息', {
           site: site.id,
@@ -396,6 +397,42 @@ export class BuonduaService {
           htmlLen: html.length,
           imgTags: (html.match(/<img\b/gi) ?? []).length,
         })
+      }
+      // 2026-11-11：SPA 逐页降级 —— 该页 HTML 里连一个 <img> 都没有（典型 SPA 空壳），
+      // 且调用方提供了 DOM 通道 → 用浏览器渲染后的 DOM 取本页图片。
+      // 注意必须**在循环内**逐页判断：只处理第 1 页会让多页相册只抓到一页。
+      if (isSpaShell && domFetchFn) {
+        try {
+          const domImgs = await domFetchFn(pageUrl)
+          const clean = site.imageUrlClean
+          const converted: BuonduaImage[] = []
+          for (const raw of domImgs) {
+            const abs = clean ? clean(raw) : raw
+            let filename = ''
+            try {
+              filename = decodeURIComponent(new URL(abs).pathname.split('/').pop() || '')
+            } catch {
+              filename = ''
+            }
+            converted.push({ url: abs, filename: filename || `image-${converted.length + 1}` })
+          }
+          if (converted.length > 0) {
+            logger.info('buondua', 'SPA 页改用 DOM 通道', {
+              site: site.id,
+              page: pageIndex + 1,
+              url: pageUrl,
+              count: converted.length,
+            })
+            imgs = converted
+          }
+        } catch (err) {
+          logger.warn('buondua', 'DOM 通道失败（本页跳过）', {
+            site: site.id,
+            page: pageIndex + 1,
+            url: pageUrl,
+            error: String(err),
+          })
+        }
       }
       scanned += imgs.length
       emptyStreak = imgs.length === 0 ? emptyStreak + 1 : 0
@@ -411,42 +448,6 @@ export class BuonduaService {
       repeatStreak = imagesMap.size === beforeSize ? repeatStreak + 1 : 0
       // 连续 3 页无图（视频页/末尾）或无新图（重复页）→ 提前停止
       if (emptyStreak >= 3 || repeatStreak >= 3) break
-    }
-    // 2026-11-11：SPA 降级 —— HTML 通道一张都没解析出来时，改用浏览器 DOM 通道。
-    // 判定依据（实测 rrwsh 改版后）：SPA 页的服务端 HTML 约 1991 字节、0 个 <img>、
-    // title 是站点默认标题（如「4KHD - HD Beautiful Girls」）——fetch 永远拿不到图片。
-    if (imagesMap.size === 0 && domFetchFn) {
-      logger.warn('buondua', 'HTML 通道 0 张，改走浏览器 DOM 通道（SPA 站点）', {
-        site: site.id,
-        url,
-        htmlLen: firstHtml.length,
-        imgTags: (firstHtml.match(/<img\b/gi) ?? []).length,
-      })
-      try {
-        const domImages = await domFetchFn(url)
-        const clean = site.imageUrlClean
-        for (const raw of domImages) {
-          const abs = clean ? clean(raw) : raw
-          const key = abs.split('?')[0]
-          if (imagesMap.has(key)) continue
-          let filename = ''
-          try {
-            filename = decodeURIComponent(new URL(abs).pathname.split('/').pop() || '')
-          } catch {
-            filename = ''
-          }
-          imagesMap.set(key, { url: abs, filename: filename || `image-${imagesMap.size + 1}` })
-        }
-        scanned += domImages.length
-        logger.info('buondua', 'DOM 通道抓取完成', {
-          site: site.id,
-          raw: domImages.length,
-          unique: imagesMap.size,
-        })
-      } catch (err) {
-        logger.error('buondua', 'DOM 通道抓取失败', { site: site.id, error: String(err) })
-        throw err
-      }
     }
     const images = [...imagesMap.values()]
     logger.info('buondua', '相册全子页抓取完成', {

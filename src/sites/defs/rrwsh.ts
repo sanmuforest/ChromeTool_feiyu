@@ -32,6 +32,12 @@ export const rrwsh: SiteDef = {
     { source: '\\s*[-–—]\\s*Page\\s+\\d+\\s+of\\s+\\d+\\s*[-–—]\\s*[^-]*$', flags: 'i' },
     { source: '\\s*[-–—]\\s*4KHD\\s*$', flags: 'i' },
   ],
+  // 2026-11-11：站点改版成 SPA —— 服务端 HTML 是空壳（约 1991 字节、0 个 <img>、
+  // title 为站点默认标题），后台/页面内 fetch 都拿不到图，改由浏览器 DOM 通道逐页渲染提取。
+  // 因为空壳 HTML 里读不到总页数，必须用顺序翻页（DOM 通道会按页走）。
+  // 代价：每页要开临时标签页 + 等渲染约 1.2 秒，11 页约 20~30 秒。
+  followPagesUntilEmpty: true,
+  throttle: { fromPage: 2, delayMs: 800 },
   // 2026-11-11：图床从 wp.com 换成 img.ssuu.uk（用户探测样本 29 张全为该域）。
   // 图片带 .webp 扩展名，引擎按扩展名即可识别；这里把 ssuu.uk 也纳入白名单，
   // 以防将来出现「无扩展名」的图片 URL 被漏掉。

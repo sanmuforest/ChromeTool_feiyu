@@ -52,7 +52,7 @@ export async function extractImagesByNavigation(
   url: string,
   opts?: { renderWaitMs?: number; timeoutMs?: number },
 ): Promise<string[]> {
-  const renderWaitMs = opts?.renderWaitMs ?? 1200
+  const renderWaitMs = opts?.renderWaitMs ?? 800
   const timeoutMs = opts?.timeoutMs ?? 25000
   const tab = await chrome.tabs.create({ url, active: false })
   try {
