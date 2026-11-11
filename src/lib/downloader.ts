@@ -93,6 +93,13 @@ const HOST_POLICIES: { re: RegExp; policy: HostPolicy }[] = [
     //         重试 2 次、退避 1 秒（给服务端喘息）。
     policy: { concurrency: 8, timeoutMs: 30000, retryMax: 2, backoffBaseMs: 1000 },
   },
+  {
+    // 2026-11-11：WordPress Photon（i0.wp.com / i1.wp.com / *.wp.com）
+    // 实测 phimvuspot 的 375 张相册抓取时大量 HTTP 429 —— Photon 对并发/频率同样敏感。
+    // 给较低并发 + 略长退避，减少限流；超时沿用默认 40s。
+    re: /^(?:i\d+\.wp\.com|[^.]*\.wp\.com)$/i,
+    policy: { concurrency: 4, timeoutMs: 40000, retryMax: 2, backoffBaseMs: 1200 },
+  },
 ]
 
 /** 按 URL 取图床策略；未命中返回空对象（= 使用全局默认策略） */

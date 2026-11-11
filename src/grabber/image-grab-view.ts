@@ -939,9 +939,15 @@ export function createGrabView(root: HTMLElement, options: GrabViewOptions): Gra
     const CONCURRENCY_RAW = Math.max(1, Math.min(128, ccRes.ok ? ccRes.concurrency : 12))
     // 2026-11-06：imgbb 对并发极度敏感（实测 8 并发时一半卡到 30 秒超时，顺序反而成功率更高），
     // 打包内容含 imgbb 图片时按图床策略压并发 —— 否则"并发越高反而越慢"
+    // 2026-11-11：WordPress Photon（i0/i1.wp.com）同理 —— 实测 phimvuspot 375 张时大量 429，
+    // 需要按策略降并发。两者都命中时取更小的那个。
     const imgbbLimit = policyForUrl('https://i.ibb.co/x').concurrency
     const hasImgbb = imgbbLimit !== undefined && items.some((i) => /(?:^|\/\/)(?:[^/]*\.)?(?:ibb\.co|imgbb\.com)\//i.test(i.url))
-    const CONCURRENCY = hasImgbb ? Math.min(CONCURRENCY_RAW, imgbbLimit) : CONCURRENCY_RAW
+    const wpLimit = policyForUrl('https://i0.wp.com/x').concurrency
+    const hasWp = wpLimit !== undefined && items.some((i) => /^https?:\/\/i\d+\.wp\.com\//i.test(i.url))
+    let CONCURRENCY = CONCURRENCY_RAW
+    if (hasImgbb && imgbbLimit !== undefined) CONCURRENCY = Math.min(CONCURRENCY, imgbbLimit)
+    if (hasWp && wpLimit !== undefined) CONCURRENCY = Math.min(CONCURRENCY, wpLimit)
     let cursor = 0
     /** 取单张图片字节（含 blobCache 复用与 imgbb 专用通道）；失败返回 null */
     const fetchOneBlob = async (item: DownloadItem): Promise<Blob | null> => {
