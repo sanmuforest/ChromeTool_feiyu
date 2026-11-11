@@ -1123,7 +1123,7 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
         selector: string,
         hosts: string[],
         onPage?: (index: number, url: string, count: number) => void,
-      ): Promise<{ url: string; images: string[] }[]> => {
+      ): Promise<{ url: string; title: string; images: string[] }[]> => {
         return await extractPagesByTabNavigation(message.srcTabId, urls, {
           selector,
           hosts,

@@ -6,17 +6,17 @@
 // 本模块通过 chrome.scripting.executeScript 注入到页面，读取 img 的实际地址。
 // 注意：注入函数会被序列化，不能引用外部变量。
 
-/** 在指定标签页提取图片 URL（绝对地址、已去重）
- *  2026-11-11 修正：必须按站点定义取图，不能整页扫 ——
- *  整页扫会把推荐位、广告、相关文章缩略图全部混进来，且无法剔除。
- *  这里接受与 HTML 解析完全相同的两个判据：
- *    - selector：正文容器（由 site.def.container 拼成，如 `div.entry-content`）
- *    - hosts：图床白名单（site.def.imageOnlyHosts）
- *  这样 DOM 通道与 HTML 通道的取图口径保持一致。 */
-export async function extractDomImages(
+/** 取「渲染后的页面快照」：标题 + 图片 URL
+ *
+ *  2026-11-11 补充：SPA 的 `firstHtml` 里只有站点默认标题（如 `4KHD - HD Beautiful Girls`），
+ *  真实相册名在渲染后的 `document.title` 里。因此 DOM 通道必须把 title 一起带回，
+ *  否则解析出来的相册名是错的（用户实测反馈）。
+ *
+ *  selector/hosts 与 HTML 解析同一套判据，保证取图口径一致。 */
+export async function extractPageSnapshot(
   tabId: number,
   opts?: { selector?: string; hosts?: string[] },
-): Promise<string[]> {
+): Promise<{ title: string; images: string[] }> {
   const selector = opts?.selector ?? ''
   const hosts = opts?.hosts ?? []
   const res = await chrome.scripting.executeScript({
@@ -24,9 +24,10 @@ export async function extractDomImages(
     func: (sel: string, hostList: string[]) => {
       const out: string[] = []
       const seen = new Set<string>()
+      const title = (document.title || '').trim()
       // 有正文容器就只扫它；没有才退化为整页（与 HTML 解析的 container 语义一致）
       const root = (sel ? document.querySelector(sel) : null) ?? document.body
-      if (!root) return out
+      if (!root) return { title, images: out }
       const pick = (el: Element): string => {
         const img = el as HTMLImageElement
         const cand =
@@ -56,11 +57,27 @@ export async function extractDomImages(
         seen.add(raw)
         out.push(raw)
       })
-      return out
+      return { title, images: out }
     },
     args: [selector, hosts],
   })
-  return (res[0]?.result as string[] | undefined) ?? []
+  const r = res[0]?.result as { title: string; images: string[] } | undefined
+  return { title: r?.title ?? '', images: r?.images ?? [] }
+}
+
+/** 在指定标签页提取图片 URL（绝对地址、已去重）
+ *  2026-11-11 修正：必须按站点定义取图，不能整页扫 ——
+ *  整页扫会把推荐位、广告、相关文章缩略图全部混进来，且无法剔除。
+ *  这里接受与 HTML 解析完全相同的两个判据：
+ *    - selector：正文容器（由 site.def.container 拼成，如 `div.entry-content`）
+ *    - hosts：图床白名单（site.def.imageOnlyHosts）
+ *  这样 DOM 通道与 HTML 通道的取图口径保持一致。 */
+export async function extractDomImages(
+  tabId: number,
+  opts?: { selector?: string; hosts?: string[] },
+): Promise<string[]> {
+  const snap = await extractPageSnapshot(tabId, opts)
+  return snap.images
 }
 
 /** 在原标签页里逐页导航抓取（SPA 翻页专用）
@@ -85,11 +102,11 @@ export async function extractPagesByTabNavigation(
     /** 每抓完一页回调，用于上层打日志/上报进度 */
     onPage?: (index: number, url: string, count: number) => void
   },
-): Promise<{ url: string; images: string[] }[]> {
+): Promise<{ url: string; title: string; images: string[] }[]> {
   const renderWaitMs = opts?.renderWaitMs ?? 600
   const timeoutMs = opts?.timeoutMs ?? 15000
   const stopAfterEmpty = opts?.stopAfterEmptyPages ?? 3
-  const results: { url: string; images: string[] }[] = []
+  const results: { url: string; title: string; images: string[] }[] = []
   // 记住用户原本停留的页面，全部抓完后导航回去
   let originalUrl = ''
   try {
@@ -117,16 +134,19 @@ export async function extractPagesByTabNavigation(
     for (let i = 0; i < urls.length; i++) {
       const url = urls[i]
       let images: string[] = []
+      let pageTitle = ''
       try {
         await chrome.tabs.update(tabId, { url })
         await waitComplete()
         // 额外等 JS 渲染（SPA 图片通常在 hydration 之后插入 DOM）
         await new Promise((r) => setTimeout(r, renderWaitMs))
-        images = await extractDomImages(tabId, { selector: opts?.selector, hosts: opts?.hosts })
+        const snap = await extractPageSnapshot(tabId, { selector: opts?.selector, hosts: opts?.hosts })
+        images = snap.images
+        pageTitle = snap.title
       } catch {
         images = []
       }
-      results.push({ url, images })
+      results.push({ url, title: pageTitle, images })
       opts?.onPage?.(i, url, images.length)
       // 连续空页收敛：SPA 读不到总页数，不能靠 maxPage 决定何时停
       emptyStreak = images.length === 0 ? emptyStreak + 1 : 0

@@ -331,7 +331,7 @@ export class BuonduaService {
       selector: string,
       hosts: string[],
       onPage?: (index: number, url: string, count: number) => void,
-    ) => Promise<{ url: string; images: string[] }[]>,
+    ) => Promise<{ url: string; title: string; images: string[] }[]>,
   ): Promise<{ images: BuonduaImage[]; pages: string[]; title: string }> {
     const getHtml = fetchHtmlFn ?? ((u: string) => this.fetchHtml(u))
     const site = matchGallerySite(url)
@@ -362,7 +362,9 @@ export class BuonduaService {
     } else {
       firstHtml = await getHtml(base)
     }
-    const title = parseGalleryPageTitle(firstHtml, site)
+    let title = parseGalleryPageTitle(firstHtml, site)
+    // SPA 站点的 firstHtml 只有站点默认标题（如 `4KHD - HD Beautiful Girls`），
+    // 真实相册名要等 DOM 通道渲染后才能读到 —— 下方批量分支会用 document.title 覆盖。
     // 大相册分页导航只显示部分页码：按标题 Page 标记的最大页数完整遍历
     const detectedMax = parseGalleryMaxPage(firstHtml, site)
     // 2026-10-10：分页总数不可测的站点（分页链接不在 <a> 中，如 knit.bid）→ 顺序翻页，
@@ -405,6 +407,17 @@ export class BuonduaService {
         const pageResults = await domFetchFn(all, containerSel, hosts, (i, u, c) => {
           logger.info('buondua', 'DOM 页抓取', { page: i + 1, url: u, count: c })
         })
+        // 相册名：用渲染后的 document.title 覆盖空壳 HTML 里的站点默认标题
+        const domTitle = pageResults.find((p) => p.title)?.title ?? ''
+        if (domTitle) {
+          const cleaned = site.cleanTitle(domTitle)
+          logger.info('buondua', '相册名取自渲染后的 document.title', {
+            fromHtml: title,
+            fromDom: domTitle,
+            used: cleaned,
+          })
+          title = cleaned
+        }
         const clean = site.imageUrlClean
         for (const pr of pageResults) {
           for (const raw of pr.images) {
