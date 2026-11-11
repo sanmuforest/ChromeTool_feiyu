@@ -32,7 +32,10 @@ export const rrwsh: SiteDef = {
     { source: '\\s*[-–—]\\s*Page\\s+\\d+\\s+of\\s+\\d+\\s*[-–—]\\s*[^-]*$', flags: 'i' },
     { source: '\\s*[-–—]\\s*4KHD\\s*$', flags: 'i' },
   ],
-  imageHosts: ['wp.com'],
+  // 2026-11-11：图床从 wp.com 换成 img.ssuu.uk（用户探测样本 29 张全为该域）。
+  // 图片带 .webp 扩展名，引擎按扩展名即可识别；这里把 ssuu.uk 也纳入白名单，
+  // 以防将来出现「无扩展名」的图片 URL 被漏掉。
+  imageHosts: ['wp.com', 'ssuu.uk'],
   // 搜索无分页（实测 2026-08-14：/search/{q}/2 为空白页），每页固定 4 条
   search: { kind: 'path-template', template: '/search/{q}' },
   // 4khd.com 结果链接改写回 rrwsh 域（primary）
