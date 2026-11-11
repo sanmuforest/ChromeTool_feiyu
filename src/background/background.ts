@@ -8,6 +8,7 @@
 
 import { DownloadManager, arrayBufferToBase64, fetchImageBytes, fetchViaSrcTab } from '../lib/downloader'
 import { DiffuseEngine } from './imgbb-diffuse'
+import { extractDomImages, extractImagesByNavigation } from './dom-fetch'
 import { emptyDb, loadDb, mergeInDegree, mergeDb, dbSummary, inDegreeDist, unconfirmedCandidates, unconfirmedCount, confirmedScored, matchAlbums, scoreTop, degreeTop, albumTop, resetConfirmations, setStarRating, ensureEntry, starInfo, PRODUCER_DB_KEY } from '../lib/producer-db'
 import { normalizeConfig, pullDb, pushDb, GITHUB_CONFIG_KEY } from '../lib/github-sync'
 import { computeTags, loadCustomDict, emptyCustomDict, type TagCustomDict } from '../lib/tag-extract'
@@ -1110,8 +1111,28 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
 
     // ---- buondua 适配器（FP-004） ----
     case 'BD_FETCH_ALBUM': {
+      // 2026-11-11：DOM 通道（SPA 站点专用）
+      // 当前页就是目标 URL 时直接读它的 DOM（渲染已完成）；否则开临时标签页导航后读，读完关闭。
+      // 用临时标签页是为了不打断用户正在浏览的页面。
+      const domFetch = async (u: string): Promise<string[]> => {
+        let isCurrentTab = false
+        try {
+          const t = await chrome.tabs.get(message.srcTabId)
+          isCurrentTab = (t.url ?? '').split('#')[0] === u.split('#')[0]
+        } catch {
+          /* ignore */
+        }
+        if (isCurrentTab) {
+          const imgs = await extractDomImages(message.srcTabId)
+          logger.info('buondua', 'DOM 通道：读取当前标签页', { url: u, count: imgs.length })
+          return imgs
+        }
+        const imgs = await extractImagesByNavigation(u)
+        logger.info('buondua', 'DOM 通道：临时标签页导航抓取', { url: u, count: imgs.length })
+        return imgs
+      }
       try {
-        const { images, pages, title } = await buondua.fetchAlbumAllPages(message.url)
+        const { images, pages, title } = await buondua.fetchAlbumAllPages(message.url, undefined, domFetch)
         await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'album', data: images, done: true })
         logger.info('buondua', '全子页抓取完成', { url: message.url, pages: pages.length, count: images.length, title })
         return { ok: true, name: title || undefined }
@@ -1127,7 +1148,7 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
             if (!res || !res.ok || !res.data) throw new Error(res && !res.ok ? res.error : '页面内 fetch 无响应')
             return res.data
           }
-          const { images, pages, title } = await buondua.fetchAlbumAllPages(message.url, contentFetch)
+          const { images, pages, title } = await buondua.fetchAlbumAllPages(message.url, contentFetch, domFetch)
           await sendToTab(sessionOf(message.srcTabId), { type: 'BD_RESULT', kind: 'album', data: images, done: true })
           logger.info('buondua', '全子页抓取完成（页面内 fetch 降级）', { url: message.url, pages: pages.length, count: images.length, title })
           return { ok: true, name: title || undefined }

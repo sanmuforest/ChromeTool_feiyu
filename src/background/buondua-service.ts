@@ -316,6 +316,11 @@ export class BuonduaService {
   async fetchAlbumAllPages(
     url: string,
     fetchHtmlFn?: (u: string) => Promise<string>,
+    /** DOM 通道（2026-11-11）：SPA 站点（rrwsh 改版后）服务端 HTML 是空壳（约 1991 字节、
+     *  0 个 img、title 为站点默认标题），fetch 拿不到任何图片。
+     *  这条通道在真实浏览器上下文里执行 JS、等渲染完成后读 DOM，返回图片 URL 数组。
+     *  仅在 HTML 通道解析为 0 张时才启用。 */
+    domFetchFn?: (u: string) => Promise<string[]>,
   ): Promise<{ images: BuonduaImage[]; pages: string[]; title: string }> {
     const getHtml = fetchHtmlFn ?? ((u: string) => this.fetchHtml(u))
     const site = matchGallerySite(url)
@@ -406,6 +411,42 @@ export class BuonduaService {
       repeatStreak = imagesMap.size === beforeSize ? repeatStreak + 1 : 0
       // 连续 3 页无图（视频页/末尾）或无新图（重复页）→ 提前停止
       if (emptyStreak >= 3 || repeatStreak >= 3) break
+    }
+    // 2026-11-11：SPA 降级 —— HTML 通道一张都没解析出来时，改用浏览器 DOM 通道。
+    // 判定依据（实测 rrwsh 改版后）：SPA 页的服务端 HTML 约 1991 字节、0 个 <img>、
+    // title 是站点默认标题（如「4KHD - HD Beautiful Girls」）——fetch 永远拿不到图片。
+    if (imagesMap.size === 0 && domFetchFn) {
+      logger.warn('buondua', 'HTML 通道 0 张，改走浏览器 DOM 通道（SPA 站点）', {
+        site: site.id,
+        url,
+        htmlLen: firstHtml.length,
+        imgTags: (firstHtml.match(/<img\b/gi) ?? []).length,
+      })
+      try {
+        const domImages = await domFetchFn(url)
+        const clean = site.imageUrlClean
+        for (const raw of domImages) {
+          const abs = clean ? clean(raw) : raw
+          const key = abs.split('?')[0]
+          if (imagesMap.has(key)) continue
+          let filename = ''
+          try {
+            filename = decodeURIComponent(new URL(abs).pathname.split('/').pop() || '')
+          } catch {
+            filename = ''
+          }
+          imagesMap.set(key, { url: abs, filename: filename || `image-${imagesMap.size + 1}` })
+        }
+        scanned += domImages.length
+        logger.info('buondua', 'DOM 通道抓取完成', {
+          site: site.id,
+          raw: domImages.length,
+          unique: imagesMap.size,
+        })
+      } catch (err) {
+        logger.error('buondua', 'DOM 通道抓取失败', { site: site.id, error: String(err) })
+        throw err
+      }
     }
     const images = [...imagesMap.values()]
     logger.info('buondua', '相册全子页抓取完成', {
