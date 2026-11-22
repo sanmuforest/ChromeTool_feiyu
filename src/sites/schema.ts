@@ -153,6 +153,13 @@ export interface SiteDef {
    *  用于「同域混入非相册图」的站点——如 xiuren.org 的正文容器内还有下载按钮 gif
    *  和广告图，仅靠域名过滤无法剔除 */
   imagePathPattern?: RegexSpec
+  /** 图片标签过滤（2026-11-23）：`<img>` 标签原文必须匹配该正则才收录。
+   *  用于「正文图与推荐位图的 **URL 结构完全相同**，只能靠 DOM 属性区分」的站点 ——
+   *  实例：eporner.com 的正文图与「相关相册」推荐位图同域同路径格式
+   *  （都是 `.../gallery/xx/xx/{相册ID}/{id}-{n}_296x1000.jpg`），
+   *  唯一差别是 `alt="amateur photo <纯数字>"`（正文）vs `alt="amateur photo <文字标题>"`（推荐位）。
+   *  **不声明时完全走原有采集路径，对其他站点零影响。** */
+  imageTagPattern?: RegexSpec
   /** 搜索通道；缺省 = 不支持站内搜索 */
   search?: SiteSearch
   /** 搜索基址 host（默认主域；pixibb 用 sexy 子域） */

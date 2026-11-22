@@ -344,6 +344,23 @@ export function parseGalleryImages(html: string, baseUrl: string, site: GalleryS
     while ((m = reAttr.exec(block)) !== null) {
       collect(m[1])
     }
+  } else if (site.def.imageTagPattern) {
+    // 图片标签过滤（2026-11-23）：正文图与推荐位图 URL 结构完全相同时，只能靠 <img> 标签属性区分
+    // （实例：eporner.com —— alt="amateur photo <纯数字>" 是正文，带文字标题的是「相关相册」推荐位）。
+    // 与下方默认路径互斥：声明了该字段才会走到这里，其他站点不受影响。
+    const pat = toRegExp(site.def.imageTagPattern)
+    const tagRe = /<img\b[^>]*>/gi
+    while ((m = tagRe.exec(block)) !== null) {
+      const tag = m[0]
+      if (!pat.test(tag)) continue
+      const srcM = /(?:src|data-src)="([^"]+)"/i.exec(tag)
+      if (srcM) collect(srcM[1])
+    }
+    // 正文图也可能是 CSS 背景（与默认路径保持一致，避免该模式下漏掉背景图形态）
+    const reStyleTag = /style="[^"]*url\((['"]?)([^'")]+)\1\)[^"]*"/gi
+    while ((m = reStyleTag.exec(block)) !== null) {
+      collect(m[2])
+    }
   } else {
     // 同时匹配绝对与相对 URL（相对路径在 collect 内用页面基址解析为绝对 URL）。
     // 2026-10-15：加入 data-src —— 大量站点用「src=占位图 + data-src=真图」的懒加载写法
