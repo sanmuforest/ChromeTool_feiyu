@@ -13,8 +13,20 @@ const logger = initLogger('grabber')
 
 const KEY_ENABLED = 'translate_enabled'
 const KEY_CACHE = 'translate_cache'
-/** Google 翻译免费端点（非官方接口，无需 key；client=gtx 返回 JSON） */
-const ENDPOINT = 'https://translate.googleapis.com/translate_a/single'
+/** 翻译端点（2026-11-23 更新）
+ *
+ *  原实现只用 `translate.googleapis.com/translate_a/single?client=gtx`，
+ *  实测该端点已长期返回 **HTTP 429 Too Many Requests**（直连与代理均如此，间隔 5 秒连试 3 次全 429），
+ *  而 `translate_a/t?client=gtx` 同样 429。
+ *  由于本模块设计为「任何失败一律回退原文」，用户侧表现为「相册名中文化功能像是没生效」——
+ *  实际是端点被限流后静默降级。
+ *
+ *  改用 Chrome 词典扩展同款入口 `clients5.google.com/translate_a/t?client=dict-chrome-ex`（实测 200 可译），
+ *  并保留原端点作为备选：按序尝试，任一成功即用，避免单点被限流导致整体失效。 */
+const ENDPOINTS = [
+  'https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=zh-CN&q=',
+  'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=',
+]
 const TIMEOUT_MS = 8000
 const CACHE_LIMIT = 500
 const MAX_NAME_LEN = 120
@@ -44,24 +56,50 @@ function sanitize(text: string): string {
     .slice(0, MAX_NAME_LEN)
 }
 
-/** 调用翻译端点；返回 null 表示无有效译文 */
+/** 解析两种端点的响应结构，取出译文
+ *
+ *  格式 A（`clients5…dict-chrome-ex`）：`[["译文","en"]]`
+ *    → `data[0]` 是 `[译文, 源语言]`，`data[0][0]` 为 string
+ *  格式 B（`translate_a/single?client=gtx`）：`[[["译文","原文",null,null,10]],null,"en",…]`
+ *    → `data[0]` 是片段数组，每段 `[0]` 为译文片段，需要拼接
+ *  两者靠 `data[0][0]` 是 string 还是 array 区分。 */
+function parseTranslatePayload(data: unknown): string | null {
+  if (!Array.isArray(data) || !Array.isArray(data[0])) return null
+  const head = data[0] as unknown[]
+  if (head.length === 0) return null
+  // 格式 A
+  if (typeof head[0] === 'string') return (head[0] as string).trim() || null
+  // 格式 B
+  const joined = head
+    .map((seg) => (Array.isArray(seg) && typeof seg[0] === 'string' ? seg[0] : ''))
+    .join('')
+  return joined.trim() || null
+}
+
+/** 依次尝试各端点；返回 null 表示所有端点都无有效译文 */
 async function requestTranslate(text: string): Promise<string | null> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
-  try {
-    const url = `${ENDPOINT}?client=gtx&sl=auto&tl=zh-CN&dt=t&q=${encodeURIComponent(text)}`
-    const resp = await fetch(url, { signal: controller.signal })
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    const data: unknown = await resp.json()
-    // 响应形如 [[["译文","原文",null,null,10]],null,"ja",...]
-    if (!Array.isArray(data) || !Array.isArray(data[0])) return null
-    const parts = (data[0] as unknown[])
-      .map((seg) => (Array.isArray(seg) && typeof seg[0] === 'string' ? seg[0] : ''))
-      .join('')
-    return parts.trim() || null
-  } finally {
-    clearTimeout(timer)
+  const q = encodeURIComponent(text)
+  let lastErr = ''
+  for (const base of ENDPOINTS) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+    try {
+      const resp = await fetch(`${base}${q}`, { signal: controller.signal })
+      if (!resp.ok) {
+        lastErr = `HTTP ${resp.status}`
+        continue // 换下一个端点（典型场景：429 限流）
+      }
+      const parsed = parseTranslatePayload(await resp.json())
+      if (parsed) return parsed
+      lastErr = '空译文'
+    } catch (err) {
+      lastErr = err instanceof DOMException && err.name === 'AbortError' ? '超时' : String(err)
+    } finally {
+      clearTimeout(timer)
+    }
   }
+  if (lastErr) logger.debug('translate', '所有翻译端点均失败', { error: lastErr, source: text.slice(0, 40) })
+  return null
 }
 
 /** 写缓存（超上限丢弃较早的一半） */
@@ -90,7 +128,12 @@ export async function translateTitleToChinese(title: string): Promise<string> {
     const hit = cache[source]
     if (hit) return hit
     const raw = await requestTranslate(source)
-    if (!raw) return title
+    if (!raw) {
+      // 2026-11-23：此前所有端点失败时只打 debug 日志，用户侧表现为「翻译功能像是没生效」却查不到原因。
+      // 改为 warn，让翻译降级可被日志面板看到。
+      logger.warn('translate', '翻译无结果（端点限流/不可用），本次回退原文', { source: source.slice(0, 40) })
+      return title
+    }
     const translated = sanitize(raw)
     if (!translated) return title
     await saveCache(cache, source, translated)
