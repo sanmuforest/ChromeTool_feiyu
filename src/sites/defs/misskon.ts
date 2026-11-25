@@ -20,8 +20,13 @@ export const misskon: SiteDef = {
   folderTag: 'buondua',
   endpoints: [{ host: 'misskon.com', role: 'primary' }],
   container: { tag: 'article', className: 'post-listing' },
-  // 正文图全在 tez.misskon.com；article 内还会混入站内图（首图/下载按钮）→ 只保留图床
-  imageOnlyHosts: ['tez.misskon.com'],
+  // 正文图床。2026-11-25 更新：实测该站已把正文图迁到 **lux.mrcong.com**
+  // （mrcong 系图床，形如 https://lux.mrcong.com/images/2023/06/01/Coser-No.007-MrCong.com-001.webp），
+  // 原 `tez.misskon.com` 已完全不再使用（p1/p2/p6 三页统计均为 0 次）。
+  // 由于原定义只白名单 tez.misskon.com → 所有正文图被过滤 → 「首页解析 0 张、scanned 0」。
+  // 保留旧域名作为兼容（老相册可能仍指向它）。
+  // article 内另混有广告脚本（vertigovitalitywieldable.com、a.magsrv.com），非图片扩展名会被引擎跳过。
+  imageOnlyHosts: ['lux.mrcong.com', 'tez.misskon.com'],
   pagination: { kind: 'path-slash-from-2' },
   baseUrl: { stripPagePath: 'trailing-slash' },
   // 标题只有当前页码、无总页数；分页链接不是标准 page-numbers 形态 → 顺序翻页
